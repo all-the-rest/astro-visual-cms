@@ -2,16 +2,33 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Gallery from '../components/Gallery.astro';
 import EditorUnknownChip from '../components/EditorUnknownChip.astro';
 
-export const SORTING = ["noise-fixture-01","noise-fixture-02","noise-fixture-03"];
+export const HIGHLIGHTS = ["noise-fixture-01", "noise-fixture-03"];
+export const DETAILS = ["noise-fixture-02"];
 
-<BaseLayout title="MDX-Galerie-Fixture">
+<BaseLayout title="Ein synthetischer Bildessay">
 
-# Echte gerenderte MDX-Fixture
+# Ein Wochenende zwischen Küste und Stadt
 
-Dieser Absatz ist **Markdown** und wird vom Astro-dev-server gerendert.
+> Diese redaktionelle Beispielseite ist vollständig synthetisch und enthält keine Inhalte aus einem echten Kundenprojekt.
 
-<EditorUnknownChip label="Fixture-Komponente, die der Spike-Editor nicht kennt" />
+Nach einem frühen Start am Hafen führt der Weg durch kleine Straßen bis zum alten Markt. Die folgenden **Noise-Testbilder** stehen stellvertretend für Bildmaterial in einem längeren MDX-Beitrag; Bildunterschriften und Reihenfolge bleiben dabei Teil der gerenderten Seite.
 
-<Gallery sorted={SORTING} />
+<EditorUnknownChip label="Unbekannte CMS-Komponente: bleibt außerhalb des Galerie-Editors" />
+
+## Erste Eindrücke
+
+Am Wasser ist es noch ruhig. Später füllen sich die Cafés, und die Route biegt in Richtung Altstadt ab. Mehr über den fiktiven Ort steht in der [redaktionellen Notiz](https://example.test/route).
+
+- **Morgens:** Licht und leere Wege
+- **Mittags:** Marktstände und kurze Pausen
+- **Abends:** Rückweg entlang der Promenade
+
+<Gallery sorted={HIGHLIGHTS} />
+
+## Details unterwegs
+
+Ein zweiter Abschnitt hat eine eigene Auswahl und kann unabhängig sortiert werden. So bildet die Fixture mehrere Galerien in einem realitätsnahen, aber weiterhin festen Demo-Text ab.
+
+<Gallery sorted={DETAILS} />
 
 </BaseLayout>

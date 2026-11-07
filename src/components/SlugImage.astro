@@ -1,9 +1,9 @@
 ---
 import { Image } from 'astro:assets'
-import { resolveFixtureImageMetadata } from '../lib/image-slug-resolver.mjs'
+import { resolveAstroImageMetadata } from '../lib/astro-image-adapter.mjs'
 
-const { slug, ...attributes } = Astro.props
-const image = await resolveFixtureImageMetadata(slug)
+const { slug, src: _ignoredSrc, ...presentationProps } = Astro.props
+const image = await resolveAstroImageMetadata(slug)
 ---
 
-<Image src={image} {...attributes} />
+<Image {...presentationProps} src={image} />

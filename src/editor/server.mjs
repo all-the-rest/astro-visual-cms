@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { inspectFixture, patchFixtureSource } from '../lib/gallery-patch.mjs'
+import { FIXTURE_IMAGE_SLUGS } from '../lib/demo-image-manifest.mjs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURE_PATH = path.join(PROJECT_ROOT, 'src/pages/fixture.mdx')
@@ -18,6 +19,24 @@ function json(response, statusCode, payload) {
     'x-content-type-options': 'nosniff',
   })
   response.end(JSON.stringify(payload))
+}
+
+export function validateDemoImageSlugs(galleries) {
+  for (const gallery of galleries) {
+    for (const slug of gallery.order) {
+      if (FIXTURE_IMAGE_SLUGS.includes(slug)) continue
+      const error = new Error(`The local demo image manifest does not contain slug ${JSON.stringify(slug)} (${gallery.id}).`)
+      error.code = 'UNSUPPORTED_IMAGE_SLUG'
+      throw error
+    }
+  }
+  return galleries
+}
+
+function inspectDemoFixture(source) {
+  const state = inspectFixture(source)
+  validateDemoImageSlugs(state.galleries)
+  return state
 }
 
 function isLoopbackAddress(address = '') {
@@ -45,15 +64,14 @@ async function readJson(request) {
 
 async function waitForRenderedOrder({ hash, siteOrigin }) {
   const deadline = Date.now() + PREVIEW_SYNC_TIMEOUT_MS
-  let order
 
   while (Date.now() < deadline) {
     const source = readFileSync(FIXTURE_PATH, 'utf8')
-    const state = inspectFixture(source)
+    const state = inspectDemoFixture(source)
     if (state.hash !== hash) {
       return { statusCode: 409, payload: { code: 'STALE_HASH', error: 'Fixture changed while waiting for Astro preview.' } }
     }
-    order = state.order
+    const galleries = state.galleries
 
     try {
       const remaining = Math.max(1, deadline - Date.now())
@@ -64,10 +82,17 @@ async function waitForRenderedOrder({ hash, siteOrigin }) {
       })
       if (response.ok) {
         const html = await response.text()
-        if (html.includes(`data-gallery-order="${order.join(',')}"`)) {
+        const renderedOrders = [...html.matchAll(/<section\b([^>]*)>/g)].flatMap((match) => {
+          const order = match[1].match(/\bdata-gallery-order="([^"]*)"/)?.[1]
+          return order === undefined ? [] : [order]
+        })
+        const expectedOrders = galleries.map((gallery) => gallery.order.join(','))
+        const allGalleriesReady = renderedOrders.length === expectedOrders.length &&
+          renderedOrders.every((order, index) => order === expectedOrders[index])
+        if (allGalleriesReady) {
           return {
             statusCode: 200,
-            payload: { hash, order, previewUrl: `${siteOrigin}/fixture/?revision=${hash}` },
+            payload: { hash, galleries, previewUrl: `${siteOrigin}/fixture/?revision=${hash}` },
           }
         }
       }
@@ -111,7 +136,7 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
     if (request.method === 'GET' && request.url === '/api/state') {
       try {
         const source = readFileSync(FIXTURE_PATH, 'utf8')
-        return json(response, 200, inspectFixture(source))
+        return json(response, 200, inspectDemoFixture(source))
       } catch (error) {
         return json(response, 422, { error: error.message, code: error.code || 'UNSUPPORTED_FIXTURE' })
       }
@@ -139,10 +164,19 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
 
       try {
         const payload = await readJson(request)
+        const allowedKeys = new Set(['galleryId', 'order', 'hash'])
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+            Object.keys(payload).length !== allowedKeys.size ||
+            Object.keys(payload).some((key) => !allowedKeys.has(key)) ||
+            typeof payload.galleryId !== 'string' || !Array.isArray(payload.order) || typeof payload.hash !== 'string') {
+          return json(response, 422, { code: 'INVALID_REQUEST', error: 'Only galleryId, order, and hash are accepted.' })
+        }
         const source = readFileSync(FIXTURE_PATH, 'utf8')
-        const result = patchFixtureSource(source, payload?.order, payload?.hash)
+        inspectDemoFixture(source)
+        const result = patchFixtureSource(source, payload.galleryId, payload.order, payload.hash)
+        validateDemoImageSlugs(result.galleries)
         writeFileSync(FIXTURE_PATH, result.source, 'utf8')
-        return json(response, 200, { order: result.order, hash: result.hash })
+        return json(response, 200, { galleries: result.galleries, hash: result.hash })
       } catch (error) {
         const statusCode = error.statusCode || (error.code === 'STALE_HASH' ? 409 : 422)
         return json(response, statusCode, { error: error.message, code: error.code || 'INVALID_REQUEST' })
