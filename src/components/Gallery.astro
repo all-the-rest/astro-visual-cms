@@ -1,0 +1,23 @@
+---
+import SlugImage from './SlugImage.astro';
+
+const { sorted = [] } = Astro.props
+---
+
+<section
+  aria-label="Fixture-Galerie"
+  data-gallery-order={sorted.join(',')}
+  class="grid grid-cols-1 gap-4 sm:grid-cols-3"
+>
+  {sorted.map((image, index) => (
+    <figure class="card overflow-hidden bg-base-100 shadow-sm">
+      <SlugImage
+        slug={image}
+        alt={`Zufälliges Noise-Testbild ${index + 1}`}
+        loading="lazy"
+        class="aspect-[8/5] w-full object-cover"
+      />
+      <figcaption class="p-3 text-sm">{index + 1}. {image}</figcaption>
+    </figure>
+  ))}
+</section>

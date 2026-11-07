@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MDX-Galerie bearbeiten</title>
+    <link rel="stylesheet" href="__SITE_ORIGIN__/src/styles/global.css?direct" />
+  </head>
+  <body class="min-h-screen bg-base-200 text-base-content">
+    <main class="mx-auto grid max-w-7xl gap-6 p-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
+      <section class="card bg-base-100 shadow-sm">
+        <div class="card-body">
+          <h1 class="card-title">MDX-Galerie</h1>
+          <p class="text-sm">Ziehe Einträge zum Sortieren oder nutze die ↑/↓-Buttons als Tastatur-Alternative. Änderungen patchen nur <code>SORTING</code> in der Fixture.</p>
+          <div id="status" class="alert alert-info" role="status">Fixture wird geladen …</div>
+          <ul id="images" class="list" aria-label="Galerie-Reihenfolge"></ul>
+          <p class="text-xs opacity-70">Dev-only · localhost · keine Produktions-Schreibschnittstelle</p>
+        </div>
+      </section>
+      <section class="card min-h-[70vh] bg-base-100 shadow-sm">
+        <div class="card-body min-h-[70vh]">
+          <h2 class="card-title">Gerenderte Astro-Seite</h2>
+          <iframe id="preview" class="min-h-[60vh] w-full flex-1 rounded-box border border-base-300" title="MDX-Fixture-Vorschau"></iframe>
+        </div>
+      </section>
+    </main>
+    <script>
+      const siteOrigin = '__SITE_ORIGIN__';
+      const imageList = document.querySelector('#images');
+      const statusBox = document.querySelector('#status');
+      const preview = document.querySelector('#preview');
+      let current = { order: [], hash: '' };
+      let saving = false;
+      let draggedSlug = null;
+
+      function status(message, type = 'info') {
+        statusBox.className = `alert alert-${type}`;
+        statusBox.textContent = message;
+      }
+
+      function render() {
+        imageList.replaceChildren();
+        current.order.forEach((slug, index) => {
+          const row = document.createElement('li');
+          row.className = 'list-row';
+          row.draggable = !saving;
+          row.setAttribute('aria-label', `Galerie-Eintrag ${index + 1}: ${slug}`);
+          row.addEventListener('dragstart', (event) => {
+            if (saving) {
+              event.preventDefault();
+              return;
+            }
+            draggedSlug = slug;
+            row.classList.add('opacity-50');
+            if (event.dataTransfer) {
+              event.dataTransfer.effectAllowed = 'move';
+              event.dataTransfer.setData('text/plain', slug);
+            }
+          });
+          row.addEventListener('dragover', (event) => {
+            if (saving || !draggedSlug || draggedSlug === slug) return;
+            event.preventDefault();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+            row.classList.add('bg-base-200');
+          });
+          row.addEventListener('dragleave', () => row.classList.remove('bg-base-200'));
+          row.addEventListener('drop', async (event) => {
+            event.preventDefault();
+            row.classList.remove('bg-base-200');
+            const from = current.order.indexOf(draggedSlug);
+            const to = current.order.indexOf(slug);
+            draggedSlug = null;
+            if (from < 0 || to < 0 || from === to || saving) return;
+            const nextOrder = [...current.order];
+            const [moved] = nextOrder.splice(from, 1);
+            nextOrder.splice(to, 0, moved);
+            await persistOrder(nextOrder);
+          });
+          row.addEventListener('dragend', () => {
+            draggedSlug = null;
+            row.classList.remove('opacity-50', 'bg-base-200');
+          });
+          const position = document.createElement('span');
+          position.className = 'font-mono text-sm';
+          position.textContent = `${index + 1}.`;
+          const name = document.createElement('span');
+          name.className = 'list-col-grow break-all text-sm';
+          name.textContent = slug;
+          const actions = document.createElement('span');
+          actions.className = 'flex gap-2';
+          const dragHint = document.createElement('span');
+          dragHint.className = 'self-center text-lg opacity-60';
+          dragHint.textContent = '⠿';
+          dragHint.setAttribute('aria-hidden', 'true');
+          dragHint.title = 'Ziehen zum Sortieren';
+          for (const [label, delta] of [['↑', -1], ['↓', 1]]) {
+            const button = document.createElement('button');
+            button.className = 'btn btn-sm';
+            button.type = 'button';
+            button.textContent = label;
+            button.setAttribute('aria-label', `${delta < 0 ? 'Nach oben' : 'Nach unten'}: ${slug}`);
+            button.disabled = saving || index + delta < 0 || index + delta >= current.order.length;
+            button.addEventListener('click', () => move(index, delta));
+            actions.append(button);
+          }
+          row.append(position, dragHint, name, actions);
+          imageList.append(row);
+        });
+      }
+
+      async function load() {
+        const response = await fetch('/api/state');
+        if (!response.ok) throw new Error(`Status ${response.status}`);
+        current = await response.json();
+        render();
+        preview.src = `${siteOrigin}/fixture/?revision=${current.hash}`;
+        status('Fixture geladen. Änderungen werden lokal in der Demo-Fixture gespeichert.', 'success');
+      }
+
+      async function move(index, delta) {
+        if (saving) return;
+        const order = [...current.order];
+        [order[index], order[index + delta]] = [order[index + delta], order[index]];
+        await persistOrder(order);
+      }
+
+      async function persistOrder(order) {
+        if (saving || order.every((slug, index) => slug === current.order[index])) return;
+        saving = true;
+        render();
+        status('Reihenfolge wird sicher gespeichert …');
+        let saved = false;
+        try {
+          const response = await fetch('/api/reorder', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ hash: current.hash, order }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `Status ${response.status}`);
+          current = result;
+          saved = true;
+          status('Gespeichert. Warte auf Astos aktualisierte Vorschau …');
+          const readyResponse = await fetch(`/api/preview-ready?hash=${encodeURIComponent(current.hash)}`, { cache: 'no-store' });
+          const ready = await readyResponse.json();
+          if (!readyResponse.ok) throw new Error(ready.error || `Status ${readyResponse.status}`);
+          preview.src = ready.previewUrl;
+          status('Gespeichert; Astro hat die neue Reihenfolge gerendert.', 'success');
+        } catch (error) {
+          if (saved) {
+            status(`Gespeichert, aber Vorschau nicht bestätigt: ${error.message}`, 'warning');
+          } else {
+            await load();
+            status(`Nicht gespeichert: ${error.message}`, 'warning');
+          }
+        } finally {
+          saving = false;
+          render();
+        }
+      }
+
+      load().catch((error) => status(`Fixture konnte nicht geladen werden: ${error.message}`, 'error'));
+    </script>
+  </body>
+</html>

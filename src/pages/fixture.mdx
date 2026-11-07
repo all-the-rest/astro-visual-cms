@@ -1,0 +1,17 @@
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Gallery from '../components/Gallery.astro';
+import EditorUnknownChip from '../components/EditorUnknownChip.astro';
+
+export const SORTING = ["noise-fixture-01","noise-fixture-02","noise-fixture-03"];
+
+<BaseLayout title="MDX-Galerie-Fixture">
+
+# Echte gerenderte MDX-Fixture
+
+Dieser Absatz ist **Markdown** und wird vom Astro-dev-server gerendert.
+
+<EditorUnknownChip label="Fixture-Komponente, die der Spike-Editor nicht kennt" />
+
+<Gallery sorted={SORTING} />
+
+</BaseLayout>

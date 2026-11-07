@@ -1,0 +1,17 @@
+---
+import '../styles/global.css'
+
+const { title = 'Astro visual CMS – Spike' } = Astro.props
+---
+
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+  </head>
+  <body class="min-h-screen bg-base-200 text-base-content">
+    <slot />
+  </body>
+</html>
