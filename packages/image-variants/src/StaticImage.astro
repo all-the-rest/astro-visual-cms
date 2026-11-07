@@ -1,0 +1,30 @@
+---
+import { toResponsiveImage } from './adapters.mjs'
+
+const {
+  image,
+  alt,
+  sizes = '100vw',
+  loading = 'lazy',
+  decoding = 'async',
+  ...attributes
+} = Astro.props
+
+if (typeof alt !== 'string') throw new TypeError('StaticImage requires consumer-provided alt text.')
+
+const responsive = toResponsiveImage(image, { sizes })
+for (const reserved of ['src', 'srcset', 'width', 'height', 'alt']) delete attributes[reserved]
+---
+
+<picture>
+  <source type="image/webp" srcset={responsive.srcset} sizes={responsive.sizes} />
+  <img
+    {...attributes}
+    src={responsive.src}
+    width={responsive.width}
+    height={responsive.height}
+    alt={alt}
+    loading={loading}
+    decoding={decoding}
+  />
+</picture>
