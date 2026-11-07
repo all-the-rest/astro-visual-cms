@@ -1,0 +1,48 @@
+{
+  "name": "@astro-visual-cms/image-variants",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.23.4"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./src/index.mjs"
+    },
+    "./config": {
+      "types": "./config.d.ts",
+      "import": "./src/config.mjs"
+    },
+    "./cli": {
+      "types": "./cli.d.ts",
+      "import": "./src/cli.mjs"
+    },
+    "./astro": {
+      "types": "./astro.d.ts",
+      "import": "./src/astro.mjs"
+    },
+    "./astro/StaticImage.astro": {
+      "types": "./static-image.d.ts",
+      "default": "./src/StaticImage.astro"
+    }
+  },
+  "bin": {
+    "image-variants": "./src/cli.mjs"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "sharp": "0.35.5"
+  },
+  "peerDependencies": {
+    "astro": ">=7.4.7"
+  },
+  "peerDependenciesMeta": {
+    "astro": {
+      "optional": true
+    }
+  }
+}

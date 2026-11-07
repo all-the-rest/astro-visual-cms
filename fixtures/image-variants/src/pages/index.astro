@@ -1,0 +1,27 @@
+---
+import { getImageVariants } from 'virtual:astro-visual-cms/image-variants'
+import StaticImage from '@astro-visual-cms/image-variants/astro/StaticImage.astro'
+
+const image = getImageVariants('synthetic-noise')
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Synthetic image variants integration</title>
+  </head>
+  <body>
+    <main>
+      <article class="card">
+        <figure>
+          <StaticImage image={image} alt="Synthetic noise fixture" data-testid="synthetic-image" />
+        </figure>
+        <div class="card-body">
+          <h1 class="card-title">Synthetic image variants integration</h1>
+        </div>
+      </article>
+    </main>
+  </body>
+</html>
