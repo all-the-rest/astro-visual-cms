@@ -1,0 +1,51 @@
+---
+import { readFile } from 'node:fs/promises'
+
+const manifestPath = process.env.SHARP_TEST_VARIANT_MANIFEST
+if (!manifestPath || !manifestPath.startsWith('/')) {
+  throw new Error('The synthetic variant manifest path was not provided to Astro.')
+}
+const { images } = JSON.parse(await readFile(manifestPath, 'utf8'))
+const consumerAltText = new Map([
+  ['synthetic-noise-one', 'Generated noise pattern one'],
+  ['synthetic-noise-two', 'Generated noise pattern two'],
+])
+if (!Array.isArray(images) || images.length !== consumerAltText.size) {
+  throw new Error('The synthetic technical variant manifest has an unexpected shape.')
+}
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Synthetic Sharp build proof</title>
+  </head>
+  <body>
+    <main>
+      <h1>Synthetic Sharp build proof</h1>
+      <ul>
+        {images.map((image) => {
+          const alt = consumerAltText.get(image.slug)
+          if (!alt || !Array.isArray(image.variants) || image.variants.length === 0) {
+            throw new Error('A fixture consumer alt string or generated variant is missing.')
+          }
+          const srcset = image.variants.map(({ url, width }) => `${url} ${width}w`).join(', ')
+          const fallback = image.variants.at(-1)
+          return (
+            <li>
+              <figure>
+                <picture>
+                  <source type="image/webp" srcset={srcset} sizes="100vw" />
+                  <img src={fallback.url} alt={alt} width={image.width} height={image.height} />
+                </picture>
+                <figcaption>{alt}</figcaption>
+              </figure>
+            </li>
+          )
+        })}
+      </ul>
+    </main>
+  </body>
+</html>
