@@ -135,6 +135,8 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order: selected.order }),
     })
     assert.equal(staleResponse.status, 409)
+    assert.deepEqual(await readFile(FIXTURE_PATH), Buffer.from(patchedSource, 'utf8'),
+      'A second write based on the old revision must not overwrite the first accepted write.')
   } catch (error) {
     throw new Error(`${error.message}\nDev logs:\n${logs}`)
   } finally {

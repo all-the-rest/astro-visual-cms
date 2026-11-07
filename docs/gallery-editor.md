@@ -17,7 +17,18 @@ Mehrfach verwendete Arrays, Spread-Attribute, dynamische Werte, mehrdeutige Expo
 
 Der Patchbereich stammt aus dem JavaScript-AST innerhalb des zugehörigen MDX-ESM-Blocks. Nur das ausgewählte Array wird ersetzt; alle Quellzeichen außerhalb dieses Bereichs bleiben erhalten. Jeder Schreibvorgang verlangt den aktuellen SHA-256-Hash. Ein veralteter Hash führt zum Konflikt statt zu einem Überschreiben.
 
-Die Parser-API verwendet standardmäßig `../components/Gallery.astro`. Vertrauenswürdiger Servercode kann pro Aufruf eine andere relative Importidentität vorgeben: `inspectFixture(source, { galleryImportSource: '../../content/components/Gallery.astro' })`; `patchFixtureSource` nimmt dieselbe Option als fünftes Argument. Die Option wird nicht aus MDX oder HTTP-Anfragen gelesen und akzeptiert nur relative Modul-Spezifizierer, keine absoluten Dateipfade oder URLs. Die Identität wird gegen den AST-Importtext geprüft; der Parser löst den Import nicht auf und greift nicht auf Dateien zu.
+## Adapter-Vertrag
+
+`createGalleryPatchAdapter({ galleryImportSource })` bindet eine vom vertrauenswürdigen Server vorgegebene Galerie-Importidentität und liefert zwei Operationen:
+
+- `inspect(source)` liefert `{ galleries: [{ id, order }], hash }`.
+- `patch(source, galleryId, requestedOrder, expectedHash)` liefert `{ source, galleries, hash }`.
+
+`patch` akzeptiert ausschließlich dieselben eindeutigen Slugs in anderer Reihenfolge und verlangt den aktuellen SHA-256-Hash der vollständigen Quelle. Ein fehlender, ungültiger oder veralteter Hash führt zu `STALE_HASH`; der Adapter schreibt nicht selbst auf die Festplatte. Beim Anwenden ersetzt er nur den AST-basiert ermittelten Arraybereich. Die bisherigen `inspectFixture`- und `patchFixtureSource`-Exports bleiben als kompatible Wrapper erhalten.
+
+Die standardmäßige Importidentität ist `../components/Gallery.astro`. Nur vertrauenswürdiger Servercode darf beim Erzeugen eines Adapters eine andere relative Modulidentität konfigurieren, z. B. `createGalleryPatchAdapter({ galleryImportSource: '../../content/components/Gallery.astro' })`. Die Konfiguration wird gegen relative Modul-Spezifizierer validiert, nicht aus MDX oder HTTP-Anfragen übernommen. Die Identität wird gegen den AST-Importtext geprüft; der Parser löst den Import nicht auf und greift nicht auf Dateien zu.
+
+Der HTTP-Client kann nur `galleryId`, `order` und `hash` senden. Der Server lehnt zusätzliche Felder ab, verwendet ausschließlich den fest kodierten Pfad `src/pages/fixture.mdx` und reicht keinen Client-Pfad oder eine Client-Importidentität an den Adapter weiter. Für diese lokale Demo prüft er Slugs zusätzlich gegen das synthetische Bildmanifest. Diese Ressourcen-Allowlist ist Serverkonfiguration, kein Teil der generischen Parser-API.
 
 ## Bedienung und Vorschau
 
@@ -27,4 +38,4 @@ Der Editor-Server ist auf Loopback beschränkt, prüft Host und Origin, begrenzt
 
 ## Tests und Grenzen
 
-`pnpm test` prüft die AST-Teilmenge, Originalbereichserhalt, stale hashes, unbekannte JSX-Komponenten, beliebige synthetische Parser-Slugs, serverseitige Manifestgrenzen, Mehrfachverwendung, UI-Skript-Handler und einen HTTP-E2E-Ablauf mit Astro-Rendern und Multi-Galerie-Preview-Readiness. Der E2E-Test bedient keinen echten Browser; Drag-and-drop und Tastaturaktionen werden nicht per Playwright simuliert. Diese Demo verspricht weder einen allgemeinen MDX-Parser noch produktiven Betrieb.
+`pnpm test` prüft die AST-Teilmenge, Originalbereichserhalt, stale/malformed hashes, Konflikte ohne Überschreiben, unbekannte JSX-Komponenten, beliebige synthetische Parser-Slugs, serverseitige Manifestgrenzen, Mehrfachverwendung, UI-Skript-Handler und einen HTTP-E2E-Ablauf mit Astro-Rendern und Multi-Galerie-Preview-Readiness. `pnpm run verify:build` prüft zusätzlich, dass das statische Produktions-Build keine lokalen Editor/API-Routen oder Editor-UI enthält. Der E2E-Test bedient keinen echten Browser; Drag-and-drop und Tastaturaktionen werden nicht per Playwright simuliert. Diese Demo verspricht weder einen allgemeinen MDX-Parser noch produktiven Betrieb.

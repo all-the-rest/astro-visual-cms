@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
 import { compile } from '@mdx-js/mdx'
-import { FIXTURE_IMAGE_SLUGS, hashSource, inspectFixture, patchFixtureSource } from '../src/lib/gallery-patch.mjs'
+import {
+  createGalleryPatchAdapter,
+  FIXTURE_IMAGE_SLUGS,
+  hashSource,
+  inspectFixture,
+  patchFixtureSource,
+} from '../src/lib/gallery-patch.mjs'
 
 const FIXTURE_PATH = new URL('../src/pages/fixture.mdx', import.meta.url)
 
@@ -61,10 +67,32 @@ test('stale hashes and requests that add, drop, duplicate, path-inject, or targe
   const current = inspectFixture(source)
   const order = current.galleries[0].order
   assert.throws(() => patchFixtureSource(source, 'FIRST', order, '0'.repeat(64)), { code: 'STALE_HASH' })
+  for (const malformedHash of ['', 'not-a-hash', 'A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), null]) {
+    assert.throws(() => patchFixtureSource(source, 'FIRST', order, malformedHash), { code: 'STALE_HASH' })
+  }
   assert.throws(() => patchFixtureSource(source, 'FIRST', [...order, 'noise-fixture-03'], current.hash), { code: 'UNSUPPORTED_VALUE' })
   assert.throws(() => patchFixtureSource(source, 'FIRST', [order[0], order[0]], current.hash), { code: 'UNSUPPORTED_VALUE' })
   assert.throws(() => patchFixtureSource(source, 'FIRST', ['/elsewhere.jpg', order[1]], current.hash), { code: 'UNSUPPORTED_VALUE' })
   assert.throws(() => patchFixtureSource(source, '../other.mdx', order, current.hash), { code: 'UNSUPPORTED_TARGET' })
+})
+
+test('two writes based on one revision conflict without overwriting the accepted write', () => {
+  const adapter = createGalleryPatchAdapter()
+  const source = sourceWith(simpleArrays, simpleGalleries)
+  const revision = adapter.inspect(source)
+  const firstOrder = [...revision.galleries[0].order].reverse()
+  const accepted = adapter.patch(source, 'FIRST', firstOrder, revision.hash)
+  const acceptedBytes = Buffer.from(accepted.source, 'utf8')
+
+  assert.throws(
+    () => adapter.patch(accepted.source, 'SECOND', ['evening-window'], revision.hash),
+    { code: 'STALE_HASH' },
+  )
+  assert.deepEqual(Buffer.from(accepted.source, 'utf8'), acceptedBytes)
+  assert.deepEqual(adapter.inspect(accepted.source).galleries, [
+    { id: 'FIRST', order: firstOrder },
+    { id: 'SECOND', order: ['evening-window'] },
+  ])
 })
 
 test('original Gallery form accepts arbitrary string slugs; dynamic values and non-unique targets fail closed', () => {
@@ -163,17 +191,17 @@ test('direct eval in ESM or MDX expressions fails closed during array-use detect
 
 test('a trusted import identity option supports article-relative paths without confusing same-named imports', () => {
   const importSource = '../../content/components/Gallery.astro'
-  const options = { galleryImportSource: importSource }
+  const adapter = createGalleryPatchAdapter({ galleryImportSource: importSource })
   const source = sourceWith(
     'export const SORTING = ["article-cover", "article-detail"];',
-    '<Gallery sorted={SORTING} />',
-    { importLine: `import Gallery from '${importSource}';` },
+    '<ArticleGallery id="SORTING" sorted={SORTING} />',
+    { importLine: `import ArticleGallery from '${importSource}';` },
   )
 
-  const current = inspectFixture(source, options)
+  const current = adapter.inspect(source)
   assert.deepEqual(current.galleries, [{ id: 'SORTING', order: ['article-cover', 'article-detail'] }])
-  const patched = patchFixtureSource(source, 'SORTING', [...current.galleries[0].order].reverse(), current.hash, options)
-  assert.deepEqual(inspectFixture(patched.source, options).galleries, [
+  const patched = adapter.patch(source, 'SORTING', [...current.galleries[0].order].reverse(), current.hash)
+  assert.deepEqual(adapter.inspect(patched.source).galleries, [
     { id: 'SORTING', order: ['article-detail', 'article-cover'] },
   ])
   assert.throws(() => inspectFixture(source), { code: 'UNSUPPORTED_TARGET' })
@@ -183,12 +211,30 @@ test('a trusted import identity option supports article-relative paths without c
     '<Gallery sorted={FIXTURE_SORTING} />\n<ArticleGallery sorted={ARTICLE_SORTING} />',
     { importLine: `import Gallery from '../components/Gallery.astro';\nimport ArticleGallery from '${importSource}';` },
   )
-  assert.deepEqual(inspectFixture(conflictingImports, options).galleries, [
+  assert.deepEqual(adapter.inspect(conflictingImports).galleries, [
     { id: 'ARTICLE_SORTING', order: ['article-cover'] },
   ])
   assert.deepEqual(inspectFixture(conflictingImports).galleries, [
     { id: 'FIXTURE_SORTING', order: ['fixture-cover'] },
   ])
+})
+
+test('dynamic or ambiguous MDX cannot be patched and leaves its source bytes untouched', () => {
+  const adapter = createGalleryPatchAdapter()
+  const dynamic = sourceWith(
+    'export const PICKS = [getImage()];',
+    '<Gallery sorted={PICKS} />',
+  )
+  const ambiguous = sourceWith(
+    'export const PICKS = ["first"];',
+    '<Gallery sorted={PICKS} />\n<Gallery sorted={PICKS} />',
+  )
+
+  for (const source of [dynamic, ambiguous]) {
+    const before = Buffer.from(source, 'utf8')
+    assert.throws(() => adapter.patch(source, 'PICKS', ['first'], hashSource(source)))
+    assert.deepEqual(Buffer.from(source, 'utf8'), before)
+  }
 })
 
 test('gallery import identity options reject filesystem/client paths and unrelated options', () => {

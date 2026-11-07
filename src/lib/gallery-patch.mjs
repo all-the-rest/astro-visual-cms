@@ -287,22 +287,20 @@ export function hashSource(source) {
   return createHash('sha256').update(source, 'utf8').digest('hex')
 }
 
-export function inspectFixture(source, options) {
-  const galleryImportSource = configuredGalleryImportSource(options)
+function inspectSource(source, galleryImportSource) {
   const galleries = findGalleryArrays(source, parseMdx(source), galleryImportSource)
     .map(({ id, order }) => ({ id, order }))
   return { galleries, hash: hashSource(source) }
 }
 
-export function patchFixtureSource(source, galleryId, requestedOrder, expectedHash, options) {
+function patchSource(source, galleryId, requestedOrder, expectedHash, galleryImportSource) {
   if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash) || hashSource(source) !== expectedHash) {
-    fail('STALE_HASH', 'The fixture changed since it was loaded. Reload before editing.')
+    fail('STALE_HASH', 'The source changed since it was loaded. Reload before editing.')
   }
 
-  const galleryImportSource = configuredGalleryImportSource(options)
   const galleries = findGalleryArrays(source, parseMdx(source), galleryImportSource)
   const gallery = galleries.find((item) => item.id === galleryId)
-  if (!gallery) fail('UNSUPPORTED_TARGET', 'The requested Gallery id is not part of the fixed demo fixture.')
+  if (!gallery) fail('UNSUPPORTED_TARGET', 'The requested Gallery id is not present in this source.')
   if (!Array.isArray(requestedOrder) || requestedOrder.length !== gallery.order.length ||
       requestedOrder.some((item) => typeof item !== 'string') ||
       new Set(requestedOrder).size !== requestedOrder.length ||
@@ -312,5 +310,32 @@ export function patchFixtureSource(source, galleryId, requestedOrder, expectedHa
 
   const replacement = JSON.stringify(requestedOrder)
   const updatedSource = source.slice(0, gallery.range.start) + replacement + source.slice(gallery.range.end)
-  return { source: updatedSource, ...inspectFixture(updatedSource, { galleryImportSource }) }
+  return { source: updatedSource, ...inspectSource(updatedSource, galleryImportSource) }
+}
+
+/**
+ * Bind a trusted Gallery import identity to the narrowly supported source patcher.
+ * The returned adapter only inspects and reorders literal exported string arrays;
+ * it never resolves a file path or accepts one from a patch request.
+ */
+export function createGalleryPatchAdapter(configuration) {
+  const galleryImportSource = configuredGalleryImportSource(configuration)
+  return Object.freeze({
+    inspect(source) {
+      return inspectSource(source, galleryImportSource)
+    },
+    patch(source, galleryId, requestedOrder, expectedHash) {
+      return patchSource(source, galleryId, requestedOrder, expectedHash, galleryImportSource)
+    },
+  })
+}
+
+// Retain the original fixture API for callers while new integrations bind a
+// trusted import identity once with createGalleryPatchAdapter().
+export function inspectFixture(source, options) {
+  return createGalleryPatchAdapter(options).inspect(source)
+}
+
+export function patchFixtureSource(source, galleryId, requestedOrder, expectedHash, options) {
+  return createGalleryPatchAdapter(options).patch(source, galleryId, requestedOrder, expectedHash)
 }

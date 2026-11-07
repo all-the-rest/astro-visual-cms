@@ -2,11 +2,12 @@ import { createServer } from 'node:http'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { inspectFixture, patchFixtureSource } from '../lib/gallery-patch.mjs'
+import { createGalleryPatchAdapter } from '../lib/gallery-patch.mjs'
 import { FIXTURE_IMAGE_SLUGS } from '../lib/demo-image-manifest.mjs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURE_PATH = path.join(PROJECT_ROOT, 'src/pages/fixture.mdx')
+const FIXTURE_ADAPTER = createGalleryPatchAdapter({ galleryImportSource: '../components/Gallery.astro' })
 const UI_PATH = fileURLToPath(new URL('./index.html', import.meta.url))
 const MAX_BODY_BYTES = 8 * 1024
 const PREVIEW_SYNC_TIMEOUT_MS = 4_000
@@ -34,7 +35,7 @@ export function validateDemoImageSlugs(galleries) {
 }
 
 function inspectDemoFixture(source) {
-  const state = inspectFixture(source)
+  const state = FIXTURE_ADAPTER.inspect(source)
   validateDemoImageSlugs(state.galleries)
   return state
 }
@@ -173,7 +174,7 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
         }
         const source = readFileSync(FIXTURE_PATH, 'utf8')
         inspectDemoFixture(source)
-        const result = patchFixtureSource(source, payload.galleryId, payload.order, payload.hash)
+        const result = FIXTURE_ADAPTER.patch(source, payload.galleryId, payload.order, payload.hash)
         validateDemoImageSlugs(result.galleries)
         writeFileSync(FIXTURE_PATH, result.source, 'utf8')
         return json(response, 200, { galleries: result.galleries, hash: result.hash })

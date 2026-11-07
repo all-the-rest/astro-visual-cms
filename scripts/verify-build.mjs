@@ -22,6 +22,31 @@ function runBuild(label) {
   return `${build.stdout || ''}\n${build.stderr || ''}`
 }
 
+function assertProductionEditorIsolation() {
+  const distRoot = path.join(ROOT, 'dist')
+  const files = []
+  const visit = (directory) => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) visit(file)
+      else if (entry.isFile()) files.push(file)
+    }
+  }
+  visit(distRoot)
+
+  const routeFiles = files.map((file) => path.relative(distRoot, file).replaceAll(path.sep, '/'))
+    .filter((file) => /(?:^|\/)(?:api\/(?:reorder|state|preview-ready)|editor)(?:[/.]|$)/.test(file))
+  assert.deepEqual(routeFiles, [], 'The production Astro output must not contain editor/API routes.')
+
+  for (const file of files.filter((item) => /\.(?:html|js|mjs|css)$/.test(item))) {
+    const output = readFileSync(file, 'utf8')
+    assert.doesNotMatch(output, /\/api\/(?:reorder|state|preview-ready)(?:[/?#"'`]|$)/,
+      `Production output must not expose an editor endpoint (${path.relative(ROOT, file)}).`)
+    assert.doesNotMatch(output, /id="gallery-picker"/,
+      `Production output must not include the local editor UI (${path.relative(ROOT, file)}).`)
+  }
+}
+
 function findOptimizedImage(slug) {
   const files = readdirSync(OUTPUT_DIR).filter((file) => file.startsWith(`${slug}_`) && file.endsWith('.webp'))
   assert.equal(files.length, 1, `Expected one optimized WebP for ${slug}; got ${files.join(', ')}`)
@@ -52,6 +77,7 @@ const firstSource = readFileSync(SOURCE_PATH)
 const firstSourceHash = createHash('sha256').update(firstSource).digest('hex')
 const firstSourcePixels = await decodedPixels(SOURCE_PATH)
 const firstBuildLog = runBuild('baseline source')
+assertProductionEditorIsolation()
 assert.ok(existsSync(htmlPath), 'Astro must emit the rendered MDX fixture.')
 const firstHtml = readFileSync(htmlPath, 'utf8')
 const firstOutput = findOptimizedImage(SLUG)
@@ -83,6 +109,7 @@ try {
   assert.ok(secondSourcePixelChanges > 10_000, 'The second JPEG must contain different decoded pixels.')
 
   const secondBuildLog = runBuild('alternate pixels, same slug')
+  assertProductionEditorIsolation()
   const secondHtml = readFileSync(htmlPath, 'utf8')
   secondOutput = findOptimizedImage(SLUG)
   const secondOutputPixels = await decodedPixels(path.join(OUTPUT_DIR, secondOutput))
@@ -102,6 +129,7 @@ try {
 }
 
 const restoredBuildLog = runBuild('restored source')
+assertProductionEditorIsolation()
 const restoredOutput = findOptimizedImage(SLUG)
 const restoredOutputPixels = await decodedPixels(path.join(OUTPUT_DIR, restoredOutput))
 assert.equal(restoredOutput, firstOutput, 'Restoring the first source must restore its content-addressed output name.')
