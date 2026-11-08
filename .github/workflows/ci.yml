@@ -28,6 +28,9 @@ jobs:
       - name: Verify
         run: pnpm run verify
 
+      - name: Verify distributable editor tarball
+        run: npm run pack:smoke
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 

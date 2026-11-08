@@ -1,10 +1,16 @@
-# Astro visual CMS – sicher begrenzter Spike
+# Astro Visual CMS – lokaler, begrenzt schreibender Astro-Editor
 
-Ein ausführbarer, absichtlich kleiner Spike zu Issue #1. Er rendert eine echte Astro-MDX-Seite und erlaubt, die Bildreihenfolge über eine separate lokale Editor-UI zu ändern. Änderungen schreiben ausschließlich die feste Datei `src/pages/fixture.mdx` dieses Spikes.
+Das Repository enthält das installierbare Paket `@astro-visual-cms/editor` sowie eine synthetische Demo-/Testanwendung. Das Paket startet einen loopback-only Editor und eine Astro-Dev-Integration; Bearbeitung bleibt auf explizit konfigurierte, getestete Adapter beschränkt. Es ist kein allgemeiner visueller MDX-Editor und kein Produktions-CMS.
+
+Für Paketinstallation, Astro-Konfiguration, vertrauenswürdige Serveroptionen, Supportgrenzen und nachgewiesene Projektkopien siehe [Editor-Paket](docs/editor-package.md). Ein reproduzierbarer Tarball-Installationsgate ist `npm run pack:smoke`.
+
+## Repository-Fixture starten
+
+Die lokale Demo rendert eine Astro-MDX-Seite und ändert über die separate Editor-UI die Bildreihenfolge ausschließlich in der synthetischen Datei `src/pages/fixture.mdx`.
 
 ## Start
 
-Voraussetzung: Node.js `>=22.23.4` und pnpm `11.23.0`.
+Voraussetzung: Node.js `>=22.12.0` und pnpm `11.23.0` (lokal verifiziert mit Node.js `26.10.0`).
 
 ```sh
 pnpm install
