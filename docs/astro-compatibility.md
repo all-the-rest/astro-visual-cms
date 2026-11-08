@@ -12,6 +12,7 @@ Paketversionen und ist deshalb kein deterministischer Repository-Gate.
 | 2026-11-07 | 7.4.7 (Repo-Pin, CI) | 8.1.3 | `pnpm verify` grün, drei Produktionsbuilds |
 | 2026-11-08 | 7.3.8 | 8.1.3 | `astro build` grün, Fixture-Reihenfolge und optimierte Bildreferenzen korrekt |
 | 2026-11-08 | 7.2.10 (Peer-Untergrenze) | 8.1.3 | `astro build` grün, Fixture-Reihenfolge und optimierte Bildreferenzen korrekt |
+| 2026-11-08 | 7.4.7 (Repo-Pin) | — | `pnpm run verify:collection-astro`: planner-generated static collection accepted by real Astro Content Sync; synthetic fixture only |
 
 `@astrojs/mdx` 8.1.3 deklariert `astro: ^7.2.10`; 7.2.10 ist damit die geprüfte
 Untergrenze des Peer-Bereichs. Neuere Versionen als 7.4.7 waren am 2026-11-08
@@ -39,3 +40,5 @@ ausgeführt. Vorschau-Readiness sowie der Editor-HTTP-Ablauf wurden nur gegen de
 Repo-Pin 7.4.7 durch `pnpm verify` geprüft.
 
 Die Loopback-Integration wird im `astro:config:setup` ausschließlich für `command === 'dev'` aktiviert und fügt keine Routen oder Client-Bundles hinzu. Ihre Build-/Preview-Inaktivität wird durch Lifecycle-Tests und die Produktionsisolation in `scripts/verify-build.mjs` geprüft. Ein isoliertes synthetisches Dev-Projekt prüft außerdem einen echten Routenaufruf unter `base: '/isolated-preview'`. Diese Base-Pfad-Prüfung ist ein Integrationstest auf dem Repo-Pin und keine zusätzliche Version-Kompatibilitätszusage.
+
+`scripts/verify-collection-astro.mjs` writes only a temporary synthetic Astro project, applies `planCollectionCreation` output, then runs the repo-pinned Astro 7.4.7 `astro sync`, TypeScript 6.0.3 checks, and static build against valid Markdown frontmatter. Compile-time assertions cover inferred string, enum-literal union, and boolean field types (including negative `@ts-expect-error` cases); rendered output checks the enum and applied optional-field default. The gate separately asserts that the planner rejects an incompatible type default. This is a narrow Content Sync acceptance gate, not a production-config or production-content test and not a production-readiness claim.

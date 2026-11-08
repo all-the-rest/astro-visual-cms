@@ -22,7 +22,8 @@
     "verify:build": "node scripts/verify-build.mjs",
     "verify:sharp-build": "node scripts/verify-sharp-build.mjs",
     "verify:image-variants-astro": "node scripts/verify-image-variants-astro.mjs",
-    "verify": "pnpm test && pnpm run verify:sharp-build && pnpm run verify:image-variants-astro && pnpm run verify:build"
+    "verify:collection-astro": "node scripts/verify-collection-astro.mjs",
+    "verify": "pnpm test && pnpm run verify:sharp-build && pnpm run verify:image-variants-astro && pnpm run verify:collection-astro && pnpm run verify:build"
   },
   "dependencies": {
     "@astro-visual-cms/image-variants": "workspace:*",
@@ -37,6 +38,7 @@
     "@playwright/test": "1.65.0",
     "@tailwindcss/vite": "4.3.5",
     "daisyui": "5.7.50",
-    "tailwindcss": "4.3.5"
+    "tailwindcss": "4.3.5",
+    "typescript": "6.0.3"
   }
 }
