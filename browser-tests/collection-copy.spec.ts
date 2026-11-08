@@ -1,0 +1,58 @@
+import { expect, test } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
+import { resolve } from 'node:path'
+
+test('a confirmed MDX collection field edit is rendered by Astro in an isolated project copy', async ({ page, request }) => {
+  const rootFixture = resolve('src/pages/fixture.mdx')
+  const rootComponent = resolve('src/components/EditorUnknownChip.astro')
+  const rootFixtureBytes = await readFile(rootFixture)
+  const rootComponentBytes = await readFile(rootComponent)
+  const receiptPath = resolve('test-results/readonly-collection-copy-path')
+  await expect.poll(async () => { try { return (await readFile(receiptPath, 'utf8')).length > 0 } catch { return false } }).toBe(true)
+  const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as { contentFile: string; configFile: string; pageFile: string }
+  const original = await readFile(receipt.contentFile, 'utf8')
+  const config = await readFile(receipt.configFile)
+  const pageSource = await readFile(receipt.pageFile)
+  const expected = original.replace('title: "Synthetic collection entry"', 'title: "Updated collection entry"')
+  expect(expected).not.toBe(original)
+
+  const catalogResponse = await request.get('/api/collections')
+  expect(catalogResponse.ok()).toBeTruthy()
+  const catalog = await catalogResponse.json()
+  expect(catalog.configured).toBe(true)
+  expect(catalog.collections).toHaveLength(1)
+  expect(catalog.collections[0]).toMatchObject({ name: 'notes', supported: true, mode: 'editable' })
+  expect(catalog.collections[0].entries.map((entry: { id: string }) => entry.id)).toEqual(['entry.mdx'])
+  expect(catalog.collections[0].fields.map((field: { name: string; editable: boolean }) => [field.name, field.editable])).toEqual([['title', true], ['rank', true]])
+  expect(JSON.stringify(catalog)).not.toContain('avcms-readonly-')
+
+  const route = 'http://127.0.0.1:15331/browser-synthetic/collection-proof/'
+  const initialPage = await request.get(route)
+  expect(initialPage.ok()).toBeTruthy()
+  const initialHtml = await initialPage.text()
+  expect(initialHtml).toMatch(/<h1 data-entry-title(?:\s[^>]*)?>Synthetic collection entry<\/h1>/)
+  expect(initialHtml).toContain('Nested synthetic component')
+
+  await page.goto('/')
+  await expect(page.locator('#collections-panel')).toBeVisible()
+  await expect(page.getByRole('group', { name: 'Collection auswählen' }).getByRole('button', { name: 'notes' })).toBeEnabled()
+  await expect(page.getByRole('group', { name: 'Eintrag auswählen' }).getByRole('button', { name: 'entry.mdx' })).toBeEnabled()
+  const titleField = page.locator('#collection-fields label').filter({ hasText: 'title (string)' })
+  await titleField.locator('input').fill('Updated collection entry')
+  await titleField.getByRole('button', { name: 'Vorschau' }).click()
+  await expect(page.locator('#collection-diff-before')).toHaveText('"Synthetic collection entry"')
+  await expect(page.locator('#collection-diff-after')).toHaveText('"Updated collection entry"')
+  expect(await readFile(receipt.contentFile, 'utf8')).toBe(original)
+  await page.locator('#confirm-collection-change').click()
+  await expect(page.locator('#status')).toContainText('Gespeichert.')
+  await expect.poll(() => readFile(receipt.contentFile, 'utf8')).toBe(expected)
+
+  await expect.poll(async () => (await request.get(route)).text()).toMatch(/<h1 data-entry-title(?:\s[^>]*)?>Updated collection entry<\/h1>/)
+  const rendered = await (await request.get(route)).text()
+  expect(rendered).toContain('Nested synthetic component')
+  expect(rendered).toMatch(/<p data-entry-rank="7"(?:\s[^>]*)?>7<\/p>/)
+  expect(await readFile(receipt.configFile)).toEqual(config)
+  expect(await readFile(receipt.pageFile)).toEqual(pageSource)
+  expect(await readFile(rootFixture)).toEqual(rootFixtureBytes)
+  expect(await readFile(rootComponent)).toEqual(rootComponentBytes)
+})

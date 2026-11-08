@@ -130,3 +130,25 @@ supported. A click whose rendered marker no longer matches a catalog instance
 is explicitly reported as read-only and disables MDX edit controls; no preview
 or commit is sent. This verifies one fail-closed mismatch case, not arbitrary
 component transforms or general provenance.
+
+### Isolated Astro gallery-copy acceptance slice (2026-11-08)
+
+The gallery-copy browser gate uses the repository's pinned Astro project in a
+temporary copy. It wraps the literal gallery in a copy-only unknown Astro
+component, commits a reorder through the editor, and verifies the copied MDX
+diff and post-recompile rendered order while asserting the tracked source stays
+unchanged. It then applies a JSX spread only in the copy and verifies the state
+catalog and authenticated preview endpoint reject it without writing. This is
+one synthetic integration proof, not external-project compatibility or broad
+MDX support.
+
+### Isolated Astro MDX collection edit acceptance slice (2026-11-08)
+
+A second temporary-copy browser gate creates a static `glob()` MDX collection,
+schema, and rendering route only in the copy. It exercises discovery, previews
+one scalar frontmatter edit without writing, confirms the exact change, and
+checks Astro's rendered route after Content Sync. Only the copied entry's
+selected title changes; its MDX body, another field, config, route, and all
+tracked files stay byte-identical. This remains evidence for one synthetic
+fixture and the pinned Astro version, not an external project or production
+readiness claim.

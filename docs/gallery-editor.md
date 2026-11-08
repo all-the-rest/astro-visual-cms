@@ -116,6 +116,26 @@ read-only explanation, disable the MDX editing controls, and issue no preview or
 commit request. This proves fail-closed behavior for this one marker mismatch;
 it does not derive or establish general DOM-to-source provenance.
 
+`pnpm run browser-tests:gallery-copy` adds an unknown Astro wrapper around one
+literal gallery in another temporary copy, commits a reorder through the editor,
+and checks the exact copied-MDX delta plus the rendered order after Astro
+recompiles the route. It then changes the copied gallery to a JSX spread and
+checks that both catalog inspection and the authenticated preview endpoint
+reject it without changing the copied source. The tracked fixture and component
+are asserted byte-identical throughout. This remains a synthetic fixture on the
+repository's pinned Astro version—not a claim of compatibility with an external
+project or general MDX support.
+
+`pnpm run browser-tests:collection-copy` adds a synthetic static MDX glob
+collection and Astro content route only inside another temporary copy. It checks
+the path-free collection catalog, edits one existing string frontmatter field
+through preview and explicit confirmation, verifies no write occurs before
+confirmation, and checks the exact copied-entry delta and Astro-rendered value
+after Content Sync. The MDX body, component output, rank field, copied config and
+route source, and tracked fixture/component are checked unchanged. This is
+limited to the repository's pinned Astro/MDX setup and does not establish
+external consumer compatibility or production readiness.
+
 The Phase 5 in-context selection proof is opt-in at the rendered-node level: a
 trusted component may render `data-astro-visual-cms-target` and
 `data-astro-visual-cms-instance` only when it can preserve the exact configured

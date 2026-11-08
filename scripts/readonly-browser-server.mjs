@@ -16,8 +16,11 @@ const files = (await new Promise((resolve, reject) => {
   child.stdout.on('data', (chunk) => out += chunk); child.once('error', reject); child.once('exit', (code) => code ? reject(new Error('git ls-files failed')) : resolve(out))
 })).split('\0').filter(Boolean)
 const root = await mkdtemp(path.join(tmpdir(), 'avcms-readonly-'))
+const receipt = path.join(repo, 'test-results', 'readonly-copy-path')
+const collectionReceipt = path.join(repo, 'test-results', 'readonly-collection-copy-path')
 const children = []
 let editor
+let astroStarted = false
 let cleanupPromise
 function cleanup() {
   if (!cleanupPromise) {
@@ -37,7 +40,13 @@ function cleanup() {
       }
       await Promise.all(childExits)
       clearTimeout(forceKill)
+      if (astroStarted) {
+        await run(process.execPath, [path.join(root, 'node_modules/astro/bin/astro.mjs'), 'dev', 'stop'], { cwd: root })
+        astroStarted = false
+      }
       await rm(root, { recursive: true, force: true })
+      await rm(receipt, { force: true })
+      await rm(collectionReceipt, { force: true })
     })()
   }
   return cleanupPromise
@@ -53,27 +62,55 @@ try {
   await run(process.execPath, [path.join(root, 'scripts/generate-noise.mjs')], { cwd: root })
   const fixture = path.join(root, 'src/pages/fixture.mdx')
   const mode = process.env.AVCMS_READONLY_MODE || 'duplicate'
-  if (!['duplicate', 'unmapped'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate or unmapped.')
+  if (!['duplicate', 'unmapped', 'gallery', 'collection'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate, unmapped, gallery, or collection.')
   if (mode === 'duplicate') {
     const original = await readFile(fixture, 'utf8')
     if (!original.includes('id="marker-two"')) throw new Error('Synthetic duplicate-ID fixture anchor was not found.')
     await writeFile(fixture, original.replace('id="marker-two"', 'id="marker-one"'))
-  } else {
+  } else if (mode === 'unmapped') {
     const component = path.join(root, 'src/components/EditorUnknownChip.astro')
     const source = await readFile(component, 'utf8')
     if (!source.includes('data-astro-visual-cms-instance={id}')) throw new Error('Synthetic component marker anchor was not found.')
     await writeFile(component, source.replace('data-astro-visual-cms-instance={id}', 'data-astro-visual-cms-instance={id.toUpperCase()}'))
+  } else if (mode === 'gallery') {
+    const original = await readFile(fixture, 'utf8')
+    const importAnchor = "import EditorUnknownChip from '../components/EditorUnknownChip.astro';"
+    const galleryAnchor = '<Gallery sorted={HIGHLIGHTS} />'
+    if (!original.includes(importAnchor) || !original.includes(galleryAnchor)) throw new Error('Synthetic gallery fixture anchors were not found.')
+    await writeFile(path.join(root, 'src/components/NestedUnknown.astro'), '<div data-nested-unknown><slot /></div>\n')
+    await writeFile(fixture, original.replace(importAnchor, `${importAnchor}\nimport NestedUnknown from '../components/NestedUnknown.astro';`).replace(galleryAnchor, '<NestedUnknown><Gallery sorted={HIGHLIGHTS} /></NestedUnknown>'))
+  } else {
+    const contentRoot = path.join(root, 'src/content/acceptance-notes')
+    const contentFile = path.join(contentRoot, 'entry.mdx')
+    const configFile = path.join(root, 'src/content.config.ts')
+    const pageFile = path.join(root, 'src/pages/collection-proof.astro')
+    await mkdir(contentRoot, { recursive: true })
+    await writeFile(configFile, `import { defineCollection, z } from 'astro:content';\nimport { glob } from 'astro/loaders';\nexport const collections = { notes: defineCollection({ loader: glob({ pattern: '**/*.mdx', base: './src/content/acceptance-notes' }), schema: z.object({ title: z.string(), rank: z.number() }) }) };\n`)
+    await writeFile(contentFile, `---\ntitle: "Synthetic collection entry"\nrank: 7\n---\nimport EditorUnknownChip from '../../components/EditorUnknownChip.astro'\n\n# Collection body remains MDX\n\n<EditorUnknownChip id="collection-proof" label="Nested synthetic component" />\n`)
+    await writeFile(pageFile, `---\nimport { getCollection, render } from 'astro:content';\nconst [entry] = await getCollection('notes');\nif (!entry) throw new Error('Synthetic MDX collection entry was not loaded.');\nconst { Content } = await render(entry);\n---\n<html><body><h1 data-entry-title>{entry.data.title}</h1><p data-entry-rank={String(entry.data.rank)}>{entry.data.rank}</p><Content /></body></html>\n`)
+    await mkdir(path.dirname(collectionReceipt), { recursive: true })
+    await writeFile(collectionReceipt, JSON.stringify({ contentFile, configFile, pageFile }))
   }
+  await mkdir(path.dirname(receipt), { recursive: true }); await writeFile(receipt, fixture)
   const sitePort = 15331, editorPort = 15332
-  const astro = spawn(process.execPath, [path.join(root, 'node_modules/astro/bin/astro.mjs'), 'dev', '--host', '127.0.0.1', '--port', String(sitePort), '--strictPort'], { cwd: root, stdio: 'inherit', env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', ASTRO_DEV_BACKGROUND: '1', EDITOR_PORT: String(editorPort) } })
-  children.push(astro)
-  astro.once('exit', () => {
-    if (!cleanupPromise) cleanup().finally(() => process.exit(1))
+  const astroBin = path.join(root, 'node_modules/astro/bin/astro.mjs')
+  try {
+    await run(process.execPath, [astroBin, 'dev', '--background', '--host', '127.0.0.1', '--port', String(sitePort)], {
+      cwd: root,
+      env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', EDITOR_PORT: String(editorPort) },
+    })
+    astroStarted = true
+  } catch (error) {
+    try { await run(process.execPath, [astroBin, 'dev', 'stop'], { cwd: root }) } catch {}
+    throw error
+  }
+  editor = createEditorServer({
+    port: editorPort, sitePort, fixturePath: fixture, basePath: '/browser-synthetic/',
+    ...(mode === 'collection' ? { projectRoot: root, contentConfigPath: 'src/content.config.ts' } : {}),
+    ...(mode === 'collection' ? {} : { mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] }),
   })
-  editor = createEditorServer({ port: editorPort, sitePort, basePath: '/browser-synthetic/', mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] })
   const deadline = Date.now() + 110_000
   while (Date.now() < deadline) {
-    if (astro.exitCode !== null) throw new Error(`Copied Astro dev server exited (${astro.exitCode}).`)
     try {
       if ((await fetch(`http://127.0.0.1:${sitePort}/browser-synthetic/fixture/`)).ok) break
     } catch {}

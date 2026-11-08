@@ -39,3 +39,9 @@ jobs:
 
       - name: Run isolated-copy unmapped-output browser test
         run: pnpm run browser-tests:unmapped
+
+      - name: Run isolated-copy gallery browser test
+        run: pnpm run browser-tests:gallery-copy
+
+      - name: Run isolated-copy MDX collection browser test
+        run: pnpm run browser-tests:collection-copy

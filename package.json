@@ -21,6 +21,8 @@
     "browser-tests": "playwright test --config=playwright.config.ts",
     "browser-tests:readonly": "playwright test --config=playwright.readonly.config.ts",
     "browser-tests:unmapped": "playwright test --config=playwright.unmapped.config.ts",
+    "browser-tests:gallery-copy": "playwright test --config=playwright.gallery-copy.config.ts",
+    "browser-tests:collection-copy": "playwright test --config=playwright.collection-copy.config.ts",
     "verify:build": "node scripts/verify-build.mjs",
     "verify:sharp-build": "node scripts/verify-sharp-build.mjs",
     "verify:image-variants-astro": "node scripts/verify-image-variants-astro.mjs",
