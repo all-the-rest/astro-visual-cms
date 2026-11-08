@@ -15,6 +15,10 @@
       "types": "./config.d.ts",
       "import": "./src/config.mjs"
     },
+    "./legacy-cdn": {
+      "types": "./legacy-cdn.d.ts",
+      "import": "./src/legacy-cdn.mjs"
+    },
     "./cli": {
       "types": "./cli.d.ts",
       "import": "./src/cli.mjs"

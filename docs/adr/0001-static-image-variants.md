@@ -33,6 +33,7 @@ following supplementary exports, as declared in `packages/image-variants/package
 | Export | Responsibility |
 | --- | --- |
 | `@astro-visual-cms/image-variants/config` | The shared manifest/config validation and loading functions, also re-exported from the package root. |
+| `@astro-visual-cms/image-variants/legacy-cdn` | Explicit legacy manifest projection and filesystem copy adapter; not used by default. |
 | `@astro-visual-cms/image-variants/astro/StaticImage.astro` | Static `<picture>/<img>` component for rendering the Astro integration's result. |
 | `createSourceJpegImportGuard` from `@astro-visual-cms/image-variants` | Advanced Vite/Rollup plugin helper; takes a manifest and its `sourceRoot`. The Astro integration installs it automatically. |
 
@@ -128,8 +129,8 @@ includes the output schema/transform policy and the Sharp/libvips versions, so
 encoder or policy upgrades cannot silently reuse stale output. Source-byte
 changes change every variant URL; unchanged source bytes and transform namespace
 retain their identity. V1 output is WebP at quality 82 and effort 4. Future
-consumers needing a 16-hex legacy URL use a separate URL adapter; the core hash
-is not truncated.
+consumers needing a 16-hex legacy URL use the separate, opt-in `legacy-cdn`
+adapter; the core hash is not truncated.
 
 If the current full source hash, transform namespace, and every requested variant
 are present and valid, regenerate the expected WebP bytes and compare them
@@ -150,6 +151,80 @@ independent of filesystem paths; literal whitespace is rejected. In Astro,
 the full path in the cache key. New URLs are safe to cache immutably. A deploy
 may retain old content-addressed assets while old HTML is still served; the
 package does not delete remote CDN objects.
+
+### Optional legacy CDN adapter (Issue #10)
+
+The package provides a deliberately separate
+`@astro-visual-cms/image-variants/legacy-cdn` export. It is not re-exported from
+the package root and is not invoked by the core or Astro integration. V1
+generation, its full source hashes, and its public URLs therefore remain
+unchanged when a consumer does not explicitly use this adapter.
+
+`projectLegacyManifest(result, { publicPath, generated, baseUrl? })` is a pure,
+deterministic projection. `publicPath` must be the exact canonical URL path
+prefix used for V1 generation. `generated` is supplied explicitly as an
+ISO-8601 UTC timestamp with millisecond precision (projection does not consult
+the clock). Optional `baseUrl` is restricted to a canonical HTTP(S) origin with
+no credentials, path, query, or fragment. The returned manifest has exactly
+this V1 legacy shape and no consumer descriptive metadata:
+
+```js
+{
+  version: 1,
+  generated: '2026-11-08T12:34:56.789Z',
+  images: {
+    'sample-cover': {
+      hash: '<first 16 hex characters of full source SHA-256>',
+      width: 320,
+      height: 180,
+      variants: [80, 160, 320],
+    },
+  },
+}
+```
+
+The projection result is `{ manifest, artifacts }`. Each public artifact record
+contains only `slug`, `width`, public `url`, and legacy `objectKey`; V1 source
+paths are derived internally from the validated full-hash URLs and are not
+exposed. Neither the artifact record nor the manifest entry fabricates Astro
+`ImageMetadata`. The adapter derives every full hash only from a URL matching
+the exact V1 pattern
+`<publicPath>/<transformNamespace>/<hash[0:2]>/<64-hex-hash>_<width>.webp`.
+It validates the V1 result shape, namespace, hash prefix, URL width and image
+dimensions; rejects malformed/mixed hashes and duplicate slugs or object keys;
+and throws `LEGACY_HASH_COLLISION` if distinct full hashes in the result share
+one 16-hex truncation. This collision check occurs before the writer creates
+output directories or copies any bytes.
+
+`writeLegacyVariantArtifacts(result, options)` accepts that same projection
+configuration plus `sourceDir` (the filesystem root of generated V1 variants),
+`outputDir`, and optional `overwrite`. It reads only the expected V1 files
+derived from validated URLs, then copies them byte-for-byte to
+`<outputDir>/<hash[0:2]>/<16-hex-hash>_<width>.webp`. Output and source roots,
+directory components, and files are checked for symlinks and path escapes. Each
+artifact is limited to 64 MiB and the total copied input to 256 MiB before the
+writer allocates artifact buffers. The filesystem roots must be trusted and
+must not be concurrently modified while the writer runs; Node's portable path
+APIs do not provide a race-free openat-style guarantee against a hostile process
+swapping checked directories.
+Unrelated output files are never pruned. Existing legacy keys fail by default;
+`overwrite: true` replaces existing regular files atomically using a
+same-directory temporary file and rename. With `overwrite: true`, the result
+includes an `invalidationUrls` entry for every published legacy key, including
+keys that may have appeared after preflight. It does not purge a CDN, and the
+atomicity guarantee is per file rather than across the entire batch. If a later
+key fails after earlier keys were published, the rejected error carries those
+successful URLs in its `invalidationUrls` property so callers can still purge
+them.
+
+These paths retain the historical public key shape but not the identity or
+cache guarantees of V1. The legacy consumer used WebP quality 75, while V1 uses
+quality 82/effort 4, so copied bytes are not promised to match historical
+legacy artifacts. A transform policy or encoder change can alter bytes at the
+same legacy URL. Legacy keys are mutable and must not be claimed as immutable;
+an intentional replacement needs a deliberate CDN invalidation. The default
+no-overwrite policy makes that choice explicit. No legacy manifest or files are
+written unless the consumer calls the optional adapter.
 
 ### Astro surface
 
