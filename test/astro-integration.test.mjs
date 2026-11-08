@@ -29,16 +29,29 @@ test('Astro base paths normalize safely and reject traversal, query, and hash va
 })
 
 test('loopback integration only changes Astro dev configuration, never build or preview', () => {
+  assert.throws(() => createLoopbackDevIntegration({ editorPort: '0' }), TypeError)
+  assert.throws(() => createLoopbackDevIntegration({ editorPort: 'not-a-port' }), TypeError)
   const integration = createLoopbackDevIntegration()
   assert.equal(integration.name, 'astro-visual-cms-loopback-dev-boundary')
   assert.deepEqual(Object.keys(integration.hooks), ['astro:config:setup'])
   const hook = integration.hooks['astro:config:setup']
   const updates = []
+  const injected = []
 
-  hook({ command: 'dev', updateConfig: (config) => updates.push(config) })
-  hook({ command: 'build', updateConfig: (config) => updates.push(config) })
-  hook({ command: 'preview', updateConfig: (config) => updates.push(config) })
+  const args = (command) => ({ command, updateConfig: (config) => updates.push(config), injectScript: (...values) => injected.push(values) })
+  hook(args('dev'))
+  hook(args('build'))
+  hook(args('preview'))
   assert.deepEqual(updates, [{ server: { host: '127.0.0.1' } }])
+  assert.equal(injected.length, 1)
+  assert.equal(injected[0][0], 'page')
+  assert.match(injected[0][1], /127\.0\.0\.1:4322/)
+
+  const customPort = []
+  createLoopbackDevIntegration({ editorPort: '15432' }).hooks['astro:config:setup']({
+    command: 'dev', updateConfig() {}, injectScript: (...values) => customPort.push(values),
+  })
+  assert.match(customPort[0][1], /127\.0\.0\.1:15432/)
 })
 
 function availablePort() {

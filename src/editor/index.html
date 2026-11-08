@@ -162,6 +162,24 @@
       let current = { galleries: [], hash: '' };
       let collectionState = { configured: false, collections: [] };
       let mdxState = { configured: false, targets: [] };
+      let previewNonce = '';
+      preview.addEventListener('load', () => {
+        previewNonce = Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+        preview.contentWindow?.postMessage({ type: 'avcms:challenge', nonce: previewNonce }, siteOrigin);
+      });
+      window.addEventListener('message', (event) => {
+        const data = event.data;
+        if (event.origin !== siteOrigin || event.source !== preview.contentWindow || !data || typeof data !== 'object' || Array.isArray(data)) return;
+        if (Object.keys(data).sort().join(',') !== 'instanceId,nonce,targetId,type' || data.type !== 'avcms:selection' || data.nonce !== previewNonce || typeof data.targetId !== 'string' || data.targetId.length > 128 || typeof data.instanceId !== 'string' || data.instanceId.length > 128) return;
+        const target = mdxState.targets.find((item) => item.id === data.targetId && item.supported);
+        if (!target?.instances?.some((item) => item.id === data.instanceId)) return;
+        mdxTarget.value = target.id;
+        renderMdx();
+        mdxInstance.value = data.instanceId;
+        renderMdx();
+        mdxTarget.focus();
+        status(`MDX-Ziel ${target.id} / Instanz ${data.instanceId} ausgewählt. Vorschau und Bestätigung bleiben erforderlich.`, 'success');
+      });
       let pendingMdxPreview = null;
       const mdxPanel = document.querySelector('#mdx-components-panel');
       const mdxTarget = document.querySelector('#mdx-target');

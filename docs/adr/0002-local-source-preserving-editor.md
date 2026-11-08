@@ -96,3 +96,16 @@ diff using text nodes. Commits revalidate and use the existing atomic source
 writer. The feature remains a local prototype: shadowing/binding ambiguity,
 hostile concurrent filesystem changes, visual preview of arbitrary target
 routes, broader literal forms, and release compatibility gates remain unresolved.
+
+### Phase 5 explicit-marker selection proof (2026-11-08)
+
+The dev-only preview bridge allows click selection only for nodes carrying the
+explicit `data-astro-visual-cms-target` and
+`data-astro-visual-cms-instance` markers. A per-load nonce and exact editor/site
+origins plus `event.source` checks bind the message to the current preview frame;
+the editor then requires an exact match in its already loaded supported MDX
+catalog. Selection focuses the existing controls and never writes. Unmarked,
+unknown, stale, or unsupported instances remain unselectable. This is not general
+DOM provenance and depends on a trusted author preserving marker identity; the
+standalone editor still has no automatically configured MDX targets. The proof
+does not establish production readiness.

@@ -102,3 +102,16 @@ source delta, and writes only after explicit confirmation. Unsupported MDX synta
 read-only. Writer lifecycle limitations described above still apply; do not use
 this with real content or treat it as production-ready, and make no readiness
 claim. JavaScript shadowing and every MDX binding ambiguity are not resolved.
+
+The Phase 5 in-context selection proof is opt-in at the rendered-node level: a
+trusted component may render `data-astro-visual-cms-target` and
+`data-astro-visual-cms-instance` only when it can preserve the exact configured
+source target identity. In the current synthetic example the marker IDs are
+literal. The dev-only Astro bridge and editor accept selection messages only
+from the exact preview frame/origin with a per-load nonce, then resolve both IDs
+against the already loaded supported MDX catalog. Selection only focuses the
+existing controls; saving still requires the regular preview and explicit
+confirmation. No marker means no selection. This is not general DOM-to-source
+provenance, does not support computed/repeated/ambiguous output, and does not
+make the development-only MDX adapter automatically available from the standalone
+server; trusted targets must still be configured by the embedding application.

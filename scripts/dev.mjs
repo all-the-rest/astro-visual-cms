@@ -11,7 +11,7 @@ const processes = [
   spawn(process.execPath, astroArgs, {
     cwd: ROOT,
     stdio: 'inherit',
-    env: { ...process.env, ASTRO_DEV_BACKGROUND: '1' },
+    env: { ...process.env, ASTRO_DEV_BACKGROUND: '1', EDITOR_PORT: String(editorPort) },
   }),
   spawn(process.execPath, ['src/editor/server.mjs'], {
     cwd: ROOT,
