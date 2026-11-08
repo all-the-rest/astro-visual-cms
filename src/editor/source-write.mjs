@@ -23,6 +23,8 @@ export async function writeSourceAtomically(filePath, expectedHash, nextSource, 
     throw staleHashError()
   }
 
+  const initialStat = await fs.stat(filePath)
+  if (!initialStat.isFile()) throw staleHashError()
   const initialBytes = await fs.readFile(filePath)
   if (sha256(initialBytes) !== expectedHash) throw staleHashError()
 
@@ -36,6 +38,7 @@ export async function writeSourceAtomically(filePath, expectedHash, nextSource, 
       const candidate = path.join(directory, `.${basename}.${randomBytes(16).toString('hex')}.tmp`)
       try {
         await fs.writeFile(candidate, nextSource, { encoding: 'utf8', flag: 'wx' })
+        await fs.chmod(candidate, initialStat.mode & 0o777)
         tempPath = candidate
         tempExists = true
       } catch (error) {

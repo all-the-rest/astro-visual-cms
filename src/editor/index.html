@@ -35,6 +35,28 @@
           </div>
         </div>
       </section>
+      <section id="collections-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+        <div class="card-body">
+          <h2 class="card-title">Astro Content Collections</h2>
+          <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Collections und vorhandene skalare Schemafelder sind bearbeitbar. Collection-/Schema-Konfiguration bleibt read-only.</p>
+          <p id="collections-reason" class="alert alert-info" role="status" hidden></p>
+          <div class="grid gap-5 md:grid-cols-3">
+            <section>
+              <h3 class="font-semibold">Collections</h3>
+              <div id="collection-picker" class="flex flex-wrap gap-2" role="group" aria-label="Collection auswählen"></div>
+            </section>
+            <section>
+              <h3 class="font-semibold">Markdown-Einträge</h3>
+              <div id="collection-entry-picker" class="flex flex-wrap gap-2" role="group" aria-label="Eintrag auswählen"></div>
+            </section>
+            <section>
+              <h3 class="font-semibold">Vorhandene Schemafelder</h3>
+              <div id="collection-fields" class="grid gap-3"></div>
+            </section>
+          </div>
+          <p class="text-xs opacity-70">Nach einer künftigen bestätigten Schema-/Collection-Konfigurationsänderung Content Sync bzw. einen Astro-Dev-Server-Neustart prüfen.</p>
+        </div>
+      </section>
       <section id="diff-confirmation" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Quelländerung bestätigen</h2>
@@ -56,6 +78,21 @@
           </div>
         </div>
       </section>
+      <section id="collection-diff-confirmation" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+        <div class="card-body">
+          <h2 class="card-title">Frontmatter-Änderung bestätigen</h2>
+          <p class="text-sm">Nur dieser exakte Skalar wird geändert. Die Datei wird erst nach deiner Bestätigung geschrieben.</p>
+          <p id="collection-diff-range" class="font-mono text-xs"></p>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div><h3 class="font-semibold">Vorher</h3><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="collection-diff-before"></code></pre></div>
+            <div><h3 class="font-semibold">Nachher</h3><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="collection-diff-after"></code></pre></div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button id="confirm-collection-change" class="btn btn-primary" type="button">Änderung bestätigen und speichern</button>
+            <button id="cancel-collection-change" class="btn" type="button">Abbrechen</button>
+          </div>
+        </div>
+      </section>
     </main>
     <script nonce="__CSP_NONCE__">
       const siteOrigin = '__SITE_ORIGIN__';
@@ -74,14 +111,30 @@
       const diffAfter = document.querySelector('#diff-after');
       const confirmButton = document.querySelector('#confirm-change');
       const cancelButton = document.querySelector('#cancel-change');
+      const collectionsPanel = document.querySelector('#collections-panel');
+      const collectionsInfo = document.querySelector('#collections-info');
+      const collectionsReason = document.querySelector('#collections-reason');
+      const collectionPicker = document.querySelector('#collection-picker');
+      const collectionEntryPicker = document.querySelector('#collection-entry-picker');
+      const collectionFields = document.querySelector('#collection-fields');
+      const collectionConfirmation = document.querySelector('#collection-diff-confirmation');
+      const collectionDiffRange = document.querySelector('#collection-diff-range');
+      const collectionDiffBefore = document.querySelector('#collection-diff-before');
+      const collectionDiffAfter = document.querySelector('#collection-diff-after');
+      const confirmCollectionButton = document.querySelector('#confirm-collection-change');
+      const cancelCollectionButton = document.querySelector('#cancel-collection-change');
       const previewRoutes = Object.freeze({
         home: `${siteOrigin}${siteBasePath}`,
         fixture: `${siteOrigin}${siteBasePath}fixture/`,
       });
       let current = { galleries: [], hash: '' };
+      let collectionState = { configured: false, collections: [] };
       let selectedGalleryId = '';
+      let selectedCollectionId = '';
+      let selectedEntryId = '';
       let saving = false;
       let pendingPreview = null;
+      let pendingCollectionPreview = null;
       let draggedSlug = null;
       let focusImageSlugAfterRender = '';
 
@@ -91,7 +144,7 @@
       }
 
       function busy() {
-        return saving || pendingPreview !== null;
+        return saving || pendingPreview !== null || pendingCollectionPreview !== null;
       }
 
       function galleryById(id) {
@@ -108,8 +161,134 @@
         diffAfter.textContent = pendingPreview.diff.after;
       }
 
+      function selectedCollection() {
+        return collectionState.collections?.find((collection) => collection.id === selectedCollectionId);
+      }
+
+      function selectedCollectionEntry() {
+        return selectedCollection()?.entries?.find((entry) => entry.id === selectedEntryId);
+      }
+
+      function renderCollectionConfirmation() {
+        collectionConfirmation.hidden = pendingCollectionPreview === null;
+        confirmCollectionButton.disabled = saving || pendingCollectionPreview === null;
+        cancelCollectionButton.disabled = saving || pendingCollectionPreview === null;
+        if (!pendingCollectionPreview) return;
+        collectionDiffRange.textContent = `Quelloffset ${pendingCollectionPreview.diff.start}–${pendingCollectionPreview.diff.end} (JavaScript-Codeeinheiten)`;
+        collectionDiffBefore.textContent = pendingCollectionPreview.diff.before;
+        collectionDiffAfter.textContent = pendingCollectionPreview.diff.after;
+      }
+
+      function renderCollections() {
+        collectionsPanel.hidden = !collectionState.configured;
+        if (!collectionState.configured) return;
+        const configReason = collectionState.reason || collectionState.configEditing?.reason || '';
+        collectionsReason.hidden = !configReason;
+        collectionsReason.textContent = configReason;
+        collectionPicker.replaceChildren();
+        collectionEntryPicker.replaceChildren();
+        collectionFields.replaceChildren();
+        const chooseCollection = (collection) => {
+          const button = document.createElement('button');
+          button.className = 'btn btn-sm';
+          button.type = 'button';
+          button.textContent = collection.name;
+          button.setAttribute('aria-pressed', String(collection.id === selectedCollectionId));
+          button.disabled = busy();
+          button.addEventListener('click', () => {
+            selectedCollectionId = collection.id;
+            selectedEntryId = collection.entries?.[0]?.id || '';
+            render();
+          });
+          collectionPicker.append(button);
+        };
+        for (const collection of collectionState.collections || []) {
+          chooseCollection(collection);
+          if (!collection.supported || collection.mode !== 'editable') {
+            const reason = document.createElement('p');
+            reason.className = 'basis-full text-xs text-warning';
+            reason.textContent = `${collection.name}: ${collection.reason || 'Read-only'}`;
+            collectionPicker.append(reason);
+          }
+        }
+        const collection = selectedCollection();
+        if (!collection) return;
+        for (const entry of collection.entries || []) {
+          const button = document.createElement('button');
+          button.className = 'btn btn-sm';
+          button.type = 'button';
+          button.textContent = entry.id;
+          button.setAttribute('aria-pressed', String(entry.id === selectedEntryId));
+          button.disabled = busy() || !entry.editable;
+          button.addEventListener('click', () => {
+            selectedEntryId = entry.id;
+            render();
+          });
+          collectionEntryPicker.append(button);
+        }
+        if (!collection.entries?.length) {
+          const empty = document.createElement('p');
+          empty.className = 'text-sm';
+          empty.textContent = collection.reason || 'Keine unterstützten Einträge gefunden.';
+          collectionEntryPicker.append(empty);
+          return;
+        }
+        const entry = selectedCollectionEntry();
+        if (!entry) return;
+        for (const field of collection.fields || []) {
+          const wrapper = document.createElement('label');
+          wrapper.className = 'grid gap-1 text-sm';
+          const title = document.createElement('span');
+          title.textContent = `${field.name} (${field.type})`;
+          wrapper.append(title);
+          if (!field.editable || !entry.editable) {
+            const reason = document.createElement('span');
+            reason.className = 'text-xs opacity-70';
+            reason.textContent = field.reason || entry.reason || collection.reason || 'Read-only';
+            wrapper.append(reason);
+            collectionFields.append(wrapper);
+            continue;
+          }
+          let input;
+          if (field.type === 'enum' || field.type === 'boolean') {
+            input = document.createElement('select');
+            input.className = 'select select-bordered select-sm';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = 'Neuen Wert auswählen';
+            input.append(placeholder);
+            const values = field.type === 'boolean' ? ['true', 'false'] : field.values;
+            for (const value of values || []) {
+              const option = document.createElement('option');
+              option.value = String(value);
+              option.textContent = String(value);
+              input.append(option);
+            }
+          } else {
+            input = document.createElement('input');
+            input.className = 'input input-bordered input-sm';
+            input.type = field.type === 'number' ? 'number' : 'text';
+            if (field.type === 'number') input.step = 'any';
+            input.maxLength = 512;
+            input.placeholder = 'Neuen Wert eingeben';
+          }
+          input.disabled = busy();
+          wrapper.append(input);
+          const submit = document.createElement('button');
+          submit.className = 'btn btn-sm btn-outline justify-self-start';
+          submit.type = 'button';
+          submit.textContent = 'Vorschau';
+          submit.disabled = busy();
+          submit.addEventListener('click', () => prepareCollectionField(collection, entry, field, input));
+          wrapper.append(submit);
+          collectionFields.append(wrapper);
+        }
+      }
+
       function render() {
         renderConfirmation();
+        renderCollectionConfirmation();
+        renderCollections();
         const focusedGalleryId = galleryPicker.contains(document.activeElement)
           ? document.activeElement.dataset.galleryId
           : '';
@@ -259,6 +438,16 @@
         const response = await fetch('/api/state', { cache: 'no-store' });
         if (!response.ok) throw new Error(`Status ${response.status}`);
         current = await response.json();
+        const collectionResponse = await fetch('/api/collections', { cache: 'no-store' });
+        if (!collectionResponse.ok) throw new Error(`Collections ${collectionResponse.status}`);
+        collectionState = await collectionResponse.json();
+        if (!collectionState.configured) collectionState.collections = [];
+        if (!selectedCollection()) {
+          selectedCollectionId = collectionState.collections?.[0]?.id || '';
+          selectedEntryId = selectedCollection()?.entries?.[0]?.id || '';
+        } else if (!selectedCollectionEntry()) {
+          selectedEntryId = selectedCollection()?.entries?.[0]?.id || '';
+        }
         if (!galleryById(selectedGalleryId)) selectedGalleryId = current.galleries[0]?.id || '';
         render();
         navigatePreview('fixture');
@@ -312,6 +501,95 @@
           if (error.status === 403 || error.status === 409) {
             try { await load(); } catch (loadError) { status(`Fixture konnte nicht neu geladen werden: ${loadError.message}`, 'error'); }
           }
+        } finally {
+          saving = false;
+          render();
+        }
+      }
+
+      async function prepareCollectionField(collection, entry, field, input) {
+        if (busy()) return;
+        let value;
+        if (field.type === 'boolean') {
+          if (!['true', 'false'].includes(input.value)) {
+            status('Bitte einen Boolean-Wert auswählen.', 'error');
+            return;
+          }
+          value = input.value === 'true';
+        } else if (field.type === 'enum') {
+          if (!field.values?.includes(input.value)) {
+            status('Bitte einen unterstützten Enum-Wert auswählen.', 'error');
+            return;
+          }
+          value = input.value;
+        } else if (field.type === 'number') {
+          if (input.value.trim() === '' || !Number.isFinite(input.valueAsNumber)) {
+            status('Bitte eine endliche Zahl eingeben.', 'error');
+            return;
+          }
+          value = input.valueAsNumber;
+        } else {
+          if (input.value.length > 512) return;
+          value = input.value;
+        }
+        const operation = { collectionId: collection.id, entryId: entry.id, field: field.name, value, hash: entry.hash };
+        saving = true;
+        render();
+        status(`Änderung für ${collection.name}/${entry.id} wird vorbereitet …`);
+        try {
+          const response = await postOperation('/api/collections/preview', operation);
+          const result = await response.json();
+          if (!response.ok) {
+            const error = new Error(result.error || `Status ${response.status}`);
+            error.status = response.status;
+            throw error;
+          }
+          if (!result.diff || !result.previewId) {
+            status('Der Wert ist unverändert; es wurde nichts geschrieben.', 'info');
+            return;
+          }
+          pendingCollectionPreview = { ...operation, previewId: result.previewId, diff: result.diff };
+          render();
+          status('Frontmatter-Diff prüfen. Erst nach Bestätigung wird geschrieben.', 'warning');
+        } catch (error) {
+          status(`Keine Collection-Vorschau erstellt: ${error.message}.`, 'error');
+          if (error.status === 403 || error.status === 409) {
+            try { await load(); } catch (loadError) { status(`Collections konnten nicht neu geladen werden: ${loadError.message}`, 'error'); }
+          }
+        } finally {
+          saving = false;
+          render();
+        }
+      }
+
+      async function confirmCollectionChange() {
+        if (saving || !pendingCollectionPreview) return;
+        const operation = pendingCollectionPreview;
+        saving = true;
+        render();
+        status('Bestätigte Frontmatter-Änderung wird atomar gespeichert …');
+        try {
+          const response = await postOperation('/api/collections/commit', {
+            previewId: operation.previewId,
+            collectionId: operation.collectionId,
+            entryId: operation.entryId,
+            field: operation.field,
+            value: operation.value,
+            hash: operation.hash,
+          });
+          const result = await response.json();
+          if (!response.ok) {
+            const error = new Error(result.error || `Status ${response.status}`);
+            error.status = response.status;
+            throw error;
+          }
+          pendingCollectionPreview = null;
+          await load();
+          status(`Gespeichert. Bei späteren Schemaänderungen Astro Content Sync bzw. Dev-Server-Neustart prüfen. (${result.collectionId}/${result.entryId})`, 'success');
+        } catch (error) {
+          pendingCollectionPreview = null;
+          status(`Nicht gespeichert: ${error.message}. Lade den aktuellen Stand …`, 'warning');
+          try { await load(); } catch (loadError) { status(`Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
         } finally {
           saving = false;
           render();
@@ -372,6 +650,14 @@
         pendingPreview = null;
         render();
         status('Änderung abgebrochen; die Datei blieb unverändert.', 'info');
+      });
+
+      confirmCollectionButton.addEventListener('click', confirmCollectionChange);
+      cancelCollectionButton.addEventListener('click', () => {
+        if (saving || !pendingCollectionPreview) return;
+        pendingCollectionPreview = null;
+        render();
+        status('Collection-Änderung abgebrochen; die Datei blieb unverändert.', 'info');
       });
 
       async function loadWithRetry() {

@@ -6,6 +6,8 @@ import path from 'node:path'
 import { createGalleryPatchAdapter, hashSource } from '../lib/gallery-patch.mjs'
 import { FIXTURE_IMAGE_SLUGS } from '../lib/demo-image-manifest.mjs'
 import { normalizeAstroBasePath } from './base-path.mjs'
+import { patchFrontmatterField } from './collection-discovery.mjs'
+import { createCollectionRuntime, publicCollectionState } from './collection-runtime.mjs'
 import { writeSourceAtomically } from './source-write.mjs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
@@ -142,6 +144,33 @@ function sameOperation(left, right) {
     JSON.stringify(left.order) === JSON.stringify(right.order)
 }
 
+function validCollectionEntryId(value) {
+  return typeof value === 'string' && value.length > 0 && value.length <= 512 &&
+    !path.isAbsolute(value) && !/^[A-Za-z]:/.test(value) &&
+    !value.startsWith('/') && !value.startsWith('\\') && !value.includes('\\') &&
+    value.split('/').every((part) => part && part !== '.' && part !== '..')
+}
+
+function validCollectionOperation(payload, includePreviewId = false) {
+  const keys = includePreviewId
+    ? ['previewId', 'collectionId', 'entryId', 'field', 'value', 'hash']
+    : ['collectionId', 'entryId', 'field', 'value', 'hash']
+  const allowedKeys = new Set(keys)
+  return payload !== null && typeof payload === 'object' && !Array.isArray(payload) &&
+    Object.keys(payload).length === allowedKeys.size && Object.keys(payload).every((key) => allowedKeys.has(key)) &&
+    typeof payload.collectionId === 'string' && /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(payload.collectionId) &&
+    validCollectionEntryId(payload.entryId) && typeof payload.field === 'string' &&
+    /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(payload.field) &&
+    (typeof payload.value === 'string' || typeof payload.value === 'number' && Number.isFinite(payload.value) || typeof payload.value === 'boolean') &&
+    typeof payload.hash === 'string' && /^[a-f0-9]{64}$/.test(payload.hash) &&
+    (!includePreviewId || typeof payload.previewId === 'string' && /^[a-f0-9]{64}$/.test(payload.previewId))
+}
+
+function sameCollectionOperation(left, right) {
+  return left.collectionId === right.collectionId && left.entryId === right.entryId &&
+    left.field === right.field && left.hash === right.hash && left.value === right.value
+}
+
 function previewId() {
   return randomBytes(32).toString('hex')
 }
@@ -152,6 +181,8 @@ export function createEditorServer({
   fixturePath = FIXTURE_PATH,
   basePath = normalizeAstroBasePath(process.env.ASTRO_BASE_PATH || '/'),
   writeSource = writeSourceAtomically,
+  projectRoot,
+  contentConfigPath,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
@@ -161,6 +192,31 @@ export function createEditorServer({
   const editorToken = randomBytes(32).toString('hex')
   const editorOrigin = () => `http://127.0.0.1:${server.address()?.port ?? port}`
   const pendingPreviews = new Map()
+  if ((projectRoot === undefined) !== (contentConfigPath === undefined)) {
+    throw new TypeError('Collection discovery requires both trusted projectRoot and contentConfigPath options.')
+  }
+  const collectionRuntime = projectRoot === undefined
+    ? null
+    : createCollectionRuntime({ projectRoot, contentConfigPath })
+
+  function prepareCollectionPatch(operation) {
+    const target = collectionRuntime.getEntryForEdit(operation.collectionId, operation.entryId, operation.field)
+    if (target.entry.hash !== operation.hash) {
+      const error = new Error('The entry changed since it was loaded; reload before preparing a preview.')
+      error.code = 'STALE_HASH'
+      throw error
+    }
+    const result = patchFrontmatterField(target.source, target.field, operation.value, operation.hash)
+    const latest = collectionRuntime.inspect()
+    const latestCollection = latest.collections.find((item) => item.id === operation.collectionId)
+    const latestField = latestCollection?.fields.find((item) => item.name === operation.field)
+    if (!latest.supported || latest._configHash !== target.configHash || latestCollection?.mode !== 'editable' || !latestField?.editable) {
+      const error = new Error('The content schema changed or is no longer supported; reload before editing.')
+      error.code = 'STALE_CONFIG'
+      throw error
+    }
+    return { target, result }
+  }
 
   function prunePreviews() {
     const now = Date.now()
@@ -228,6 +284,14 @@ export function createEditorServer({
       }
     }
 
+    if (request.method === 'GET' && request.url === '/api/collections') {
+      if (request.headers.origin && request.headers.origin !== editorOrigin()) {
+        return json(response, 403, { error: 'Only the editor origin is allowed.' })
+      }
+      if (!collectionRuntime) return json(response, 200, { configured: false })
+      return json(response, 200, publicCollectionState(collectionRuntime.inspect()))
+    }
+
     if (request.method === 'GET' && request.url?.startsWith('/api/preview-ready?')) {
       try {
         const url = new URL(request.url, editorOrigin())
@@ -240,6 +304,101 @@ export function createEditorServer({
         return json(response, result.statusCode, result.payload)
       } catch (error) {
         return json(response, 422, { code: error.code || 'UNSUPPORTED_FIXTURE', error: error.message })
+      }
+    }
+
+    if (request.method === 'POST' && (request.url === '/api/collections/preview' || request.url === '/api/collections/commit')) {
+      if (!validEditorPost(request)) {
+        return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      }
+      if (!collectionRuntime) return json(response, 404, { error: 'Collection editing is not configured.' })
+
+      try {
+        const payload = await readJson(request)
+        const isPreview = request.url === '/api/collections/preview'
+        if (isPreview) {
+          if (!validCollectionOperation(payload)) {
+            return json(response, 422, { code: 'INVALID_REQUEST', error: 'Only a collectionId, relative entryId, field, JSON scalar value, and content hash are accepted.' })
+          }
+          const { target, result } = prepareCollectionPatch(payload)
+          if (!result.diff) {
+            return json(response, 200, { diff: null, hash: result.hash, nextHash: result.hash, previewId: null })
+          }
+          // Confirm config and entry membership again before issuing the preview binding.
+          collectionRuntime.assertEntrySafe(target.path)
+          const latest = collectionRuntime.inspect()
+          if (latest._configHash !== target.configHash) {
+            const error = new Error('The content schema changed during preview preparation.')
+            error.code = 'STALE_CONFIG'
+            throw error
+          }
+          prunePreviews()
+          const id = previewId()
+          const operation = {
+            collectionId: payload.collectionId,
+            entryId: payload.entryId,
+            field: payload.field,
+            value: payload.value,
+            hash: payload.hash,
+          }
+          pendingPreviews.set(id, {
+            kind: 'collection-field',
+            operation,
+            diff: result.diff,
+            nextHash: result.hash,
+            configHash: target.configHash,
+            expiresAt: Date.now() + PREVIEW_TTL_MS,
+          })
+          return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, diff: result.diff })
+        }
+
+        if (!validCollectionOperation(payload, true)) {
+          return json(response, 422, { code: 'INVALID_REQUEST', error: 'A previewId and the unchanged collection edit operation are required.' })
+        }
+        prunePreviews()
+        const pending = pendingPreviews.get(payload.previewId)
+        if (!pending || pending.expiresAt <= Date.now() || pending.kind !== 'collection-field') {
+          pendingPreviews.delete(payload.previewId)
+          return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired; prepare the change again.' })
+        }
+        pendingPreviews.delete(payload.previewId)
+        if (!sameCollectionOperation(pending.operation, payload)) {
+          return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit does not match the confirmed preview.' })
+        }
+        const { target, result } = prepareCollectionPatch(payload)
+        if (target.configHash !== pending.configHash) {
+          return json(response, 409, { code: 'STALE_CONFIG', error: 'Content schema changed after preview; prepare the edit again.' })
+        }
+        if (!result.diff || result.hash !== pending.nextHash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) {
+          return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'The entry edit no longer matches the confirmed preview.' })
+        }
+        collectionRuntime.assertEntrySafe(target.path)
+        const beforeWriteState = collectionRuntime.inspect()
+        const beforeWriteCollection = beforeWriteState.collections.find((item) => item.id === payload.collectionId)
+        if (beforeWriteState._configHash !== pending.configHash || beforeWriteCollection?.mode !== 'editable' ||
+            !beforeWriteCollection.fields.some((field) => field.name === payload.field && field.editable) ||
+            !beforeWriteCollection.entries.some((entry) => entry.id === payload.entryId && entry.hash === payload.hash)) {
+          return json(response, 409, { code: 'STALE_CONFIG', error: 'Content config or entry membership changed immediately before write; prepare the edit again.' })
+        }
+        await writeSource(target.path, payload.hash, result.source)
+        return json(response, 200, {
+          collectionId: payload.collectionId,
+          entryId: payload.entryId,
+          field: payload.field,
+          hash: result.hash,
+        })
+      } catch (error) {
+        const safeCodes = new Set([
+          'STALE_HASH', 'STALE_CONFIG', 'UNSUPPORTED_COLLECTION', 'UNSUPPORTED_FIELD', 'UNSUPPORTED_ENTRY',
+          'UNSAFE_COLLECTION_PATH', 'ENTRY_LIMIT', 'UNSUPPORTED_FIELD_TYPE', 'INVALID_FIELD_VALUE',
+          'UNSUPPORTED_FRONTMATTER', 'PREVIEW_EXPIRED', 'PREVIEW_MISMATCH', 'INVALID_REQUEST',
+        ])
+        const code = safeCodes.has(error.code) ? error.code : 'COLLECTION_EDIT_FAILED'
+        const message = code === 'COLLECTION_EDIT_FAILED'
+          ? 'Collection edit could not be completed safely.'
+          : error.message
+        const statusCode = error.statusCode || (['STALE_HASH', 'STALE_CONFIG'].includes(code) ? 409 : code === 'COLLECTION_EDIT_FAILED' ? 500 : 422)
+        return json(response, statusCode, { error: message, code })
       }
     }
 

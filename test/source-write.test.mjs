@@ -68,6 +68,18 @@ test('happy path atomically writes exact bytes and leaves no temp files', async 
   await assertNoTempFiles(directory)
 })
 
+test('atomic replacement preserves restrictive source permission bits', async (t) => {
+  const original = 'synthetic private source\n'
+  const { directory, filePath } = await makeFixture(t, original)
+  await fs.chmod(filePath, 0o600)
+
+  await writeSourceAtomically(filePath, hash(original), 'replacement private source\n')
+
+  assert.equal((await fs.stat(filePath)).mode & 0o777, 0o600)
+  assert.equal(await fs.readFile(filePath, 'utf8'), 'replacement private source\n')
+  await assertNoTempFiles(directory)
+})
+
 test('residual race boundary: a change after the final hash check and before rename is overwritten', async (t) => {
   const original = 'synthetic fixture source\n'
   const external = `${original}// external synthetic edit in final race window\n`

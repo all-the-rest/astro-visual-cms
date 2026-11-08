@@ -53,3 +53,14 @@ The detailed comparison and command evidence are recorded in the Phase 0
   isolation. Preserve the current fixture as a regression test.
 - Do not claim production readiness until conflict handling, lifecycle/security
   boundaries, supported Astro versions, and production isolation are verified.
+
+## Phase 3 follow-on (2026-11-08)
+
+The development-only editor now has an opt-in, server-configured content-collection
+catalog and confirmed frontmatter-scalar edits for a narrowly supported static
+Astro subset. The default synthetic gallery workflow is unchanged when no trusted
+collection config is supplied. Collection creation and schema extension remain
+read-only; this follow-on does not expand the ADR into a general content writer or
+approve production use. The supported paths, patterns, validation boundary, and
+remaining race/security limitations are documented in
+[`gallery-editor.md`](../gallery-editor.md#phase-3-collection-editor-experimentell-nicht-produktionsreif).

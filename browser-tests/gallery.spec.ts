@@ -23,8 +23,13 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
 
   try {
     await expect.poll(async () => {
-      const response = await page.request.get('http://127.0.0.1:15321/browser-synthetic/fixture/')
-      return response.status()
+      try {
+        const response = await page.request.get('http://127.0.0.1:15321/browser-synthetic/fixture/')
+        return response.status()
+      } catch {
+        // Playwright's webServer waits for the editor port; Astro may still be starting.
+        return 0
+      }
     }).toBe(200)
     const editorResponse = await page.goto('/')
     expect(editorResponse?.status()).toBe(200)
