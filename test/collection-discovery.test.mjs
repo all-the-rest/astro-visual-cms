@@ -46,6 +46,40 @@ test('discovers static glob collections and a bounded literal Zod field subset w
   }
 })
 
+test('resolves immutable top-level defineCollection bindings and patches their schema safely', () => {
+  const source = `import { defineCollection as define } from 'astro:content';
+import { glob } from 'astro/loaders';
+import { z } from 'astro/zod';
+const shows = define({ loader: glob({ base: './src/content/shows', pattern: '**/*.md' }), schema: z.object({ title: z.string(), order: z.number() }) });
+const referenzen = define({ loader: glob({ base: './src/content/referenzen', pattern: '**/*.md' }), schema: z.object({ event: z.string(), year: z.number() }) });
+export const collections = { shows, referenzen };
+`
+  const result = discoverContentCollections(source)
+  assert.equal(result.supported, true)
+  assert.deepEqual(result.collections.map(({ name, supported, mode, fields }) => ({ name, supported, mode, fields: fields.map(({ name, type }) => ({ name, type })) })), [
+    { name: 'shows', supported: true, mode: 'static-fields-read-only', fields: [{ name: 'title', type: 'string' }, { name: 'order', type: 'number' }] },
+    { name: 'referenzen', supported: true, mode: 'static-fields-read-only', fields: [{ name: 'event', type: 'string' }, { name: 'year', type: 'number' }] },
+  ])
+
+  const expectedHash = createHash('sha256').update(source).digest('hex')
+  const plan = planCollectionFieldExtension(source, {
+    collection: 'referenzen', field: { name: 'land', type: 'string' }, expectedHash,
+  })
+  assert.match(plan.source, /const referenzen = define\([\s\S]*?land.*z\.string\(\)/)
+  assert.deepEqual(discoverContentCollections(plan.source).collections.find(({ name }) => name === 'referenzen').fields.map(({ name }) => name), ['event', 'year', 'land'])
+
+  for (const unsafe of [
+    source.replace('const referenzen =', 'let referenzen ='),
+    source.replace('const referenzen = define', 'export const referenzen = define'),
+    source.replace('export const collections', 'referenzen.schema = makeSchema();\nexport const collections'),
+    source.replace('export const collections = { shows, referenzen }', 'export const collections = { shows, referenzen, duplicate: referenzen }'),
+  ]) {
+    const unsupportedCollection = discoverContentCollections(unsafe).collections.find(({ name }) => name === 'referenzen')
+    assert.equal(unsupportedCollection.supported, false)
+    assert.equal(unsupportedCollection.mode, 'read-only')
+  }
+})
+
 test('reports dynamic glob/schema, refinements, spreads, and invalid config as read-only', () => {
   const source = `import { defineCollection } from 'astro:content'; import { glob } from 'astro/loaders'; import { z } from 'astro:content';
     const root = './content'; export const collections = {

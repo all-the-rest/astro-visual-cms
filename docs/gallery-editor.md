@@ -69,7 +69,7 @@ createEditorServer({
 })
 ```
 
-Ohne diese Serveroptionen bleibt die bisherige Galerie-Demo unverändert und `GET /api/collections` meldet `configured: false`. HTTP-Anfragen können weder Projekt-/Config-/Entry-Pfade noch Importidentitäten setzen. Die Config wird mit Babel analysiert, nie importiert oder ausgeführt. Unterstützt wird nur ein exportiertes statisches Literal-`collections`-Objekt mit direkt importiertem `defineCollection`, statischem `glob()`-Loader und direktem `z.object({...})`. Erkennung der kleinen Feldteilmenge ist Metadaten-Erkennung, **keine** Ausführung oder vollständige Zod-Validierung.
+Ohne diese Serveroptionen bleibt die bisherige Galerie-Demo unverändert und `GET /api/collections` meldet `configured: false`. HTTP-Anfragen können weder Projekt-/Config-/Entry-Pfade noch Importidentitäten setzen. Die Config wird mit Babel analysiert, nie importiert oder ausgeführt. Unterstützt wird nur ein exportiertes statisches Literal-`collections`-Objekt mit direkt importiertem `defineCollection`, statischem `glob()`-Loader und direktem `z.object({...})`. `defineCollection()` darf direkt im Objekt stehen oder über eine unveränderte, ausschließlich dort referenzierte top-level `const` gebunden sein. `z` wird aus `astro:content` oder `astro/zod` akzeptiert. Andere/referenziell mehrfach verwendete Bindings bleiben read-only. Erkennung der kleinen Feldteilmenge ist Metadaten-Erkennung, **keine** Ausführung oder vollständige Zod-Validierung.
 
 Die Serverintegration katalogisiert höchstens 250 passende Einträge je Collection, 64 Collections, 500 Einträge/16 MiB insgesamt und 20.000 gescannte Verzeichniseinträge pro Inspection. Sie gibt nur IDs relativ zur Collection-Base sowie SHA-256-Hashes aus, keine absoluten Pfade oder Quelltexte. Einträge sind ausschließlich `.md`/`.mdx`; aktuell bewiesene Pattern sind exakt `*.md`, `*.mdx`, `**/*.md` und `**/*.mdx`. Andere Globs/Loader bleiben mit sichtbarem Grund read-only. Config-Datei, Base-Verzeichnisse, alle geprüften Vorfahren und passende Dateien müssen reguläre, nicht-symlinkte Pfade strikt innerhalb des absoluten Projektroots sein. Symlinks, fehlende Roots, Traversal, nicht unterstützte Patterns und übergroße Dateien lassen die betroffene Config/Collection read-only. Config-/Entry-Quellen sind auf 1 MiB, JSON-Requests auf 8 KiB begrenzt.
 
@@ -163,3 +163,19 @@ without the supported Sätteri hook are refused at dev startup when an editable
 Markdown target is configured. This is one synthetic,
 version-pinned acceptance slice; external Astro/MDX consumer compatibility and
 production readiness remain unverified.
+
+### External static Markdown collection probe (2026-11-08)
+
+The real project `/projects/powerbros.at` is pinned to Astro 7.2.4 and declares
+two `glob()` Markdown collections through top-level `const` bindings, with `z`
+imported from `astro/zod`. A temporary content/config copy (not the project
+checkout) was discovered as two editable collections; the `referenzen` catalog
+contained 12 entries and its `event` field was editable. The API probe previewed
+one field without writing, confirmed a byte-exact single-scalar patch, then
+introduced a competing copied-file edit and observed HTTP 409 with those bytes
+preserved. The original entry SHA-256 stayed unchanged. This validates only the
+collection parser/API contract against that copied config and Markdown corpus;
+the Astro 7.2.4 build/HMR integration was not validated (isolated build attempts
+were blocked by pnpm metadata and symlinked-install compile metadata), and this
+project has no `@astrojs/mdx` dependency. It is not general external-project,
+MDX, navigation, or production-readiness evidence.

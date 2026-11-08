@@ -31,6 +31,52 @@ function objectKeyName(propertyNode) {
   return value === undefined ? undefined : String(value)
 }
 
+function topLevelBindings(program) {
+  const bindings = new Map()
+  for (const statement of program.body) {
+    const exported = statement.type === 'ExportNamedDeclaration'
+    const declaration = exported ? statement.declaration : statement
+    if (declaration?.type !== 'VariableDeclaration') continue
+    for (const item of declaration.declarations) {
+      if (item.id.type === 'Identifier') bindings.set(item.id.name, { kind: declaration.kind, init: item.init, exported })
+    }
+  }
+  return bindings
+}
+
+function identifierReferenceCount(root, name) {
+  let count = 0
+  const visit = (node, parent, key) => {
+    if (!node || typeof node !== 'object') return
+    if (node.type === 'Identifier' && node.name === name) {
+      const declaration = parent?.type === 'VariableDeclarator' && key === 'id'
+      const objectKey = parent?.type === 'ObjectProperty' && key === 'key' && !parent.computed
+      const importName = ['ImportSpecifier', 'ImportDefaultSpecifier', 'ImportNamespaceSpecifier'].includes(parent?.type) && key === 'local'
+      if (!declaration && !objectKey && !importName) count++
+    }
+    for (const [childKey, value] of Object.entries(node)) {
+      if (['loc', 'start', 'end', 'comments', 'tokens'].includes(childKey)) continue
+      if (Array.isArray(value)) value.forEach((child) => visit(child, node, childKey))
+      else if (value && typeof value === 'object') visit(value, node, childKey)
+    }
+  }
+  visit(root, null, null)
+  return count
+}
+
+function resolveCollectionCall(value, bindings, defineBindings, program) {
+  let call = value
+  if (value?.type === 'Identifier') {
+    const binding = bindings.get(value.name)
+    if (binding?.kind !== 'const' || binding.exported || identifierReferenceCount(program, value.name) !== 1) return undefined
+    call = binding.init
+  }
+  return call?.type === 'CallExpression' && call.arguments.length === 1 &&
+    call.callee.type === 'Identifier' && defineBindings.has(call.callee.name)
+    ? call
+    : undefined
+}
+
 function literalValue(node) {
   if (node?.type === 'StringLiteral' || node?.type === 'NumericLiteral' || node?.type === 'BooleanLiteral') return node.value
   if (node?.type === 'NullLiteral') return null
@@ -147,7 +193,7 @@ export function discoverContentCollections(source) {
   }
   const defineBindings = new Set([...imports].filter(([, item]) => item.imported === 'defineCollection' && item.from === 'astro:content').map(([name]) => name))
   const globBindings = new Set([...imports].filter(([, item]) => item.imported === 'glob' && ['astro/loaders', 'astro:content'].includes(item.from)).map(([name]) => name))
-  const zBindings = new Set([...imports].filter(([, item]) => item.imported === 'z' && item.from === 'astro:content').map(([name]) => name))
+  const zBindings = new Set([...imports].filter(([, item]) => item.imported === 'z' && ['astro:content', 'astro/zod'].includes(item.from)).map(([name]) => name))
   const declaration = ast.program.body.find((item) => item.type === 'ExportNamedDeclaration' &&
     item.declaration?.type === 'VariableDeclaration' && item.declaration.declarations.some((decl) => decl.id.name === 'collections'))
   const collectionsDeclaration = declaration?.declaration.declarations.find((decl) => decl.id.name === 'collections')
@@ -166,6 +212,7 @@ export function discoverContentCollections(source) {
   }
   findOtherReferences(ast.program)
   const collectionsNode = collectionsDeclaration?.init
+  const bindings = topLevelBindings(ast.program)
   if (declaration?.declaration.kind !== 'const' || declaration.declaration.declarations.length !== 1 || otherBindingReference ||
       collectionsNode?.type !== 'ObjectExpression' || hasDuplicateKeys(collectionsNode) ||
       collectionsNode.properties.some((item) => objectKeyName(item) === '__proto__')) {
@@ -174,9 +221,9 @@ export function discoverContentCollections(source) {
 
   const collections = collectionsNode.properties.map((entry) => {
     const name = objectKeyName(entry)
-    const call = entry.value
-    if (call?.type !== 'CallExpression' || call.arguments.length !== 1 || call.callee.type !== 'Identifier' || !defineBindings.has(call.callee.name)) {
-      return { name, ...unsupported('Collection is not a direct defineCollection() call.') }
+    const call = resolveCollectionCall(entry.value, bindings, defineBindings, ast.program)
+    if (!call) {
+      return { name, ...unsupported('Collection must be a direct defineCollection() call or an immutable, unreferenced const binding to one.') }
     }
     const config = call.arguments[0]
     if (config?.type !== 'ObjectExpression' || hasDuplicateKeys(config)) {
@@ -299,7 +346,8 @@ function planningContext(source, expectedHash) {
       imported.set(`${statement.source.value}:${specifier.imported?.name ?? 'default'}`, specifier.local.name)
     }
   }
-  return { discovered, collectionsNode, imported }
+  const defineBindings = new Set([...imported].filter(([key]) => key === 'astro:content:defineCollection').map(([, local]) => local))
+  return { discovered, collectionsNode, imported, bindings: topLevelBindings(ast.program), defineBindings, program: ast.program }
 }
 
 function insertAtObjectEnd(source, object, insertion) {
@@ -345,10 +393,11 @@ export function planCollectionFieldExtension(source, { collection, field, expect
     planFail('Target collection must be supported and the field must not already exist.')
   }
   const defineName = context.imported.get('astro:content:defineCollection')
-  const zName = context.imported.get('astro:content:z')
+  const zName = context.imported.get('astro:content:z') ?? context.imported.get('astro/zod:z')
   if (!defineName || !zName) planFail('Required Astro and Zod imports must be explicit imports.')
   const declaration = context.collectionsNode.properties.find((item) => objectKeyName(item) === collection)
-  const config = declaration?.value.arguments[0]
+  const call = resolveCollectionCall(declaration?.value, context.bindings, context.defineBindings, context.program)
+  const config = call?.arguments[0]
   const schema = property(config, 'schema')?.value
   const schemaObject = schema?.arguments[0]
   if (schemaObject?.type !== 'ObjectExpression') planFail('Target schema is not a supported literal object.')
@@ -372,7 +421,7 @@ export function planCollectionCreation(source, { name, base, pattern, fields, ex
   }
   const defineName = context.imported.get('astro:content:defineCollection')
   const globName = context.imported.get('astro/loaders:glob') ?? context.imported.get('astro:content:glob')
-  const zName = context.imported.get('astro:content:z')
+  const zName = context.imported.get('astro:content:z') ?? context.imported.get('astro/zod:z')
   if (!defineName || !globName || !zName) planFail('Required defineCollection, glob, and z imports must already exist.')
   const renderedFields = fields.map((field) => `    ${fieldExpression(field, zName)}`).join(',\n')
   const snippet = `${JSON.stringify(name)}: ${defineName}({ loader: ${globName}({ base: ${JSON.stringify(base)}, pattern: ${JSON.stringify(pattern)} }), schema: ${zName}.object({\n${renderedFields},\n  }) })`
