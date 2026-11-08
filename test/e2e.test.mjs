@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { readFile, writeFile } from 'node:fs/promises'
+import { appendFile, readFile, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import test from 'node:test'
 import sharp from 'sharp'
@@ -65,6 +65,9 @@ test('separate editor and Astro ports render multiple galleries and persist one 
     assert.match(editor, /<iframe[^>]+title="MDX-Fixture-Vorschau"/)
     assert.match(editor, /id="gallery-picker"/)
     assert.match(editor, new RegExp(`http://127\\.0\\.0\\.1:${SITE_PORT}`))
+    const editorToken = (await (await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/session`)).json()).token
+    assert.match(editorToken, /^[a-f0-9]{64}$/, 'The editor session endpoint must return its per-session token.')
+    assert.doesNotMatch(editor, new RegExp(editorToken), 'The token must not be embedded in editor HTML.')
     const stylesheet = await fetch(`http://127.0.0.1:${SITE_PORT}/src/styles/global.css?direct`)
     assert.equal(stylesheet.status, 200)
     assert.match(await stylesheet.text(), /\.btn/)
@@ -79,6 +82,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       headers: {
         origin: `http://localhost:${EDITOR_PORT}`,
         'content-type': 'application/json',
+        'x-editor-token': editorToken,
       },
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order }),
     })
@@ -88,6 +92,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       headers: {
         origin: `http://127.0.0.1:${EDITOR_PORT}`,
         'content-type': 'application/json',
+        'x-editor-token': editorToken,
       },
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order, filePath: '../../README.md' }),
     })
@@ -97,6 +102,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       headers: {
         origin: `http://127.0.0.1:${EDITOR_PORT}`,
         'content-type': 'application/json',
+        'x-editor-token': editorToken,
       },
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order }),
     })
@@ -131,12 +137,28 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       headers: {
         origin: `http://127.0.0.1:${EDITOR_PORT}`,
         'content-type': 'application/json',
+        'x-editor-token': editorToken,
       },
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order: selected.order }),
     })
     assert.equal(staleResponse.status, 409)
     assert.deepEqual(await readFile(FIXTURE_PATH), Buffer.from(patchedSource, 'utf8'),
       'A second write based on the old revision must not overwrite the first accepted write.')
+
+    const externalLine = '\n// synthetic external modification after accepted save\n'
+    await appendFile(FIXTURE_PATH, externalLine)
+    const externalConflict = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/reorder`, {
+      method: 'POST',
+      headers: {
+        origin: `http://127.0.0.1:${EDITOR_PORT}`,
+        'content-type': 'application/json',
+        'x-editor-token': editorToken,
+      },
+      body: JSON.stringify({ hash: saved.hash, galleryId: selected.id, order: selected.order }),
+    })
+    assert.equal(externalConflict.status, 409)
+    assert.deepEqual(await readFile(FIXTURE_PATH), Buffer.concat([Buffer.from(patchedSource), Buffer.from(externalLine)]),
+      'An external edit after the accepted save must survive a stale revision request.')
   } catch (error) {
     throw new Error(`${error.message}\nDev logs:\n${logs}`)
   } finally {

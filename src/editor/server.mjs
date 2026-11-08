@@ -1,9 +1,11 @@
 import { createServer } from 'node:http'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { createGalleryPatchAdapter } from '../lib/gallery-patch.mjs'
 import { FIXTURE_IMAGE_SLUGS } from '../lib/demo-image-manifest.mjs'
+import { writeSourceAtomically } from './source-write.mjs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURE_PATH = path.join(PROJECT_ROOT, 'src/pages/fixture.mdx')
@@ -40,8 +42,18 @@ function inspectDemoFixture(source) {
   return state
 }
 
-function isLoopbackAddress(address = '') {
-  return address === '127.0.0.1' || address === '::1' || address.startsWith('::ffff:127.')
+export function isLoopbackAddress(address = '') {
+  if (address === '127.0.0.1' || address === '::1') return true
+  const mappedIpv4 = address.match(/^::ffff:(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/i)
+  return Boolean(mappedIpv4 && Number(mappedIpv4[1]) === 127 && mappedIpv4.slice(1).every((octet) => Number(octet) <= 255))
+}
+
+function hasEditorToken(candidate, token) {
+  const expected = Buffer.from(token, 'utf8')
+  const supplied = Buffer.from(typeof candidate === 'string' ? candidate : '', 'utf8')
+  const comparable = Buffer.alloc(expected.length)
+  supplied.copy(comparable, 0, 0, expected.length)
+  return timingSafeEqual(expected, comparable) && supplied.length === expected.length
 }
 
 async function readJson(request) {
@@ -63,11 +75,11 @@ async function readJson(request) {
   }
 }
 
-async function waitForRenderedOrder({ hash, siteOrigin }) {
+async function waitForRenderedOrder({ hash, siteOrigin, fixturePath }) {
   const deadline = Date.now() + PREVIEW_SYNC_TIMEOUT_MS
 
   while (Date.now() < deadline) {
-    const source = readFileSync(FIXTURE_PATH, 'utf8')
+    const source = readFileSync(fixturePath, 'utf8')
     const state = inspectDemoFixture(source)
     if (state.hash !== hash) {
       return { statusCode: 409, payload: { code: 'STALE_HASH', error: 'Fixture changed while waiting for Astro preview.' } }
@@ -111,12 +123,17 @@ async function waitForRenderedOrder({ hash, siteOrigin }) {
   }
 }
 
-export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 4322), sitePort = Number(process.env.ASTRO_PORT || 4321) } = {}) {
+export function createEditorServer({
+  port = Number(process.env.EDITOR_PORT || 4322),
+  sitePort = Number(process.env.ASTRO_PORT || 4321),
+  fixturePath = FIXTURE_PATH,
+} = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
   }
   const siteOrigin = `http://127.0.0.1:${sitePort}`
-  const editorOrigin = `http://127.0.0.1:${port}`
+  const editorToken = randomBytes(32).toString('hex')
+  const editorOrigin = () => `http://127.0.0.1:${server.address()?.port ?? port}`
 
   const server = createServer(async (request, response) => {
     if (!isLoopbackAddress(request.socket.remoteAddress)) {
@@ -134,9 +151,13 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
       return response.end(html)
     }
 
+    if (request.method === 'GET' && request.url === '/api/session') {
+      return json(response, 200, { token: editorToken })
+    }
+
     if (request.method === 'GET' && request.url === '/api/state') {
       try {
-        const source = readFileSync(FIXTURE_PATH, 'utf8')
+        const source = readFileSync(fixturePath, 'utf8')
         return json(response, 200, inspectDemoFixture(source))
       } catch (error) {
         return json(response, 422, { error: error.message, code: error.code || 'UNSUPPORTED_FIXTURE' })
@@ -145,12 +166,12 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
 
     if (request.method === 'GET' && request.url?.startsWith('/api/preview-ready?')) {
       try {
-        const url = new URL(request.url, editorOrigin)
+        const url = new URL(request.url, editorOrigin())
         const hash = url.searchParams.get('hash')
         if (!hash || !/^[a-f0-9]{64}$/.test(hash)) {
           return json(response, 400, { code: 'INVALID_HASH', error: 'Expected a SHA-256 fixture hash.' })
         }
-        const result = await waitForRenderedOrder({ hash, siteOrigin })
+        const result = await waitForRenderedOrder({ hash, siteOrigin, fixturePath })
         return json(response, result.statusCode, result.payload)
       } catch (error) {
         return json(response, 422, { code: error.code || 'UNSUPPORTED_FIXTURE', error: error.message })
@@ -158,8 +179,9 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
     }
 
     if (request.method === 'POST' && request.url === '/api/reorder') {
-      if (request.headers.host !== `127.0.0.1:${port}` || request.headers.origin !== editorOrigin ||
-          request.headers['content-type'] !== 'application/json') {
+      if (request.headers.host !== `127.0.0.1:${server.address()?.port ?? port}` ||
+          request.headers.origin !== editorOrigin() || request.headers['content-type'] !== 'application/json' ||
+          !hasEditorToken(request.headers['x-editor-token'], editorToken)) {
         return json(response, 403, { error: 'Request origin or content type is not allowed.' })
       }
 
@@ -172,11 +194,11 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
             typeof payload.galleryId !== 'string' || !Array.isArray(payload.order) || typeof payload.hash !== 'string') {
           return json(response, 422, { code: 'INVALID_REQUEST', error: 'Only galleryId, order, and hash are accepted.' })
         }
-        const source = readFileSync(FIXTURE_PATH, 'utf8')
+        const source = readFileSync(fixturePath, 'utf8')
         inspectDemoFixture(source)
         const result = FIXTURE_ADAPTER.patch(source, payload.galleryId, payload.order, payload.hash)
         validateDemoImageSlugs(result.galleries)
-        writeFileSync(FIXTURE_PATH, result.source, 'utf8')
+        await writeSourceAtomically(fixturePath, payload.hash, result.source)
         return json(response, 200, { galleries: result.galleries, hash: result.hash })
       } catch (error) {
         const statusCode = error.statusCode || (error.code === 'STALE_HASH' ? 409 : 422)
@@ -193,6 +215,24 @@ export function createEditorServer({ port = Number(process.env.EDITOR_PORT || 43
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.EDITOR_PORT || 4322)
   const server = createEditorServer({ port })
+  server.on('error', (error) => {
+    if (error.code === 'EADDRINUSE') {
+      console.error(`Fixture editor could not start: port ${port} is already in use.`)
+    } else {
+      console.error(`Fixture editor failed to start: ${error.message}`)
+    }
+    process.exitCode = 1
+  })
+  const stop = () => {
+    server.close((error) => {
+      if (error) {
+        console.error(`Fixture editor failed to close cleanly: ${error.message}`)
+        process.exitCode = 1
+      }
+    })
+  }
+  process.once('SIGINT', stop)
+  process.once('SIGTERM', stop)
   server.listen(port, '127.0.0.1', () => {
     console.log(`Fixture editor: http://127.0.0.1:${port}`)
   })
