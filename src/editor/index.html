@@ -38,7 +38,7 @@
       <section id="collections-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Astro Content Collections</h2>
-          <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Collections und vorhandene skalare Schemafelder sind bearbeitbar. Collection-/Schema-Konfiguration bleibt read-only.</p>
+          <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Collections und vorhandene skalare Schemafelder sind bearbeitbar. Konfigurationsänderungen benötigen eine explizite Diff-Bestätigung.</p>
           <p id="collections-reason" class="alert alert-info" role="status" hidden></p>
           <div class="grid gap-5 md:grid-cols-3">
             <section>
@@ -54,6 +54,23 @@
               <div id="collection-fields" class="grid gap-3"></div>
             </section>
           </div>
+          <div id="config-editors" class="grid gap-5 md:grid-cols-2" hidden>
+            <form id="create-collection-form" class="grid gap-2" autocomplete="off">
+              <h3 class="font-semibold">Statische Collection anlegen</h3>
+              <label>Name<input class="input input-bordered" name="name" required maxlength="64"></label>
+              <label>Relativer Content-Basisordner<input class="input input-bordered" name="base" required placeholder="./src/content/notizen"></label>
+              <label>Statisches Markdown-Muster<select class="select select-bordered" name="pattern"><option value="*.md">*.md</option><option value="**/*.md">**/*.md</option></select></label>
+              <fieldset class="grid gap-2"><legend>Feld (mindestens eins)</legend><label>Name<input class="input input-bordered" name="fieldName" required maxlength="64"></label><label>Typ<select class="select select-bordered" name="fieldType"><option>string</option><option>number</option><option>boolean</option><option>enum</option></select></label><label>Enum-Werte (kommagetrennt)<input class="input input-bordered" name="enumValues"></label><label><input type="checkbox" name="required" checked> Erforderlich</label></fieldset>
+              <button class="btn" type="submit">Vorschau</button>
+            </form>
+            <form id="extend-field-form" class="grid gap-2" autocomplete="off">
+              <h3 class="font-semibold">Schemafeld ergänzen</h3><p>Nur für die ausgewählte unterstützte statische Collection.</p>
+              <label>Name<input class="input input-bordered" name="fieldName" required maxlength="64"></label><label>Typ<select class="select select-bordered" name="fieldType"><option>string</option><option>number</option><option>boolean</option><option>enum</option></select></label>
+              <label>Enum-Werte (kommagetrennt)<input class="input input-bordered" name="enumValues"></label><label><input type="checkbox" name="required"> Erforderlich</label>
+              <button class="btn" type="submit">Vorschau</button>
+            </form>
+          </div>
+          <section id="config-confirmation" class="grid gap-3" hidden><h3 class="font-semibold">Exakte Konfigurationsänderung bestätigen</h3><pre class="overflow-auto rounded-box bg-base-200 p-3"><code id="config-diff"></code></pre><button id="config-commit" class="btn btn-primary" type="button">Bestätigen und speichern</button><button id="config-cancel" class="btn" type="button">Abbrechen</button></section>
           <p class="text-xs opacity-70">Nach einer künftigen bestätigten Schema-/Collection-Konfigurationsänderung Content Sync bzw. einen Astro-Dev-Server-Neustart prüfen.</p>
         </div>
       </section>
@@ -159,6 +176,8 @@
       let saving = false;
       let pendingPreview = null;
       let pendingCollectionPreview = null;
+      let pendingConfigPreview = null;
+      let configOperation = null;
       let draggedSlug = null;
       let focusImageSlugAfterRender = '';
 
@@ -168,7 +187,7 @@
       }
 
       function busy() {
-        return saving || pendingPreview !== null || pendingCollectionPreview !== null || pendingMdxPreview !== null;
+         return saving || pendingPreview !== null || pendingCollectionPreview !== null || pendingConfigPreview !== null || pendingMdxPreview !== null;
       }
 
       function mdxFill(select, values, selected, label) {
@@ -239,6 +258,16 @@
         const configReason = collectionState.reason || collectionState.configEditing?.reason || '';
         collectionsReason.hidden = !configReason;
         collectionsReason.textContent = configReason;
+        const capabilities = collectionState.configEditing || {};
+        const editors = document.querySelector('#config-editors');
+        editors.hidden = !(capabilities.supported && (capabilities.creationSupported || capabilities.fieldExtensionSupported));
+        document.querySelector('#create-collection-form').hidden = !capabilities.creationSupported;
+        document.querySelector('#extend-field-form').hidden = !capabilities.fieldExtensionSupported || !selectedCollection()?.supported || selectedCollection()?.mode !== 'editable';
+        for (const button of editors.querySelectorAll('button')) button.disabled = busy();
+        document.querySelector('#config-confirmation').hidden = !pendingConfigPreview;
+        document.querySelector('#config-diff').textContent = pendingConfigPreview?.diff?.before + (pendingConfigPreview ? '\n→\n' + pendingConfigPreview.diff.after : '');
+        document.querySelector('#config-commit').disabled = saving || !pendingConfigPreview;
+        document.querySelector('#config-cancel').disabled = saving || !pendingConfigPreview;
         collectionPicker.replaceChildren();
         collectionEntryPicker.replaceChildren();
         collectionFields.replaceChildren();
@@ -338,6 +367,60 @@
           collectionFields.append(wrapper);
         }
       }
+
+      function configField(form) {
+        const name = form.elements.fieldName.value.trim();
+        const type = form.elements.fieldType.value;
+        const values = form.elements.enumValues.value.split(',').map((value) => value.trim()).filter(Boolean);
+        if (!name || (type === 'enum' && (!values.length || new Set(values).size !== values.length))) throw new Error('Feldname und gültige, eindeutige Enum-Werte sind erforderlich.');
+        return { name, type, required: form.elements.required.checked, ...(type === 'enum' ? { values } : {}) };
+      }
+      async function prepareConfig(endpoint, operation) {
+        if (busy() || !collectionState.configHash) return;
+        saving = true; render();
+        try {
+          const response = await postOperation(endpoint, operation); const result = await response.json();
+          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status });
+          if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau erhalten.');
+          configOperation = operation; pendingConfigPreview = { previewId: result.previewId, diff: result.diff }; render(); status('Quell-Diff prüfen; erst nach Bestätigung wird gespeichert.', 'warning');
+        } catch (error) { status(`Konfigurationsvorschau fehlgeschlagen: ${error.message}`, 'error'); if (error.status === 403 || error.status === 409) await load(); }
+        finally { saving = false; render(); }
+      }
+      document.querySelector('#create-collection-form').addEventListener('submit', (event) => {
+        event.preventDefault(); const form = event.currentTarget;
+        try { prepareConfig('/api/collections/config/create/preview', { name: form.elements.name.value.trim(), base: form.elements.base.value.trim(), pattern: form.elements.pattern.value, fields: [configField(form)], hash: collectionState.configHash }); }
+        catch (error) { status(error.message, 'error'); }
+      });
+      document.querySelector('#extend-field-form').addEventListener('submit', (event) => {
+        event.preventDefault(); try { prepareConfig('/api/collections/config/preview', { collection: selectedCollection()?.id, field: configField(event.currentTarget), hash: collectionState.configHash }); }
+        catch (error) { status(error.message, 'error'); }
+      });
+      document.querySelector('#config-commit').addEventListener('click', async () => {
+        if (saving || !pendingConfigPreview) return;
+        const create = Boolean(configOperation?.name);
+        const endpoint = create ? '/api/collections/config/create/commit' : '/api/collections/config/commit';
+        saving = true; render();
+        try {
+          const response = await postOperation(endpoint, { ...configOperation, previewId: pendingConfigPreview.previewId }); const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `Status ${response.status}`);
+          pendingConfigPreview = null; configOperation = null; await load(); status('Konfiguration gespeichert. Content Sync bzw. Astro-Neustart prüfen.', 'success');
+        } catch (error) { pendingConfigPreview = null; configOperation = null; status(`Konfiguration nicht gespeichert: ${error.message}`, 'error'); await load(); }
+        finally { saving = false; render(); }
+      });
+      document.querySelector('#config-cancel').addEventListener('click', async () => {
+        if (saving || !pendingConfigPreview) return;
+        saving = true; render();
+        try {
+          const endpoint = configOperation?.name ? '/api/collections/config/create/cancel' : '/api/collections/config/cancel';
+          const response = await postOperation(endpoint, { previewId: pendingConfigPreview.previewId });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || `Status ${response.status}`);
+          pendingConfigPreview = null; configOperation = null;
+          status('Konfigurationsänderung abgebrochen; nichts geschrieben.');
+        } catch (error) {
+          status(`Abbruch nicht bestätigt: ${error.message}. Die Vorschau bleibt offen; es wurde nichts geschrieben.`, 'warning');
+        } finally { saving = false; render(); }
+      });
 
       function render() {
         renderConfirmation();

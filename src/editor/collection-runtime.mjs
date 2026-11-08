@@ -396,6 +396,7 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
 
 export function publicCollectionState(state) {
   const { _configHash, _collectionBases, _collectionPatterns, ...publicState } = state
+  publicState.configHash = _configHash
   for (const collection of publicState.collections || []) {
     collection.entries = collection.entries.map(({ _path, ...entry }) => entry)
   }

@@ -71,11 +71,12 @@ remaining race/security limitations are documented in
 The API-only config endpoint supports one new static glob collection or one
 field on an existing supported schema. The config target remains server-trusted;
 preview binds the original config hash, exact diff, operation, and editor
-session; commit replans before using the atomic writer. No collection UI is
-connected. New collection bases must already exist as regular in-root directories;
-this operation does not create content directories or entries. This narrowly
-tested capability does not establish Astro/Zod compatibility or production
-readiness.
+session; commit replans before using the atomic writer. The local editor now
+offers capability-gated forms for one-field collection creation and one-field
+schema extension, with exact-diff confirmation and cancellation. New collection
+bases must already exist as regular in-root directories; this operation does
+not create content directories or entries. This narrowly tested capability does
+not establish Astro/Zod compatibility or production readiness.
 
 ## Phase 4 bounded adapter experiment (2026-11-08)
 
