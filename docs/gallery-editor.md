@@ -187,7 +187,15 @@ appear through the live route after Content Sync/HMR. Recorded probe output:
 removed; the external worktree remained clean and the tested entry retained
 SHA-256 `f0e5a8da81aa080121a3dcc64e7603ec56641ce10972c8c3477a5d1d79e1130b`.
 This establishes one external project's local-source integration, production
-isolation, and static Markdown file-change HMR slice—not a distributable package
-install, configured MDX target, editor-commit-to-HMR browser flow, MDX
-compatibility, ClientRouter/navigation behavior, broader external compatibility,
-or production readiness. The project has no `@astrojs/mdx` dependency.
+isolation, and static Markdown file-change HMR slice. A combined follow-up ran
+the external editor API and Astro dev server together after the copied project
+build: `EDITOR_PREVIEW_NO_WRITE=true`, `CONFIRMED_SOURCE_PATCH_EXACT=true`, and
+`EDITOR_COMMIT_TO_ASTRO_CONTENT_SYNC_HMR=true`. One no-build attempt against the
+copied pnpm dependency tree returned a ClientRouter "No cached compile metadata"
+500; rerunning after the copy's successful project build passed. This copy-only
+metadata behavior is not established for a normally installed project.
+
+These probes do not establish a distributable package install, a configured MDX
+target, browser iframe/editor interaction, MDX compatibility, ClientRouter/
+navigation behavior, broader external compatibility, or production readiness.
+The project has no `@astrojs/mdx` dependency.
