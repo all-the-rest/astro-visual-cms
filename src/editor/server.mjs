@@ -20,6 +20,7 @@ const MAX_BODY_BYTES = 8 * 1024
 const PREVIEW_SYNC_TIMEOUT_MS = 4_000
 const PREVIEW_POLL_INTERVAL_MS = 100
 const PREVIEW_TTL_MS = 5 * 60_000
+const EDITOR_SESSION_TTL_MS = 8 * 60 * 60_000
 const MAX_PENDING_PREVIEWS = 32
 const MAX_MDX_COMPONENT_TARGETS = 16
 const MAX_MDX_SOURCE_BYTES = 1024 * 1024
@@ -195,9 +196,10 @@ export function createEditorServer({
   }
   const siteOrigin = `http://127.0.0.1:${sitePort}`
   const safeBasePath = normalizeAstroBasePath(basePath)
-  const editorToken = randomBytes(32).toString('hex')
+  const editorSessions = new Map()
   const editorOrigin = () => `http://127.0.0.1:${server.address()?.port ?? port}`
   const pendingPreviews = new Map()
+  const pendingConfigPreviews = new Map()
   if ((projectRoot === undefined) !== (contentConfigPath === undefined)) {
     throw new TypeError('Collection discovery requires both trusted projectRoot and contentConfigPath options.')
   }
@@ -297,7 +299,7 @@ export function createEditorServer({
 
   function prunePreviews() {
     const now = Date.now()
-    for (const pendingMap of [pendingPreviews, pendingMdxPreviews]) {
+    for (const pendingMap of [pendingPreviews, pendingMdxPreviews, pendingConfigPreviews]) {
       for (const [id, pending] of pendingMap) {
         if (pending.expiresAt <= now) pendingMap.delete(id)
       }
@@ -308,9 +310,15 @@ export function createEditorServer({
   }
 
   function validEditorPost(request) {
+    const token = typeof request.headers['x-editor-token'] === 'string' ? request.headers['x-editor-token'] : ''
+    let activeSession = false
+    const now = Date.now()
+    for (const [sessionToken, expiresAt] of editorSessions) {
+      if (expiresAt <= now) editorSessions.delete(sessionToken)
+      else if (hasEditorToken(token, sessionToken)) activeSession = true
+    }
     return request.headers.host === `127.0.0.1:${server.address()?.port ?? port}` &&
-      request.headers.origin === editorOrigin() && request.headers['content-type'] === 'application/json' &&
-      hasEditorToken(request.headers['x-editor-token'], editorToken)
+      request.headers.origin === editorOrigin() && request.headers['content-type'] === 'application/json' && activeSession
   }
 
   const server = createServer(async (request, response) => {
@@ -351,7 +359,12 @@ export function createEditorServer({
     }
 
     if (request.method === 'GET' && request.url === '/api/session') {
-      return json(response, 200, { token: editorToken })
+      const now = Date.now()
+      for (const [token, expiresAt] of editorSessions) if (expiresAt <= now) editorSessions.delete(token)
+      while (editorSessions.size >= 64) editorSessions.delete(editorSessions.keys().next().value)
+      const token = randomBytes(32).toString('hex')
+      editorSessions.set(token, now + EDITOR_SESSION_TTL_MS)
+      return json(response, 200, { token })
     }
 
     if (request.method === 'GET' && request.url === '/api/state') {
@@ -369,6 +382,66 @@ export function createEditorServer({
       }
       if (!collectionRuntime) return json(response, 200, { configured: false })
       return json(response, 200, publicCollectionState(collectionRuntime.inspect()))
+    }
+
+    if (request.method === 'POST' && (request.url === '/api/collections/config/preview' || request.url === '/api/collections/config/commit' || request.url === '/api/collections/config/cancel')) {
+      if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      if (!collectionRuntime) return json(response, 404, { error: 'Collection editing is not configured.' })
+      try {
+        const payload = await readJson(request)
+        const route = request.url.split('/').at(-1)
+        const sessionToken = request.headers['x-editor-token']
+        if (route === 'cancel') {
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== 1 || !/^[a-f0-9]{64}$/.test(payload.previewId || '')) return json(response, 422, { code: 'INVALID_REQUEST', error: 'A previewId is required.' })
+          const pending = pendingConfigPreviews.get(payload.previewId)
+          if (pending && pending.sessionToken !== sessionToken) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
+          pendingConfigPreviews.delete(payload.previewId)
+          return json(response, 200, { cancelled: true })
+        }
+        const expected = route === 'preview' ? ['collection', 'field', 'hash'] : ['previewId', 'collection', 'field', 'hash']
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== expected.length || Object.keys(payload).some((key) => !expected.includes(key)) ||
+            typeof payload.collection !== 'string' || !/^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(payload.collection) ||
+            !payload.field || typeof payload.field !== 'object' || Array.isArray(payload.field) || Object.keys(payload.field).some((key) => !['name', 'type', 'required', 'values'].includes(key)) ||
+            typeof payload.field.name !== 'string' || !/^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(payload.field.name) || !['string', 'number', 'boolean', 'enum'].includes(payload.field.type) ||
+            (payload.field.required !== undefined && typeof payload.field.required !== 'boolean') || (payload.field.type === 'enum' && (!Array.isArray(payload.field.values) || payload.field.values.length < 1 || payload.field.values.length > 32 || !payload.field.values.every((v) => typeof v === 'string' && v.length > 0 && v.length <= 128) || new Set(payload.field.values).size !== payload.field.values.length)) ||
+            (payload.field.type !== 'enum' && payload.field.values !== undefined) || !/^[a-f0-9]{64}$/.test(payload.hash) || (route === 'commit' && !/^[a-f0-9]{64}$/.test(payload.previewId || ''))) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Invalid schema field extension operation.' })
+        const operation = { collection: payload.collection, field: payload.field, hash: payload.hash }
+        const normalizedOperation = {
+          ...operation,
+          field: { ...operation.field, optional: operation.field.required === false },
+        }
+        delete normalizedOperation.field.required
+        const prepare = () => collectionRuntime.planFieldExtension(normalizedOperation)
+        if (route === 'preview') {
+          const result = prepare()
+          prunePreviews()
+          const id = previewId()
+          pendingConfigPreviews.set(id, { operation, diff: result.diff, hash: result.hash, sessionToken, expiresAt: Date.now() + PREVIEW_TTL_MS })
+          return json(response, 200, { previewId: id, hash: operation.hash, nextHash: result.hash, diff: result.diff })
+        }
+        prunePreviews()
+        const pending = pendingConfigPreviews.get(payload.previewId)
+        if (!pending || pending.expiresAt <= Date.now()) return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired.' })
+        if (pending.sessionToken !== sessionToken) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
+        pendingConfigPreviews.delete(payload.previewId)
+        if (JSON.stringify(pending.operation) !== JSON.stringify(operation)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit differs from preview.' })
+        const result = prepare()
+        if (!result.diff || result.hash !== pending.hash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Config no longer matches preview.' })
+        const confirmed = collectionRuntime.planFieldExtension(normalizedOperation)
+        if (confirmed.hash !== pending.hash || JSON.stringify(confirmed.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Config changed immediately before write.' })
+        await writeSource(collectionRuntime.configPath, operation.hash, result.source)
+        return json(response, 200, { hash: result.hash })
+      } catch (error) {
+        const code = error.code === 'STALE_HASH' ? 'STALE_CONFIG' :
+          ['STALE_CONFIG', 'UNSUPPORTED_CONFIG', 'UNSUPPORTED_COLLECTION_EDIT'].includes(error.code) ? error.code : 'CONFIG_EDIT_FAILED'
+        const message = code === 'CONFIG_EDIT_FAILED'
+          ? 'Schema config edit could not be completed safely.'
+          : code === 'STALE_CONFIG'
+            ? 'Content config changed during the write; reload and prepare the edit again.'
+            : error.message
+        const statusCode = code === 'STALE_CONFIG' ? 409 : code === 'CONFIG_EDIT_FAILED' ? 500 : 422
+        return json(response, statusCode, { code, error: message })
+      }
     }
 
     if (request.method === 'GET' && request.url === '/api/mdx-components') {
@@ -425,13 +498,14 @@ export function createEditorServer({
           if (!result.diff) return json(response, 200, { previewId: null, diff: null, hash: result.hash })
           prunePreviews(); const id = previewId()
           const operation = { targetId: payload.targetId, instanceId: payload.instanceId, prop: payload.prop, value: payload.value, hash: payload.hash }
-          pendingMdxPreviews.set(id, { operation, diff: result.diff, nextHash: result.hash, expiresAt: Date.now() + PREVIEW_TTL_MS })
+          pendingMdxPreviews.set(id, { operation, diff: result.diff, nextHash: result.hash, sessionToken: request.headers['x-editor-token'], expiresAt: Date.now() + PREVIEW_TTL_MS })
           return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, diff: result.diff })
         }
         prunePreviews()
         const pending = pendingMdxPreviews.get(payload.previewId)
-        pendingMdxPreviews.delete(payload.previewId)
         if (!pending || pending.expiresAt <= Date.now()) return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired.' })
+        if (pending.sessionToken !== request.headers['x-editor-token']) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
+        pendingMdxPreviews.delete(payload.previewId)
         const operation = { targetId: payload.targetId, instanceId: payload.instanceId, prop: payload.prop, value: payload.value, hash: payload.hash }
         if (JSON.stringify(operation) !== JSON.stringify(pending.operation)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit differs from preview.' })
         const { result } = prepare()
@@ -500,6 +574,7 @@ export function createEditorServer({
             diff: result.diff,
             nextHash: result.hash,
             configHash: target.configHash,
+            sessionToken: request.headers['x-editor-token'],
             expiresAt: Date.now() + PREVIEW_TTL_MS,
           })
           return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, diff: result.diff })
@@ -514,6 +589,7 @@ export function createEditorServer({
           pendingPreviews.delete(payload.previewId)
           return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired; prepare the change again.' })
         }
+        if (pending.sessionToken !== request.headers['x-editor-token']) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
         pendingPreviews.delete(payload.previewId)
         if (!sameCollectionOperation(pending.operation, payload)) {
           return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit does not match the confirmed preview.' })
@@ -593,6 +669,7 @@ export function createEditorServer({
             operation,
             diff: result.diff,
             nextHash: result.hash,
+            sessionToken: request.headers['x-editor-token'],
             expiresAt: Date.now() + PREVIEW_TTL_MS,
           })
           return json(response, 200, {
@@ -613,6 +690,7 @@ export function createEditorServer({
           pendingPreviews.delete(payload.previewId)
           return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired; prepare the change again.' })
         }
+        if (pending.sessionToken !== request.headers['x-editor-token']) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
         pendingPreviews.delete(payload.previewId)
         if (!sameOperation(pending.operation, payload)) {
           return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit does not match the confirmed preview.' })

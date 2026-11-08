@@ -82,10 +82,87 @@ test('discovery endpoint exposes a bounded, path-free catalog and explicit unsup
   assert.equal(unsupported.mode, 'read-only')
   assert.match(unsupported.reason, /patterns are supported/)
   assert.deepEqual(unsupported.entries, [])
-  assert.equal(state.configEditing.mode, 'read-only')
-  assert.match(state.configEditing.reason, /not connected/)
+  assert.equal(state.configEditing.mode, 'schema-extension')
+  assert.equal(state.configEditing.supported, true)
   const wrongOrigin = await fetch(`${origin}/api/collections`, { headers: { origin: 'http://localhost:4322' } })
   assert.equal(wrongOrigin.status, 403)
+})
+
+test('schema extension config API previews exact patch and writes only after a matching confirmation', async (t) => {
+  const project = await makeProject(t)
+  let writes = 0
+  const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, writeSource: async (...args) => { writes += 1; const { writeSourceAtomically } = await import('../src/editor/source-write.mjs'); return writeSourceAtomically(...args) } })
+  const before = await readFile(project.configPath, 'utf8')
+  const hashValue = hash(before)
+  const operation = { collection: 'posts', field: { name: 'summary', type: 'string', required: false }, hash: hashValue }
+  const preview = await (await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  assert.equal(writes, 0)
+  assert.deepEqual(preview.diff.before, '')
+  assert.match(preview.diff.after, /summary/)
+  assert.match(preview.diff.after, /z\.string\(\)\.optional\(\)/, 'required=false must generate an optional field')
+  assert.equal(Object.hasOwn(preview, 'source'), false)
+  assert.equal(JSON.stringify(preview).includes(project.projectRoot), false)
+  assert.equal(await readFile(project.configPath, 'utf8'), before)
+  const duplicateEnum = await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, field: { name: 'status', type: 'enum', required: true, values: ['draft', 'draft'] } }) })
+  assert.equal(duplicateEnum.status, 422)
+  const secondToken = (await (await fetch(`${origin}/api/session`)).json()).token
+  assert.notEqual(secondToken, headers['x-editor-token'])
+  const foreignSessionCommit = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers: { ...headers, 'x-editor-token': secondToken }, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(foreignSessionCommit.status, 409)
+  assert.equal((await foreignSessionCommit.json()).code, 'PREVIEW_SESSION_MISMATCH')
+  assert.equal(writes, 0)
+  const invalid = await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, path: project.configPath }) })
+  assert.equal(invalid.status, 422)
+  const commit = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(commit.status, 200, JSON.stringify(await commit.json()))
+  assert.equal(writes, 1)
+  assert.match(await readFile(project.configPath, 'utf8'), /"summary": z\.string\(\)\.optional\(\)/)
+})
+
+test('schema config preview cancellation and stale config never invoke the writer', async (t) => {
+  const project = await makeProject(t)
+  let writes = 0
+  const { origin, headers } = await start(t, {
+    projectRoot: project.projectRoot,
+    contentConfigPath: project.configPath,
+    writeSource: async (...args) => { writes += 1; const { writeSourceAtomically } = await import('../src/editor/source-write.mjs'); return writeSourceAtomically(...args) },
+  })
+  const original = await readFile(project.configPath, 'utf8')
+  const operation = { collection: 'posts', field: { name: 'summary', type: 'string', required: true }, hash: hash(original) }
+  const cancelled = await (await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  const otherToken = (await (await fetch(`${origin}/api/session`)).json()).token
+  const foreignCancel = await fetch(`${origin}/api/collections/config/cancel`, { method: 'POST', headers: { ...headers, 'x-editor-token': otherToken }, body: JSON.stringify({ previewId: cancelled.previewId }) })
+  assert.equal(foreignCancel.status, 409)
+  await fetch(`${origin}/api/collections/config/cancel`, { method: 'POST', headers, body: JSON.stringify({ previewId: cancelled.previewId }) })
+  const cancelledCommit = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: cancelled.previewId }) })
+  assert.equal(cancelledCommit.status, 409)
+  assert.equal(writes, 0)
+
+  const stalePreview = await (await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  await writeFile(project.configPath, original.replace('collections = {', 'collections = {\n  // external change'))
+  const staleCommit = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: stalePreview.previewId }) })
+  assert.equal(staleCommit.status, 409)
+  assert.equal((await staleCommit.json()).code, 'STALE_CONFIG')
+  assert.equal(writes, 0)
+  assert.match(await readFile(project.configPath, 'utf8'), /external change/)
+})
+
+test('a stale atomic-writer result becomes a safe config conflict', async (t) => {
+  const project = await makeProject(t)
+  const { origin, headers } = await start(t, {
+    projectRoot: project.projectRoot,
+    contentConfigPath: project.configPath,
+    writeSource: async () => { const error = new Error('private path detail'); error.code = 'STALE_HASH'; throw error },
+  })
+  const source = await readFile(project.configPath, 'utf8')
+  const operation = { collection: 'posts', field: { name: 'summary', type: 'string', required: true }, hash: hash(source) }
+  const preview = await (await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  const response = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(response.status, 409)
+  const result = await response.json()
+  assert.equal(result.code, 'STALE_CONFIG')
+  assert.doesNotMatch(result.error, /private path detail/)
+  assert.equal(await readFile(project.configPath, 'utf8'), source)
 })
 
 test('collection field preview is exact and path-free; cancel/no-confirm never writes, confirmation writes one scalar', async (t) => {

@@ -6,7 +6,7 @@ import {
   realpathSync,
 } from 'node:fs'
 import path from 'node:path'
-import { discoverContentCollections } from './collection-discovery.mjs'
+import { discoverContentCollections, planCollectionFieldExtension } from './collection-discovery.mjs'
 
 export const MAX_COLLECTION_ENTRIES = 250
 const MAX_SCANNED_NODES = 10_000
@@ -176,12 +176,15 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
       throw safeFailure('UNSAFE_CONFIG_PATH', 'Configured content config file is unavailable.')
     }
     if (stats.size > MAX_ENTRY_BYTES) throw safeFailure('CONFIG_LIMIT', 'Content config exceeds the safe source-size limit.')
-    let source
+    let bytes
     try {
-      source = readFileSync(configFile, 'utf8')
+      bytes = readFileSync(configFile)
     } catch {
       throw safeFailure('UNSAFE_CONFIG_PATH', 'Configured content config file is unavailable.')
     }
+    if (bytes.length > MAX_ENTRY_BYTES) throw safeFailure('CONFIG_LIMIT', 'Content config exceeds the safe source-size limit.')
+    const source = bytes.toString('utf8')
+    if (!Buffer.from(source, 'utf8').equals(bytes)) throw safeFailure('UNSAFE_CONFIG_PATH', 'Configured content config is not valid UTF-8.')
     return { source, hash: sha256(source), discovery: discoverContentCollections(source) }
   }
 
@@ -278,9 +281,9 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
         ...(config.discovery.reason ? { reason: config.discovery.reason } : {}),
         collections,
         configEditing: {
-          supported: false,
-          mode: 'read-only',
-          reason: 'Collection creation and schema extension planners are not connected to the confirmed-write API in this prototype.',
+          supported: config.discovery.supported,
+          mode: config.discovery.supported ? 'schema-extension' : 'read-only',
+          reason: config.discovery.supported ? 'Only explicit schema field extension is available; collection creation remains read-only.' : 'Unsupported or dynamic config syntax remains read-only.',
         },
         _configHash: config.hash,
         _collectionBases: new Map(config.discovery.collections
@@ -354,9 +357,18 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
     }
   }
 
+  function planFieldExtension(operation) {
+    const config = readConfig()
+    if (config.hash !== operation.hash) throw safeFailure('STALE_CONFIG', 'Content config changed; prepare the edit again.')
+    if (!config.discovery.supported) throw safeFailure('UNSUPPORTED_CONFIG', 'Content config is outside the supported static subset.')
+    return planCollectionFieldExtension(config.source, { collection: operation.collection, field: operation.field, expectedHash: operation.hash })
+  }
+
   return {
     inspect,
     getEntryForEdit,
+    planFieldExtension,
+    configPath: configFile,
     assertEntrySafe(filePath) {
       assertSafePath(root, filePath, 'file')
     },
