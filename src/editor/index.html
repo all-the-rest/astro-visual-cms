@@ -162,17 +162,34 @@
       let current = { galleries: [], hash: '' };
       let collectionState = { configured: false, collections: [] };
       let mdxState = { configured: false, targets: [] };
+      let mdxSelectionReadOnly = false;
       let previewNonce = '';
+      let previewBridgeReady = false;
       preview.addEventListener('load', () => {
         previewNonce = Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+        previewBridgeReady = false;
+        preview.dataset.bridgeReady = 'false';
         preview.contentWindow?.postMessage({ type: 'avcms:challenge', nonce: previewNonce }, siteOrigin);
       });
       window.addEventListener('message', (event) => {
         const data = event.data;
         if (event.origin !== siteOrigin || event.source !== preview.contentWindow || !data || typeof data !== 'object' || Array.isArray(data)) return;
+        if (Object.keys(data).sort().join(',') === 'nonce,type' && data.type === 'avcms:ready' && data.nonce === previewNonce) {
+          previewBridgeReady = true;
+          preview.dataset.bridgeReady = 'true';
+          return;
+        }
+        if (!previewBridgeReady) return;
         if (Object.keys(data).sort().join(',') !== 'instanceId,nonce,targetId,type' || data.type !== 'avcms:selection' || data.nonce !== previewNonce || typeof data.targetId !== 'string' || data.targetId.length > 128 || typeof data.instanceId !== 'string' || data.instanceId.length > 128) return;
-        const target = mdxState.targets.find((item) => item.id === data.targetId && item.supported);
-        if (!target?.instances?.some((item) => item.id === data.instanceId)) return;
+        const target = mdxState.targets.find((item) => item.id === data.targetId);
+        if (!target) return;
+        if (!target.supported || !target.instances?.some((item) => item.id === data.instanceId)) {
+          mdxSelectionReadOnly = true;
+          renderMdx();
+          status(target.error || 'Diese gerenderte MDX-Ausgabe lässt sich keiner eindeutigen Quellinstanz zuordnen und bleibt schreibgeschützt.');
+          return;
+        }
+        mdxSelectionReadOnly = false;
         mdxTarget.value = target.id;
         renderMdx();
         mdxInstance.value = data.instanceId;
@@ -218,8 +235,8 @@
         mdxPanel.hidden = !mdxState.configured || !mdxState.targets?.length;
         if (mdxPanel.hidden) return;
         const target = mdxState.targets.find((item) => item.id === mdxTarget.value) || mdxState.targets[0];
-        mdxReason.hidden = !target?.error;
-        mdxReason.textContent = target?.error || '';
+        mdxReason.hidden = !target?.error && !mdxSelectionReadOnly;
+        mdxReason.textContent = target?.error || (mdxSelectionReadOnly ? 'Diese gerenderte MDX-Ausgabe ist nicht eindeutig einer Quellinstanz zugeordnet und bleibt schreibgeschützt.' : '');
         mdxFill(mdxTarget, mdxState.targets.map((item) => item.id), target?.id, 'MDX-Ziel');
         const supported = target?.supported ? target.instances || [] : [];
         const instance = supported.find((item) => item.id === mdxInstance.value) || supported[0];
@@ -227,7 +244,7 @@
         const props = Object.keys(instance?.props || {});
         mdxFill(mdxProp, props, mdxProp.value, 'Bearbeitbare MDX-Eigenschaft');
         if (instance && Object.hasOwn(instance.props, mdxProp.value)) mdxValue.value = instance.props[mdxProp.value];
-        for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue, document.querySelector('#mdx-preview-button')]) control.disabled = busy() || !supported.length;
+        for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue, document.querySelector('#mdx-preview-button')]) control.disabled = busy() || !supported.length || mdxSelectionReadOnly;
         mdxConfirmation.hidden = !pendingMdxPreview;
         document.querySelector('#mdx-confirm-button').disabled = saving || !pendingMdxPreview;
         document.querySelector('#mdx-cancel-button').disabled = saving || !pendingMdxPreview;
@@ -663,8 +680,9 @@
       document.querySelector('#mdx-preview-button').addEventListener('click', prepareMdxChange);
       document.querySelector('#mdx-confirm-button').addEventListener('click', commitMdxChange);
       document.querySelector('#mdx-cancel-button').addEventListener('click', () => { if (saving || !pendingMdxPreview) return; pendingMdxPreview = null; renderMdx(); status('MDX-Änderung abgebrochen; die Datei blieb unverändert.'); });
-      mdxTarget.addEventListener('change', renderMdx);
-      mdxInstance.addEventListener('change', renderMdx);
+      const resetMdxSelectionReadOnly = () => { mdxSelectionReadOnly = false; renderMdx(); };
+      mdxTarget.addEventListener('change', resetMdxSelectionReadOnly);
+      mdxInstance.addEventListener('change', resetMdxSelectionReadOnly);
       mdxProp.addEventListener('change', renderMdx);
 
       async function prepareOrder(galleryId, order) {

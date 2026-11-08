@@ -8,5 +8,6 @@ export default defineConfig({
     command: 'node scripts/readonly-browser-server.mjs', url: 'http://127.0.0.1:15332/',
     reuseExistingServer: false, timeout: 120_000, stdout: 'pipe', stderr: 'pipe',
     gracefulShutdown: { signal: 'SIGTERM', timeout: 15_000 },
+    env: { AVCMS_READONLY_MODE: 'duplicate' },
   },
 })

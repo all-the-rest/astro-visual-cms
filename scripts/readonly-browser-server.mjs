@@ -52,8 +52,18 @@ try {
   await symlink(path.join(repo, 'node_modules'), path.join(root, 'node_modules'), 'dir')
   await run(process.execPath, [path.join(root, 'scripts/generate-noise.mjs')], { cwd: root })
   const fixture = path.join(root, 'src/pages/fixture.mdx')
-  const original = await readFile(fixture, 'utf8')
-  await writeFile(fixture, original.replace('id="marker-two"', 'id="marker-one"'))
+  const mode = process.env.AVCMS_READONLY_MODE || 'duplicate'
+  if (!['duplicate', 'unmapped'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate or unmapped.')
+  if (mode === 'duplicate') {
+    const original = await readFile(fixture, 'utf8')
+    if (!original.includes('id="marker-two"')) throw new Error('Synthetic duplicate-ID fixture anchor was not found.')
+    await writeFile(fixture, original.replace('id="marker-two"', 'id="marker-one"'))
+  } else {
+    const component = path.join(root, 'src/components/EditorUnknownChip.astro')
+    const source = await readFile(component, 'utf8')
+    if (!source.includes('data-astro-visual-cms-instance={id}')) throw new Error('Synthetic component marker anchor was not found.')
+    await writeFile(component, source.replace('data-astro-visual-cms-instance={id}', 'data-astro-visual-cms-instance={id.toUpperCase()}'))
+  }
   const sitePort = 15331, editorPort = 15332
   const astro = spawn(process.execPath, [path.join(root, 'node_modules/astro/bin/astro.mjs'), 'dev', '--host', '127.0.0.1', '--port', String(sitePort), '--strictPort'], { cwd: root, stdio: 'inherit', env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', ASTRO_DEV_BACKGROUND: '1', EDITOR_PORT: String(editorPort) } })
   children.push(astro)

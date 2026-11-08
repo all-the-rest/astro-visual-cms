@@ -15,6 +15,7 @@ test('in-context selection accepts only a marked supported instance from the cur
       }
     })
     await page.goto('/')
+    await expect(page.locator('#preview')).toHaveAttribute('data-bridge-ready', 'true')
     await expect(page.locator('#mdx-instance')).toHaveValue('unknown-chip')
     await expect(page.locator('#mdx-target')).toHaveValue('fixture')
     await expect(page.locator('#mdx-prop')).toContainText('label')

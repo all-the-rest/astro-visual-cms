@@ -121,3 +121,12 @@ Astro iframe. The test restores the exact fixture bytes in `finally`. This
 demonstrates selection plus editing only for that explicitly configured
 synthetic component instance—not general DOM provenance, real-project
 compatibility, or production readiness. Unsupported cases remain read-only.
+
+### Synthetic transformed-output read-only gate (2026-11-08)
+
+An additional copied-project browser gate transforms only the synthetic
+component's emitted identity marker while leaving its MDX source catalog
+supported. A click whose rendered marker no longer matches a catalog instance
+is explicitly reported as read-only and disables MDX edit controls; no preview
+or commit is sent. This verifies one fail-closed mismatch case, not arbitrary
+component transforms or general provenance.

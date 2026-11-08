@@ -4,7 +4,9 @@ import { resolve } from 'node:path'
 
 test('ambiguous duplicate IDs fail closed in a copied real Astro project', async ({ page, request }) => {
   const sourceFixture = resolve('src/pages/fixture.mdx')
+  const sourceComponent = resolve('src/components/EditorUnknownChip.astro')
   const original = await readFile(sourceFixture)
+  const originalComponent = await readFile(sourceComponent)
   const writes: string[] = []
   page.on('request', (req) => { if (req.method() === 'POST' && /\/api\/mdx-components\/(preview|commit)$/.test(req.url())) writes.push(req.url()) })
   const catalogResponse = await request.get('/api/mdx-components')
@@ -16,6 +18,7 @@ test('ambiguous duplicate IDs fail closed in a copied real Astro project', async
   expect(JSON.stringify(catalog)).not.toContain('/avcms-readonly-')
 
   await page.goto('/')
+  await expect(page.locator('#preview')).toHaveAttribute('data-bridge-ready', 'true')
   await expect(page.locator('#mdx-reason')).toBeVisible()
   await expect(page.locator('#mdx-reason')).toContainText(/duplicate|ambiguous|identit/i)
   await expect(page.locator('#mdx-instance')).toBeDisabled()
@@ -29,4 +32,5 @@ test('ambiguous duplicate IDs fail closed in a copied real Astro project', async
   await expect(page.locator('#mdx-value')).toBeDisabled()
   await expect.poll(() => writes).toEqual([])
   expect(await readFile(sourceFixture)).toEqual(original)
+  expect(await readFile(sourceComponent)).toEqual(originalComponent)
 })

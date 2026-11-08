@@ -46,6 +46,7 @@ test('loopback integration only changes Astro dev configuration, never build or 
   assert.equal(injected.length, 1)
   assert.equal(injected[0][0], 'page')
   assert.match(injected[0][1], /127\.0\.0\.1:4322/)
+  assert.match(injected[0][1], /avcms:ready/)
 
   const customPort = []
   createLoopbackDevIntegration({ editorPort: '15432' }).hooks['astro:config:setup']({

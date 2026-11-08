@@ -36,3 +36,6 @@ jobs:
 
       - name: Run isolated-copy read-only browser test
         run: pnpm run browser-tests:readonly
+
+      - name: Run isolated-copy unmapped-output browser test
+        run: pnpm run browser-tests:unmapped

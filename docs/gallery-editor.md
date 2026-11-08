@@ -109,6 +109,13 @@ linked, no install/network). It introduces duplicate static IDs in that copy and
 checks this exact duplicate-ID case fails closed in Astro 7.4.7. It does not
 establish general output provenance, compatibility, or production readiness.
 
+`pnpm run browser-tests:unmapped` uses a separate copy and changes only the
+synthetic component's rendered marker identity (`id.toUpperCase()`), leaving
+the source catalog valid. Clicking that transformed output must show an explicit
+read-only explanation, disable the MDX editing controls, and issue no preview or
+commit request. This proves fail-closed behavior for this one marker mismatch;
+it does not derive or establish general DOM-to-source provenance.
+
 The Phase 5 in-context selection proof is opt-in at the rendered-node level: a
 trusted component may render `data-astro-visual-cms-target` and
 `data-astro-visual-cms-instance` only when it can preserve the exact configured
