@@ -106,12 +106,14 @@ claim. JavaScript shadowing and every MDX binding ambiguity are not resolved.
 The Phase 5 in-context selection proof is opt-in at the rendered-node level: a
 trusted component may render `data-astro-visual-cms-target` and
 `data-astro-visual-cms-instance` only when it can preserve the exact configured
-source target identity. In the current synthetic example the marker IDs are
-literal. The dev-only Astro bridge and editor accept selection messages only
-from the exact preview frame/origin with a per-load nonce, then resolve both IDs
-against the already loaded supported MDX catalog. Selection only focuses the
-existing controls; saving still requires the regular preview and explicit
-confirmation. No marker means no selection. This is not general DOM-to-source
-provenance, does not support computed/repeated/ambiguous output, and does not
-make the development-only MDX adapter automatically available from the standalone
-server; trusted targets must still be configured by the embedding application.
+source target identity. The browser proof configures exactly one synthetic
+`EditorUnknownChip` target in its test harness; that component emits marker IDs
+from literal MDX `id` props. The dev-only Astro bridge and editor accept
+selection messages only from the exact preview frame/origin with a per-load
+nonce, then resolve both IDs against the actual server-loaded supported MDX
+catalog. The test exercises the real preview/commit API, verifies the exact
+source delta and confirms the saved value appears in the Astro iframe. Normal
+standalone startup still configures no MDX targets; embedding applications must
+provide trusted targets server-side. No marker means no selection. This is not
+general DOM-to-source provenance and does not support computed, repeated or
+ambiguous output, real-project compatibility, or production readiness.

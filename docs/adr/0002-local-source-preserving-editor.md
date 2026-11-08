@@ -109,3 +109,15 @@ unknown, stale, or unsupported instances remain unselectable. This is not genera
 DOM provenance and depends on a trusted author preserving marker identity; the
 standalone editor still has no automatically configured MDX targets. The proof
 does not establish production readiness.
+
+### Synthetic end-to-end selection and edit (2026-11-08)
+
+The browser harness opts into one hard-coded synthetic target: `EditorUnknownChip`
+instances in `src/pages/fixture.mdx`. The trusted Astro component emits explicit
+DOM identity markers from its static `id` prop; the browser cannot configure
+target paths. The proof loads the real catalog, selects an instance, previews
+and commits one literal `label` string, and observes the changed value in the
+Astro iframe. The test restores the exact fixture bytes in `finally`. This
+demonstrates selection plus editing only for that explicitly configured
+synthetic component instance—not general DOM provenance, real-project
+compatibility, or production readiness. Unsupported cases remain read-only.

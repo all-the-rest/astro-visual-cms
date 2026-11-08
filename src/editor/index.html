@@ -649,9 +649,11 @@
       }
       async function commitMdxChange() {
         if (saving || !pendingMdxPreview) return;
-        const op = pendingMdxPreview; saving = true; renderMdx();
+        const { previewId, targetId, instanceId, prop, value, hash } = pendingMdxPreview;
+        const operation = { previewId, targetId, instanceId, prop, value, hash };
+        saving = true; renderMdx();
         try {
-          const response = await postOperation('/api/mdx-components/commit', op);
+          const response = await postOperation('/api/mdx-components/commit', operation);
           const result = await response.json();
           if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
           pendingMdxPreview = null; await load(); status('MDX-Änderung gespeichert.', 'success');

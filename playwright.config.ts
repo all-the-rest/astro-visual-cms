@@ -22,6 +22,7 @@ export default defineConfig({
       ASTRO_PORT: '15321',
       EDITOR_PORT: '15322',
       ASTRO_BASE_PATH: '/browser-synthetic/',
+      AVCMS_BROWSER_SYNTHETIC: '1',
     },
     reuseExistingServer: false,
     timeout: 120_000,

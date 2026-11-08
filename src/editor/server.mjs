@@ -777,7 +777,11 @@ export function createEditorServer({
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.EDITOR_PORT || 4322)
-  const server = createEditorServer({ port })
+  const syntheticTargets = process.env.AVCMS_BROWSER_SYNTHETIC === '1' ? [{
+    id: 'fixture', projectRoot: PROJECT_ROOT, filePath: path.join(PROJECT_ROOT, 'src/pages/fixture.mdx'),
+    importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'],
+  }] : undefined
+  const server = createEditorServer({ port, ...(syntheticTargets ? { mdxComponentTargets: syntheticTargets } : {}) })
   server.on('error', (error) => {
     if (error.code === 'EADDRINUSE') {
       console.error(`Fixture editor could not start: port ${port} is already in use.`)

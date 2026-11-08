@@ -1,7 +1,7 @@
 ---
-const { label } = Astro.props
+const { label, id } = Astro.props
 ---
 
-<aside class="alert mb-6" aria-label="Unbekannte CMS-Komponente">
+<aside class="alert mb-6" aria-label="Unbekannte CMS-Komponente" data-astro-visual-cms-target="fixture" data-astro-visual-cms-instance={id}>
   <span><strong>Unbekannte Komponente:</strong> {label}</span>
 </aside>
