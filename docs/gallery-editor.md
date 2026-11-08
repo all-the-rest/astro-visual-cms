@@ -103,6 +103,12 @@ read-only. Writer lifecycle limitations described above still apply; do not use
 this with real content or treat it as production-ready, and make no readiness
 claim. JavaScript shadowing and every MDX binding ambiguity are not resolved.
 
+`pnpm run browser-tests:readonly` separately runs a browser acceptance check in
+a temporary copy of this tracked Astro project (with repo-local dependencies
+linked, no install/network). It introduces duplicate static IDs in that copy and
+checks this exact duplicate-ID case fails closed in Astro 7.4.7. It does not
+establish general output provenance, compatibility, or production readiness.
+
 The Phase 5 in-context selection proof is opt-in at the rendered-node level: a
 trusted component may render `data-astro-visual-cms-target` and
 `data-astro-visual-cms-instance` only when it can preserve the exact configured

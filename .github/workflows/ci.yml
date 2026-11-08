@@ -33,3 +33,6 @@ jobs:
 
       - name: Run browser tests
         run: pnpm run browser-tests
+
+      - name: Run isolated-copy read-only browser test
+        run: pnpm run browser-tests:readonly
