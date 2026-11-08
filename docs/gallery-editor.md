@@ -168,14 +168,19 @@ production readiness remain unverified.
 
 The real project `/projects/powerbros.at` is pinned to Astro 7.2.4 and declares
 two `glob()` Markdown collections through top-level `const` bindings, with `z`
-imported from `astro/zod`. A temporary content/config copy (not the project
-checkout) was discovered as two editable collections; the `referenzen` catalog
-contained 12 entries and its `event` field was editable. The API probe previewed
-one field without writing, confirmed a byte-exact single-scalar patch, then
-introduced a competing copied-file edit and observed HTTP 409 with those bytes
-preserved. The original entry SHA-256 stayed unchanged. This validates only the
-collection parser/API contract against that copied config and Markdown corpus;
-the Astro 7.2.4 build/HMR integration was not validated (isolated build attempts
-were blocked by pnpm metadata and symlinked-install compile metadata), and this
-project has no `@astrojs/mdx` dependency. It is not general external-project,
-MDX, navigation, or production-readiness evidence.
+imported from `astro/zod`. On a temporary content/config copy (not the project
+checkout), discovery found two editable collections; `referenzen` had 12
+entries and its `event` field was editable. The API probe previewed one field
+without writing, confirmed a byte-exact single-scalar patch, then introduced a
+competing copied-file edit and observed HTTP 409 with those bytes preserved. The
+original entry SHA-256 stayed unchanged.
+
+A separate full temporary project copy retained the installed dependency graph.
+Its `pnpm run build` completed successfully, including `astro check`; `astro dev`
+served `/referenzen/`, and editing the copied Markdown entry caused the updated
+value to appear through Astro's live route after Content Sync/HMR. Both copies
+were removed after the probes. This establishes one external, static Markdown
+project build and file-change HMR slice—not installation/configuration of the CMS
+Astro integration in that project, full editor-to-Astro HMR, MDX compatibility,
+ClientRouter/navigation behavior, broader external compatibility, or production
+readiness. The project has no `@astrojs/mdx` dependency.
