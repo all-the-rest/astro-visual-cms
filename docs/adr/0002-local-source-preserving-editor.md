@@ -64,3 +64,11 @@ read-only; this follow-on does not expand the ADR into a general content writer 
 approve production use. The supported paths, patterns, validation boundary, and
 remaining race/security limitations are documented in
 [`gallery-editor.md`](../gallery-editor.md#phase-3-collection-editor-experimentell-nicht-produktionsreif).
+
+## Phase 4 bounded adapter experiment (2026-11-08)
+
+A pure adapter now demonstrates literal string-prop edits on imported MDX
+components using a trusted module specifier and an explicit prop allow-list.
+It is not connected to the HTTP API or UI, does not write files, and is not
+production-ready. See [`gallery-editor.md`](../gallery-editor.md#phase-4-adapter-experiment-not-production-ready)
+for the deliberately narrow syntax and unresolved identity-analysis limits.

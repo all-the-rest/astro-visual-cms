@@ -76,3 +76,19 @@ Die Serverintegration katalogisiert höchstens 250 passende Einträge je Collect
 Im UI können vorhandene Top-Level-Frontmatter-Skalare bearbeitet werden, wenn das direkt erkannte Schema `string`, endliche `number`, `boolean` oder ein statisches String-`enum` vorgibt. `date`, Arrays und unsichere Feldnamen bleiben read-only. Der Server verlangt Collection-ID, relative Entry-ID, Feld, JSON-Skalar und erwarteten Content-Hash; er löst den Eintrag selbst erneut unter der konfigurierten Base auf, prüft Glob-Mitgliedschaft und analysiert Config und YAML erneut. Preview zeigt nur den exakten Skalarbereich. Es wird ausschließlich nach expliziter Bestätigung mit derselben Session, Preview-ID und Operation geschrieben. Stale Hashes liefern 409. Preview, Cancel und abgelehnte Operationen schreiben nicht. Same-origin/Host-Prüfungen, Session-Token, JSON-Schema-/Größenlimits und die CSP gelten auch für diese Endpunkte.
 
 `planCollectionCreation(...)` und `planCollectionFieldExtension(...)` bleiben Diff-Planer, keine Writer. Collection-Erstellung und Schema-Erweiterung sind in dieser Phase ausdrücklich read-only; es gibt dafür keine Commit-Route. Nach einer künftigen bestätigten Schema-/Collection-Konfigurationsänderung muss der Nutzer Astros Content Sync bzw. Dev-Server-Neustart prüfen. Beim Commit wird die Config direkt vor dem Entry-Writer erneut gehasht und die Entry-Mitgliedschaft nochmals geprüft; zwischen dieser Prüfung und Rename bleibt eine lokale TOCTOU-Race möglich. Der Writer erhält die vorhandenen POSIX-Rechte des Entry-Files, aber keine sonstigen Metadaten. Er ist kein prozessübergreifendes Compare-and-Swap. Die Astro-Versionen, vollständige Zod-/Astro-Validierung, umfassendere Globs, symlink-freie TOCTOU-Garantien und ein sicherer Mehrprozessbetrieb sind nicht abgedeckt. Dies ist ein lokaler Prototyp und **keine** Produktionsfreigabe.
+# Phase 4 adapter experiment (not production-ready)
+
+`src/lib/mdx-props-patch.mjs` provides an isolated, source-preserving adapter for
+configured imported MDX components. Its trusted configuration binds one default
+import module specifier (the local JSX binding is taken from that import), static
+`id` identity prop, and explicit
+editable prop allow-list. Only existing, JSON-compatible quoted string props can
+be patched; dynamic values, spreads, duplicate identities, unknown props, and
+unsupported imports are read-only. The adapter replaces only the literal range.
+It does not evaluate MDX or configuration and accepts no filesystem path.
+
+This is currently a pure adapter experiment: it is not wired to the editor HTTP
+API or UI, and therefore does not yet provide preview/confirmation/write flow.
+Do not use it on real content or treat it as production-ready. It does not claim
+to resolve JavaScript shadowing or every MDX binding ambiguity; keep usage limited
+to synthetic fixtures until those cases and the server lifecycle are addressed.
