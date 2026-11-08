@@ -152,3 +152,16 @@ selected title changes; its MDX body, another field, config, route, and all
 tracked files stay byte-identical. This remains evidence for one synthetic
 fixture and the pinned Astro version, not an external project or production
 readiness claim.
+
+### Isolated Astro Markdown paragraph mapping slice (2026-11-08)
+
+The Markdown-copy browser gate adds one synthetic target and route only inside a
+temporary copy. Astro's dev-only integration appends a Sätteri MDAST visitor for
+the exact configured MDX path; it marks the paragraph only when source parsing
+proves one plain-text node and an exact, unique range. The editor resolves the
+preview-frame selection against its server-side catalog and reuses the guarded
+MDX preview/confirm/atomic-write path. The gate verifies the rendered marker,
+selection, no write before confirmation, exact copied-source delta, Astro
+rerender, and fail-closed behavior when another paragraph makes the target
+ambiguous. Formatting, component transforms, other processor configurations,
+external consumer compatibility, and production readiness remain unresolved.

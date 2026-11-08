@@ -10,6 +10,7 @@ import { patchFrontmatterField } from './collection-discovery.mjs'
 import { createCollectionRuntime, publicCollectionState } from './collection-runtime.mjs'
 import { writeSourceAtomically } from './source-write.mjs'
 import { createMdxPropsAdapter } from '../lib/mdx-props-patch.mjs'
+import { createMarkdownParagraphAdapter } from '../lib/markdown-paragraph-map.mjs'
 import { lstatSync, realpathSync } from 'node:fs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
@@ -190,6 +191,7 @@ export function createEditorServer({
   projectRoot,
   contentConfigPath,
   mdxComponentTargets,
+  mdxParagraphTargets,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
@@ -207,7 +209,7 @@ export function createEditorServer({
     ? null
     : createCollectionRuntime({ projectRoot, contentConfigPath })
 
-  const mdxTargets = mdxComponentTargets === undefined ? [] : (() => {
+  const componentTargets = mdxComponentTargets === undefined ? [] : (() => {
     if (!Array.isArray(mdxComponentTargets) || mdxComponentTargets.length > MAX_MDX_COMPONENT_TARGETS) {
       throw new TypeError(`mdxComponentTargets must contain at most ${MAX_MDX_COMPONENT_TARGETS} trusted targets.`)
     }
@@ -228,6 +230,31 @@ export function createEditorServer({
     if (new Set(targets.map((target) => target.id)).size !== targets.length) throw new TypeError('MDX target ids must be unique.')
     return targets
   })()
+  const paragraphTargets = mdxParagraphTargets === undefined ? [] : (() => {
+    if (!Array.isArray(mdxParagraphTargets) || mdxParagraphTargets.length > MAX_MDX_COMPONENT_TARGETS) {
+      throw new TypeError(`mdxParagraphTargets must contain at most ${MAX_MDX_COMPONENT_TARGETS} trusted targets.`)
+    }
+    return mdxParagraphTargets.map((target, index) => {
+      const keys = ['id', 'projectRoot', 'filePath', 'instanceId']
+      if (!target || typeof target !== 'object' || Object.keys(target).some((key) => !keys.includes(key)) ||
+          keys.some((key) => !Object.hasOwn(target, key)) ||
+          typeof target.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(target.id) ||
+          typeof target.projectRoot !== 'string' || !path.isAbsolute(target.projectRoot) ||
+          typeof target.filePath !== 'string' || !path.isAbsolute(target.filePath) ||
+          typeof target.instanceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.instanceId)) {
+        throw new TypeError(`Invalid trusted Markdown paragraph target at index ${index}.`)
+      }
+      const root = path.resolve(target.projectRoot), file = path.resolve(target.filePath)
+      if (realpathSync(root) !== root || !lstatSync(root).isDirectory() || !file.startsWith(`${root}${path.sep}`)) {
+        throw new TypeError('Markdown paragraph target must be inside a canonical project root.')
+      }
+      const adapter = createMarkdownParagraphAdapter({ instanceId: target.instanceId })
+      assertMdxTargetSafe(root, file)
+      return { id: target.id, root, file, adapter, kind: 'markdown-paragraph' }
+    })
+  })()
+  const mdxTargets = [...componentTargets, ...paragraphTargets]
+  if (new Set(mdxTargets.map((target) => target.id)).size !== mdxTargets.length) throw new TypeError('MDX target ids must be unique.')
   const pendingMdxPreviews = new Map()
 
   function assertMdxTargetSafe(root, file) {
@@ -506,10 +533,10 @@ export function createEditorServer({
             error.code = 'MDX_INSTANCE_LIMIT'
             throw error
           }
-          targets.push({ id: target.id, instances: state.instances, hash: state.hash, supported: true })
+          targets.push({ id: target.id, kind: target.kind || 'component-prop', instances: state.instances, hash: state.hash, supported: true })
         } catch (error) {
           const failure = safeMdxFailure(error)
-          targets.push({ id: target.id, supported: false, error: failure.error })
+          targets.push({ id: target.id, kind: target.kind || 'component-prop', supported: false, error: failure.error })
         }
       }
       return json(response, 200, { configured: mdxTargets.length > 0, targets })

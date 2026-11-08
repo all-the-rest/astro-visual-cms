@@ -45,3 +45,6 @@ jobs:
 
       - name: Run isolated-copy MDX collection browser test
         run: pnpm run browser-tests:collection-copy
+
+      - name: Run isolated-copy Markdown selection browser test
+        run: pnpm run browser-tests:markdown-copy

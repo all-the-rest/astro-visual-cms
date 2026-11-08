@@ -111,7 +111,7 @@
         </div>
       </section>
       <section id="mdx-components-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
-        <div class="card-body"><h2 class="card-title">MDX-Komponenten</h2>
+        <div class="card-body"><h2 id="mdx-panel-title" class="card-title">MDX-Bearbeitung</h2>
           <p id="mdx-reason" class="alert alert-info" role="status" hidden></p>
           <label>Ziel<select id="mdx-target" class="select select-bordered"></select></label>
           <label>Instanz<select id="mdx-instance" class="select select-bordered"></select></label>
@@ -235,6 +235,7 @@
         mdxPanel.hidden = !mdxState.configured || !mdxState.targets?.length;
         if (mdxPanel.hidden) return;
         const target = mdxState.targets.find((item) => item.id === mdxTarget.value) || mdxState.targets[0];
+        document.querySelector('#mdx-panel-title').textContent = target?.kind === 'markdown-paragraph' ? 'Markdown-Absatz' : 'MDX-Komponenten';
         mdxReason.hidden = !target?.error && !mdxSelectionReadOnly;
         mdxReason.textContent = target?.error || (mdxSelectionReadOnly ? 'Diese gerenderte MDX-Ausgabe ist nicht eindeutig einer Quellinstanz zugeordnet und bleibt schreibgeschützt.' : '');
         mdxFill(mdxTarget, mdxState.targets.map((item) => item.id), target?.id, 'MDX-Ziel');

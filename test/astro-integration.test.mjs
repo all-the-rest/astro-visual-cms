@@ -53,6 +53,27 @@ test('loopback integration only changes Astro dev configuration, never build or 
     command: 'dev', updateConfig() {}, injectScript: (...values) => customPort.push(values),
   })
   assert.match(customPort[0][1], /127\.0\.0\.1:15432/)
+
+  const markdownIntegration = createLoopbackDevIntegration({
+    markdownParagraphTargets: [{ id: 'note', instanceId: 'paragraph-one', filePath: path.join(ROOT, 'src/pages/fixture.mdx') }],
+  })
+  const mdastPlugins = []
+  const configured = { markdown: { processor: { name: 'satteri', options: { mdastPlugins } } } }
+  const markdownInjected = []
+  markdownIntegration.hooks['astro:config:setup']({ command: 'dev', config: configured, updateConfig() {}, injectScript: (...values) => markdownInjected.push(values) })
+  assert.equal(mdastPlugins.length, 1)
+  assert.equal(typeof mdastPlugins[0], 'function')
+  assert.equal(markdownInjected.length, 1)
+  const productionPlugins = []
+  markdownIntegration.hooks['astro:config:setup']({
+    command: 'build', config: { markdown: { processor: { name: 'satteri', options: { mdastPlugins: productionPlugins } } } },
+    updateConfig() {}, injectScript: (...values) => markdownInjected.push(values),
+  })
+  assert.deepEqual(productionPlugins, [])
+  assert.equal(markdownInjected.length, 1)
+  assert.throws(() => markdownIntegration.hooks['astro:config:setup']({
+    command: 'dev', config: { markdown: { processor: { name: 'other', options: {} } } }, updateConfig() {}, injectScript() {},
+  }), /cannot be mapped by the active Astro processor/)
 })
 
 function availablePort() {

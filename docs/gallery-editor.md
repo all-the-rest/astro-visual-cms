@@ -150,3 +150,16 @@ standalone startup still configures no MDX targets; embedding applications must
 provide trusted targets server-side. No marker means no selection. This is not
 general DOM-to-source provenance and does not support computed, repeated or
 ambiguous output, real-project compatibility, or production readiness.
+
+`pnpm run browser-tests:markdown-copy` adds one explicitly configured plain-text
+paragraph to an isolated Astro 7.4.7 copy. Its marker is emitted by the pinned
+Sätteri MDX `mdastPlugins` pipeline only in `dev`, for the exact configured MDX
+file, after parsing verifies a single paragraph with an exact source range. The
+test selects it through the nonce-bound preview bridge, previews and confirms a
+single text-range patch, checks Astro's rerender, and verifies a second paragraph
+removes the marker and is rejected by the edit API without a write. Formatting,
+links, JSX, expressions, multiline text, multiple nodes, and processor setups
+without the supported Sätteri hook are refused at dev startup when an editable
+Markdown target is configured. This is one synthetic,
+version-pinned acceptance slice; external Astro/MDX consumer compatibility and
+production readiness remain unverified.

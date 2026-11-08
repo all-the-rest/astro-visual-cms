@@ -11,13 +11,16 @@ const run = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
   const child = spawn(cmd, args, { cwd: repo, stdio: 'inherit', ...opts })
   child.once('error', reject); child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`${cmd} exited ${code}`)))
 })
-const files = (await new Promise((resolve, reject) => {
+const files = new Set((await new Promise((resolve, reject) => {
   const child = spawn('git', ['ls-files', '-z'], { cwd: repo }); let out = ''
   child.stdout.on('data', (chunk) => out += chunk); child.once('error', reject); child.once('exit', (code) => code ? reject(new Error('git ls-files failed')) : resolve(out))
-})).split('\0').filter(Boolean)
+})).split('\0').filter(Boolean))
+// This harness must also copy a newly added dev-only bridge dependency before its first commit.
+files.add('src/lib/markdown-paragraph-map.mjs')
 const root = await mkdtemp(path.join(tmpdir(), 'avcms-readonly-'))
 const receipt = path.join(repo, 'test-results', 'readonly-copy-path')
 const collectionReceipt = path.join(repo, 'test-results', 'readonly-collection-copy-path')
+const markdownReceipt = path.join(repo, 'test-results', 'readonly-markdown-copy-path')
 const children = []
 let editor
 let astroStarted = false
@@ -41,12 +44,13 @@ function cleanup() {
       await Promise.all(childExits)
       clearTimeout(forceKill)
       if (astroStarted) {
-        await run(process.execPath, [path.join(root, 'node_modules/astro/bin/astro.mjs'), 'dev', 'stop'], { cwd: root })
+        await run(process.execPath, [path.join(root, 'node_modules/astro/bin/astro.mjs'), 'dev', 'stop'], { cwd: root }).catch(() => {})
         astroStarted = false
       }
-      await rm(root, { recursive: true, force: true })
+      if (process.env.AVCMS_PRESERVE_FAILED_COPY !== '1') await rm(root, { recursive: true, force: true })
       await rm(receipt, { force: true })
       await rm(collectionReceipt, { force: true })
+      await rm(markdownReceipt, { force: true })
     })()
   }
   return cleanupPromise
@@ -62,7 +66,7 @@ try {
   await run(process.execPath, [path.join(root, 'scripts/generate-noise.mjs')], { cwd: root })
   const fixture = path.join(root, 'src/pages/fixture.mdx')
   const mode = process.env.AVCMS_READONLY_MODE || 'duplicate'
-  if (!['duplicate', 'unmapped', 'gallery', 'collection'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate, unmapped, gallery, or collection.')
+  if (!['duplicate', 'unmapped', 'gallery', 'collection', 'markdown'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate, unmapped, gallery, collection, or markdown.')
   if (mode === 'duplicate') {
     const original = await readFile(fixture, 'utf8')
     if (!original.includes('id="marker-two"')) throw new Error('Synthetic duplicate-ID fixture anchor was not found.')
@@ -79,7 +83,7 @@ try {
     if (!original.includes(importAnchor) || !original.includes(galleryAnchor)) throw new Error('Synthetic gallery fixture anchors were not found.')
     await writeFile(path.join(root, 'src/components/NestedUnknown.astro'), '<div data-nested-unknown><slot /></div>\n')
     await writeFile(fixture, original.replace(importAnchor, `${importAnchor}\nimport NestedUnknown from '../components/NestedUnknown.astro';`).replace(galleryAnchor, '<NestedUnknown><Gallery sorted={HIGHLIGHTS} /></NestedUnknown>'))
-  } else {
+  } else if (mode === 'collection') {
     const contentRoot = path.join(root, 'src/content/acceptance-notes')
     const contentFile = path.join(contentRoot, 'entry.mdx')
     const configFile = path.join(root, 'src/content.config.ts')
@@ -90,24 +94,31 @@ try {
     await writeFile(pageFile, `---\nimport { getCollection, render } from 'astro:content';\nconst [entry] = await getCollection('notes');\nif (!entry) throw new Error('Synthetic MDX collection entry was not loaded.');\nconst { Content } = await render(entry);\n---\n<html><body><h1 data-entry-title>{entry.data.title}</h1><p data-entry-rank={String(entry.data.rank)}>{entry.data.rank}</p><Content /></body></html>\n`)
     await mkdir(path.dirname(collectionReceipt), { recursive: true })
     await writeFile(collectionReceipt, JSON.stringify({ contentFile, configFile, pageFile }))
+  } else {
+    const markdownFile = path.join(root, 'src/pages/markdown-proof.mdx')
+    await writeFile(markdownFile, 'Synthetic mapped Markdown paragraph.\n')
+    const astroConfig = path.join(root, 'astro.config.mjs')
+    const configSource = await readFile(astroConfig, 'utf8')
+    const integrationCall = 'createLoopbackDevIntegration()'
+    const configuredIntegration = `createLoopbackDevIntegration({ markdownParagraphTargets: [{ id: 'markdown-note', instanceId: 'paragraph-one', filePath: path.join(PROJECT_ROOT, 'src/pages/markdown-proof.mdx') }] })`
+    if (!configSource.includes(integrationCall)) throw new Error('Synthetic Astro integration anchor was not found for the Markdown copy gate.')
+    await writeFile(astroConfig, configSource.replace(integrationCall, configuredIntegration))
+    await mkdir(path.dirname(markdownReceipt), { recursive: true })
+    await writeFile(markdownReceipt, markdownFile)
   }
   await mkdir(path.dirname(receipt), { recursive: true }); await writeFile(receipt, fixture)
   const sitePort = 15331, editorPort = 15332
   const astroBin = path.join(root, 'node_modules/astro/bin/astro.mjs')
-  try {
-    await run(process.execPath, [astroBin, 'dev', '--background', '--host', '127.0.0.1', '--port', String(sitePort)], {
-      cwd: root,
-      env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', EDITOR_PORT: String(editorPort) },
-    })
-    astroStarted = true
-  } catch (error) {
-    try { await run(process.execPath, [astroBin, 'dev', 'stop'], { cwd: root }) } catch {}
-    throw error
-  }
+  await run(process.execPath, [astroBin, 'dev', '--background', '--host', '127.0.0.1', '--port', String(sitePort)], {
+    cwd: root,
+    env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', EDITOR_PORT: String(editorPort) },
+  })
+  astroStarted = true
   editor = createEditorServer({
     port: editorPort, sitePort, fixturePath: fixture, basePath: '/browser-synthetic/',
     ...(mode === 'collection' ? { projectRoot: root, contentConfigPath: 'src/content.config.ts' } : {}),
-    ...(mode === 'collection' ? {} : { mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] }),
+    ...(mode === 'markdown' ? { mdxParagraphTargets: [{ id: 'markdown-note', instanceId: 'paragraph-one', projectRoot: root, filePath: path.join(root, 'src/pages/markdown-proof.mdx') }] } : {}),
+    ...(['collection', 'markdown'].includes(mode) ? {} : { mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] }),
   })
   const deadline = Date.now() + 110_000
   while (Date.now() < deadline) {
