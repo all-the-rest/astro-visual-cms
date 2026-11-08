@@ -35,15 +35,17 @@ function assertProductionEditorIsolation() {
   visit(distRoot)
 
   const routeFiles = files.map((file) => path.relative(distRoot, file).replaceAll(path.sep, '/'))
-    .filter((file) => /(?:^|\/)(?:api\/(?:reorder|state|preview-ready)|editor)(?:[/.]|$)/.test(file))
+    .filter((file) => /(?:^|\/)(?:api\/(?:commit|preview|preview-ready|reorder|session|state)|editor)(?:[/.]|$)/.test(file))
   assert.deepEqual(routeFiles, [], 'The production Astro output must not contain editor/API routes.')
 
   for (const file of files.filter((item) => /\.(?:html|js|mjs|css)$/.test(item))) {
     const output = readFileSync(file, 'utf8')
-    assert.doesNotMatch(output, /\/api\/(?:reorder|state|preview-ready)(?:[/?#"'`]|$)/,
+    assert.doesNotMatch(output, /\/api\/(?:commit|preview|preview-ready|reorder|session|state)(?:[/?#"'`]|$)/,
       `Production output must not expose an editor endpoint (${path.relative(ROOT, file)}).`)
     assert.doesNotMatch(output, /id="gallery-picker"/,
       `Production output must not include the local editor UI (${path.relative(ROOT, file)}).`)
+    assert.doesNotMatch(output, /id="diff-confirmation"|Vorschaugröße|preview-navigation/,
+      `Production output must not include editor confirmation or preview controls (${path.relative(ROOT, file)}).`)
   }
 }
 

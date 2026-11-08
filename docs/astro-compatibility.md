@@ -37,3 +37,5 @@ auf `@mdx-js/mdx` und `@babel/parser`. Für 7.3.8 und 7.2.10 wurde ausschließli
 der Fixture-Build mit den oben genannten HTML- und Bildreferenz-Prüfungen
 ausgeführt. Vorschau-Readiness sowie der Editor-HTTP-Ablauf wurden nur gegen den
 Repo-Pin 7.4.7 durch `pnpm verify` geprüft.
+
+Die Loopback-Integration wird im `astro:config:setup` ausschließlich für `command === 'dev'` aktiviert und fügt keine Routen oder Client-Bundles hinzu. Ihre Build-/Preview-Inaktivität wird durch Lifecycle-Tests und die Produktionsisolation in `scripts/verify-build.mjs` geprüft. Ein isoliertes synthetisches Dev-Projekt prüft außerdem einen echten Routenaufruf unter `base: '/isolated-preview'`. Diese Base-Pfad-Prüfung ist ein Integrationstest auf dem Repo-Pin und keine zusätzliche Version-Kompatibilitätszusage.

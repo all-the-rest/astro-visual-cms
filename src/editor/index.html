@@ -4,14 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>MDX-Galerien bearbeiten</title>
-    <link rel="stylesheet" href="__SITE_ORIGIN__/src/styles/global.css?direct" />
+    <link rel="stylesheet" href="__SITE_ORIGIN____SITE_BASE_PATH__src/styles/global.css?direct" />
   </head>
   <body class="min-h-screen bg-base-200 text-base-content">
     <main class="mx-auto grid max-w-7xl gap-6 p-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
       <section class="card bg-base-100 shadow-sm">
         <div class="card-body">
           <h1 class="card-title">MDX-Galerien</h1>
-          <p class="text-sm">Wähle eine Galerie, ziehe Einträge zum Sortieren oder nutze die ↑/↓-Buttons als Tastatur-Alternative. Gespeichert wird nur das zugehörige Literal-Array der festen Demo-Fixture.</p>
+          <p class="text-sm">Wähle eine Galerie, ziehe Einträge zum Sortieren oder nutze die ↑/↓-Buttons als Tastatur-Alternative. Vor dem Speichern zeigt der Editor exakt den geänderten Arraybereich.</p>
           <div id="status" class="alert alert-info" role="status">Fixture wird geladen …</div>
           <div id="gallery-picker" class="flex flex-wrap gap-2" role="group" aria-label="Galerie auswählen"></div>
           <ul id="images" class="list" aria-label="Galerie-Reihenfolge"></ul>
@@ -21,39 +21,102 @@
       <section class="card min-h-[70vh] bg-base-100 shadow-sm">
         <div class="card-body min-h-[70vh]">
           <h2 class="card-title">Gerenderte Astro-Seite</h2>
-          <iframe id="preview" class="min-h-[60vh] w-full flex-1 rounded-box border border-base-300" title="MDX-Fixture-Vorschau"></iframe>
+          <nav id="preview-navigation" class="flex flex-wrap gap-2" aria-label="Vorschau-Route">
+            <button class="btn btn-sm" type="button" data-preview-route="home" aria-pressed="false">Startseite</button>
+            <button class="btn btn-sm" type="button" data-preview-route="fixture" aria-pressed="true">Fixture</button>
+          </nav>
+          <div id="preview-presets" class="flex flex-wrap gap-2" role="group" aria-label="Vorschaugröße">
+            <button class="btn btn-sm" type="button" data-preview-preset="desktop" data-width="1280" data-height="800" aria-pressed="true">Desktop</button>
+            <button class="btn btn-sm" type="button" data-preview-preset="tablet" data-width="768" data-height="1024" aria-pressed="false">Tablet</button>
+            <button class="btn btn-sm" type="button" data-preview-preset="mobile" data-width="390" data-height="844" aria-pressed="false">Mobil</button>
+          </div>
+          <div class="max-w-full overflow-auto rounded-box border border-base-300">
+            <iframe id="preview" class="rounded-box" width="1280" height="800" title="MDX-Fixture-Vorschau"></iframe>
+          </div>
+        </div>
+      </section>
+      <section id="diff-confirmation" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+        <div class="card-body">
+          <h2 class="card-title">Quelländerung bestätigen</h2>
+          <p class="text-sm">Nur dieser exakte Arraybereich wird geändert. Die Datei wird erst nach deiner Bestätigung geschrieben.</p>
+          <p id="diff-range" class="font-mono text-xs"></p>
+          <div class="grid gap-4 md:grid-cols-2">
+            <div>
+              <h3 class="font-semibold">Vorher</h3>
+              <pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="diff-before"></code></pre>
+            </div>
+            <div>
+              <h3 class="font-semibold">Nachher</h3>
+              <pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="diff-after"></code></pre>
+            </div>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <button id="confirm-change" class="btn btn-primary" type="button">Änderung bestätigen und speichern</button>
+            <button id="cancel-change" class="btn" type="button">Abbrechen</button>
+          </div>
         </div>
       </section>
     </main>
-    <script>
+    <script nonce="__CSP_NONCE__">
       const siteOrigin = '__SITE_ORIGIN__';
+      const siteBasePath = '__SITE_BASE_PATH__';
       let editorToken = '';
       const STATE_RETRY_DELAY_MS = 2000;
       const galleryPicker = document.querySelector('#gallery-picker');
       const imageList = document.querySelector('#images');
       const statusBox = document.querySelector('#status');
       const preview = document.querySelector('#preview');
+      const previewNavigation = document.querySelector('#preview-navigation');
+      const previewPresets = document.querySelector('#preview-presets');
+      const confirmation = document.querySelector('#diff-confirmation');
+      const diffRange = document.querySelector('#diff-range');
+      const diffBefore = document.querySelector('#diff-before');
+      const diffAfter = document.querySelector('#diff-after');
+      const confirmButton = document.querySelector('#confirm-change');
+      const cancelButton = document.querySelector('#cancel-change');
+      const previewRoutes = Object.freeze({
+        home: `${siteOrigin}${siteBasePath}`,
+        fixture: `${siteOrigin}${siteBasePath}fixture/`,
+      });
       let current = { galleries: [], hash: '' };
       let selectedGalleryId = '';
       let saving = false;
+      let pendingPreview = null;
       let draggedSlug = null;
+      let focusImageSlugAfterRender = '';
 
       function status(message, type = 'info') {
         statusBox.className = `alert alert-${type}`;
         statusBox.textContent = message;
       }
 
+      function busy() {
+        return saving || pendingPreview !== null;
+      }
+
       function galleryById(id) {
         return current.galleries.find((gallery) => gallery.id === id);
       }
 
+      function renderConfirmation() {
+        confirmation.hidden = pendingPreview === null;
+        confirmButton.disabled = saving || pendingPreview === null;
+        cancelButton.disabled = saving || pendingPreview === null;
+        if (!pendingPreview) return;
+        diffRange.textContent = `Quelloffset ${pendingPreview.diff.start}–${pendingPreview.diff.end} (JavaScript-Codeeinheiten)`;
+        diffBefore.textContent = pendingPreview.diff.before;
+        diffAfter.textContent = pendingPreview.diff.after;
+      }
+
       function render() {
+        renderConfirmation();
         const focusedGalleryId = galleryPicker.contains(document.activeElement)
           ? document.activeElement.dataset.galleryId
           : '';
-        const focusedImageSlug = imageList.contains(document.activeElement)
+        const focusedImageSlug = focusImageSlugAfterRender || (imageList.contains(document.activeElement)
           ? document.activeElement.closest('li')?.dataset.galleryImageSlug
-          : '';
+          : '');
+        focusImageSlugAfterRender = '';
         galleryPicker.replaceChildren();
         const pickerButtons = new Map();
         for (const gallery of current.galleries) {
@@ -63,7 +126,7 @@
           button.textContent = gallery.id;
           button.dataset.galleryId = gallery.id;
           button.setAttribute('aria-pressed', String(gallery.id === selectedGalleryId));
-          button.disabled = saving;
+          button.disabled = busy();
           button.addEventListener('click', () => {
             selectedGalleryId = gallery.id;
             draggedSlug = null;
@@ -84,12 +147,12 @@
           const galleryId = selected.id;
           const row = document.createElement('li');
           row.className = 'list-row';
-          row.draggable = !saving;
+          row.draggable = !busy();
           row.tabIndex = -1;
           row.dataset.galleryImageSlug = slug;
           row.setAttribute('aria-label', `${galleryId}, Eintrag ${index + 1}: ${slug}`);
           row.addEventListener('dragstart', (event) => {
-            if (saving) {
+            if (busy()) {
               event.preventDefault();
               return;
             }
@@ -101,7 +164,7 @@
             }
           });
           row.addEventListener('dragover', (event) => {
-            if (saving || !draggedSlug || draggedSlug === slug) return;
+            if (busy() || !draggedSlug || draggedSlug === slug) return;
             event.preventDefault();
             if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
             row.classList.add('bg-base-200');
@@ -114,11 +177,11 @@
             const from = order.indexOf(draggedSlug);
             const to = order.indexOf(slug);
             draggedSlug = null;
-            if (from < 0 || to < 0 || from === to || saving) return;
+            if (from < 0 || to < 0 || from === to || busy()) return;
             const nextOrder = [...order];
             const [moved] = nextOrder.splice(from, 1);
             nextOrder.splice(to, 0, moved);
-            await persistOrder(galleryId, nextOrder);
+            await prepareOrder(galleryId, nextOrder);
           });
           row.addEventListener('dragend', () => {
             draggedSlug = null;
@@ -144,7 +207,7 @@
             button.type = 'button';
             button.textContent = label;
             button.setAttribute('aria-label', `${delta < 0 ? 'Nach oben' : 'Nach unten'}: ${slug} in ${galleryId}`);
-            button.disabled = saving || index + delta < 0 || index + delta >= selected.order.length;
+            button.disabled = busy() || index + delta < 0 || index + delta >= selected.order.length;
             button.addEventListener('click', () => move(galleryId, index, delta));
             actions.append(button);
           }
@@ -158,6 +221,31 @@
         }
       }
 
+      function navigatePreview(route) {
+        if (!Object.hasOwn(previewRoutes, route)) return;
+        preview.src = route === 'fixture' && current.hash
+          ? `${previewRoutes.fixture}?revision=${current.hash}`
+          : previewRoutes[route];
+        for (const button of previewNavigation.querySelectorAll('[data-preview-route]')) {
+          button.setAttribute('aria-pressed', String(button.dataset.previewRoute === route));
+        }
+      }
+
+      previewNavigation.addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-preview-route]');
+        if (button) navigatePreview(button.dataset.previewRoute);
+      });
+
+      previewPresets.addEventListener('click', (event) => {
+        const button = event.target.closest('button[data-preview-preset]');
+        if (!button) return;
+        preview.width = Number(button.dataset.width);
+        preview.height = Number(button.dataset.height);
+        for (const preset of previewPresets.querySelectorAll('[data-preview-preset]')) {
+          preset.setAttribute('aria-pressed', String(preset === button));
+        }
+      });
+
       async function refreshSession() {
         const response = await fetch('/api/session', { cache: 'no-store' });
         if (!response.ok) throw new Error(`Sitzung ${response.status}`);
@@ -168,35 +256,81 @@
 
       async function load() {
         await refreshSession();
-        const response = await fetch('/api/state');
+        const response = await fetch('/api/state', { cache: 'no-store' });
         if (!response.ok) throw new Error(`Status ${response.status}`);
         current = await response.json();
         if (!galleryById(selectedGalleryId)) selectedGalleryId = current.galleries[0]?.id || '';
         render();
-        preview.src = `${siteOrigin}/fixture/?revision=${current.hash}`;
+        navigatePreview('fixture');
         status('Fixture geladen. Wähle eine Galerie zum Sortieren.', 'success');
       }
 
       async function move(galleryId, index, delta) {
-        if (saving) return;
+        if (busy()) return;
         const order = [...(galleryById(galleryId)?.order || [])];
         if (index + delta < 0 || index + delta >= order.length) return;
         [order[index], order[index + delta]] = [order[index + delta], order[index]];
-        await persistOrder(galleryId, order);
+        await prepareOrder(galleryId, order);
       }
 
-      async function persistOrder(galleryId, order) {
+      async function postOperation(endpoint, operation) {
+        return fetch(endpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-editor-token': editorToken },
+          body: JSON.stringify(operation),
+        });
+      }
+
+      async function prepareOrder(galleryId, order) {
         const gallery = galleryById(galleryId);
-        if (saving || !gallery || order.every((slug, index) => slug === gallery.order[index])) return;
+        if (busy() || !gallery || order.every((slug, index) => slug === gallery.order[index])) return;
+        const focusSlug = imageList.contains(document.activeElement)
+          ? document.activeElement.closest('li')?.dataset.galleryImageSlug || ''
+          : '';
         saving = true;
         render();
-        status(`Galerie ${galleryId} wird gespeichert …`);
+        status(`Änderung für ${galleryId} wird vorbereitet …`);
+        try {
+          const operation = { hash: current.hash, galleryId, order };
+          const response = await postOperation('/api/preview', operation);
+          const result = await response.json();
+          if (!response.ok) {
+            const error = new Error(result.error || `Status ${response.status}`);
+            error.status = response.status;
+            throw error;
+          }
+          if (!result.diff || !result.previewId) {
+            status('Die Reihenfolge ist unverändert; es wurde nichts geschrieben.', 'info');
+            return;
+          }
+          pendingPreview = { ...operation, previewId: result.previewId, diff: result.diff, focusSlug };
+          render();
+          status('Quelländerung prüfen. Es wird erst nach Bestätigung gespeichert.', 'warning');
+        } catch (error) {
+          const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : error.message;
+          status(`Keine Vorschau erstellt: ${reason}.`, 'error');
+          if (error.status === 403 || error.status === 409) {
+            try { await load(); } catch (loadError) { status(`Fixture konnte nicht neu geladen werden: ${loadError.message}`, 'error'); }
+          }
+        } finally {
+          saving = false;
+          render();
+        }
+      }
+
+      async function confirmChange() {
+        if (saving || !pendingPreview) return;
+        const operation = pendingPreview;
+        saving = true;
+        render();
+        status('Bestätigte Änderung wird atomar gespeichert …');
         let saved = false;
         try {
-          const response = await fetch('/api/reorder', {
-            method: 'POST',
-            headers: { 'content-type': 'application/json', 'x-editor-token': editorToken },
-            body: JSON.stringify({ hash: current.hash, galleryId, order }),
+          const response = await postOperation('/api/commit', {
+            previewId: operation.previewId,
+            galleryId: operation.galleryId,
+            order: operation.order,
+            hash: operation.hash,
           });
           const result = await response.json();
           if (!response.ok) {
@@ -204,28 +338,41 @@
             error.status = response.status;
             throw error;
           }
+          pendingPreview = null;
           current = result;
+          focusImageSlugAfterRender = operation.focusSlug;
           saved = true;
+          render();
           status('Gespeichert. Prüfe, ob Astro alle Galerien neu gerendert hat …');
           const readyResponse = await fetch(`/api/preview-ready?hash=${encodeURIComponent(current.hash)}`, { cache: 'no-store' });
           const ready = await readyResponse.json();
           if (!readyResponse.ok) throw new Error(ready.error || `Status ${readyResponse.status}`);
+          navigatePreview('fixture');
           preview.src = ready.previewUrl;
           status('Gespeichert; Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert.', 'success');
         } catch (error) {
+          pendingPreview = null;
           if (saved) {
             status(`Gespeichert, aber Vorschau nicht bestätigt: ${error.message}`, 'warning');
           } else {
             const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : error.message;
-            status(`Nicht gespeichert: ${reason}. Verbindung wird wiederhergestellt …`, 'warning');
-            await loadWithRetry();
-            status(`Nicht gespeichert: ${reason}. Bitte erneut versuchen.`, 'warning');
+            status(`Nicht gespeichert: ${reason}. Lade den aktuellen Stand …`, 'warning');
+            try { await load(); } catch (loadError) { status(`Nicht gespeichert: ${reason}. Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
           }
         } finally {
           saving = false;
           render();
         }
       }
+
+      confirmButton.addEventListener('click', confirmChange);
+      cancelButton.addEventListener('click', () => {
+        if (saving || !pendingPreview) return;
+        focusImageSlugAfterRender = pendingPreview.focusSlug;
+        pendingPreview = null;
+        render();
+        status('Änderung abgebrochen; die Datei blieb unverändert.', 'info');
+      });
 
       async function loadWithRetry() {
         while (true) {

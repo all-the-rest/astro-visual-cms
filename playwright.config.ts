@@ -18,7 +18,11 @@ export default defineConfig({
   webServer: {
     command: 'pnpm dev',
     url: 'http://127.0.0.1:15322/',
-    env: { ASTRO_PORT: '15321', EDITOR_PORT: '15322' },
+    env: {
+      ASTRO_PORT: '15321',
+      EDITOR_PORT: '15322',
+      ASTRO_BASE_PATH: '/browser-synthetic/',
+    },
     reuseExistingServer: false,
     timeout: 120_000,
     stdout: 'pipe',

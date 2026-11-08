@@ -4,6 +4,7 @@ import { resolveAstroImageMetadata } from '../lib/astro-image-adapter.mjs'
 
 const { slug, src: _ignoredSrc, ...presentationProps } = Astro.props
 const image = await resolveAstroImageMetadata(slug)
+image.src = `${import.meta.env.BASE_URL.replace(/\/?$/, '/')}${image.src.replace(/^\//, '')}`
 ---
 
 <Image {...presentationProps} src={image} />

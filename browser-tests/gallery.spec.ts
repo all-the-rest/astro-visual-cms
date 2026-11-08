@@ -22,7 +22,20 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
   const details = exportedArray(originalSource, 'DETAILS').value
 
   try {
-    await page.goto('/')
+    await expect.poll(async () => {
+      const response = await page.request.get('http://127.0.0.1:15321/browser-synthetic/fixture/')
+      return response.status()
+    }).toBe(200)
+    const editorResponse = await page.goto('/')
+    expect(editorResponse?.status()).toBe(200)
+    const policy = editorResponse?.headers()['content-security-policy'] || ''
+    expect(policy).toContain("connect-src 'self'")
+    expect(policy).toContain('http://127.0.0.1:15321')
+    expect(policy).not.toContain('*')
+    const editorHtml = await editorResponse?.text()
+    const nonce = editorHtml?.match(/<script nonce="([^"]+)"/)?.[1]
+    expect(nonce).toBeTruthy()
+    expect(policy).toContain(`'nonce-${nonce}'`)
     await expect(page.getByRole('status')).toHaveText('Fixture geladen. Wähle eine Galerie zum Sortieren.')
 
     const picker = page.getByRole('group', { name: 'Galerie auswählen' })
@@ -30,13 +43,34 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     await expect(picker.getByRole('button', { name: 'HIGHLIGHTS', exact: true })).toHaveAttribute('aria-pressed', 'true')
 
     const preview = page.frameLocator('#preview')
-    const renderedOrders = () => preview.locator('section[data-gallery-order]').evaluateAll(
-      (sections) => sections.map((section) => section.getAttribute('data-gallery-order')),
-    )
+    const renderedOrders = async () => {
+      try {
+        return await preview.locator('section[data-gallery-order]').evaluateAll(
+          (sections) => sections.map((section) => section.getAttribute('data-gallery-order')),
+        )
+      } catch {
+        // A fixed-route navigation can replace the iframe execution context between polls.
+        return []
+      }
+    }
     await expect.poll(renderedOrders).toEqual([
       highlights.join(','),
       details.join(','),
     ])
+
+    const renderedViewport = () => preview.locator('body').evaluate(() => [window.innerWidth, window.innerHeight])
+    await expect.poll(renderedViewport).toEqual([1280, 800])
+    await page.getByRole('group', { name: 'Vorschaugröße' }).getByRole('button', { name: 'Tablet' }).click()
+    await expect.poll(renderedViewport).toEqual([768, 1024])
+    await page.getByRole('group', { name: 'Vorschaugröße' }).getByRole('button', { name: 'Mobil' }).click()
+    await expect.poll(renderedViewport).toEqual([390, 844])
+    await page.getByRole('group', { name: 'Vorschaugröße' }).getByRole('button', { name: 'Desktop' }).click()
+
+    const routeNavigation = page.getByRole('navigation', { name: 'Vorschau-Route' })
+    await routeNavigation.getByRole('button', { name: 'Startseite' }).click()
+    await expect(page.frameLocator('#preview').getByRole('heading', { name: /Astro visual CMS/ })).toBeVisible()
+    await routeNavigation.getByRole('button', { name: 'Fixture' }).click()
+    await expect.poll(renderedOrders).toEqual([highlights.join(','), details.join(',')])
 
     const detailsButton = picker.getByRole('button', { name: 'DETAILS', exact: true })
     await detailsButton.focus()
@@ -55,7 +89,20 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     ;[nextOrder[0], nextOrder[1]] = [nextOrder[1], nextOrder[0]]
 
     const highlightsList = page.getByRole('list', { name: 'Reihenfolge der Galerie HIGHLIGHTS' })
+    const originalArray = exportedArray(originalSource, 'HIGHLIGHTS')
     await highlightsList.getByRole('listitem').nth(1).dragTo(highlightsList.getByRole('listitem').first())
+    await expect(page.locator('#diff-confirmation')).toBeVisible()
+    await expect(page.locator('#diff-before')).toHaveText(originalSource.slice(originalArray.start, originalArray.end))
+    await expect(page.locator('#diff-after')).toHaveText(JSON.stringify(nextOrder))
+    await expect(page.getByRole('button', { name: 'Änderung bestätigen und speichern' })).toBeVisible()
+    await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(originalSource)
+    await page.getByRole('button', { name: 'Abbrechen' }).click()
+    await expect(page.getByRole('status')).toHaveText('Änderung abgebrochen; die Datei blieb unverändert.')
+    await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(originalSource)
+
+    await highlightsList.getByRole('listitem').nth(1).dragTo(highlightsList.getByRole('listitem').first())
+    await expect(page.getByRole('heading', { name: 'Quelländerung bestätigen' })).toBeVisible()
+    await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
     await expect(page.getByRole('status')).toHaveText(/Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert\./)
 
     await expect(highlightsList.getByRole('listitem')).toHaveCount(nextOrder.length)
@@ -69,7 +116,7 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     )
     await expect(preview.getByText('Unbekannte CMS-Komponente: bleibt außerhalb des Galerie-Editors')).toBeVisible()
 
-    const highlightRange = exportedArray(originalSource, 'HIGHLIGHTS')
+    const highlightRange = originalArray
     const expectOnlyHighlightsAndAllPreviewOrders = async (order: string[]) => {
       await expect.poll(renderedOrders).toEqual([
         order.join(','),
@@ -81,9 +128,16 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     }
     await expectOnlyHighlightsAndAllPreviewOrders(nextOrder)
 
+    await routeNavigation.getByRole('button', { name: 'Startseite' }).click()
+    await expect(page.frameLocator('#preview').getByRole('heading', { name: /Astro visual CMS/ })).toBeVisible()
+    await routeNavigation.getByRole('button', { name: 'Fixture' }).click()
+    await expect.poll(renderedOrders).toEqual([nextOrder.join(','), details.join(',')])
+
     const moveDown = page.getByRole('button', { name: `Nach unten: ${nextOrder[0]} in HIGHLIGHTS` })
     await moveDown.focus()
     await moveDown.press('Enter')
+    await expect(page.getByRole('heading', { name: 'Quelländerung bestätigen' })).toBeVisible()
+    await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
     await expect(page.getByRole('status')).toHaveText(/Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert\./)
     await expect(highlightsList.getByRole('listitem').first()).toHaveAttribute('aria-label', `HIGHLIGHTS, Eintrag 1: ${highlights[0]}`)
     await expect(highlightsList.getByRole('listitem').nth(1)).toBeFocused()

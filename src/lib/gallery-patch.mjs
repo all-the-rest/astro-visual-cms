@@ -29,7 +29,14 @@ function parseJavaScript(source, label, plugins) {
 
 function parseMdx(source) {
   try {
-    return mdxProcessor.parse(source)
+    // unified treats a leading UTF-8 BOM as parser input rather than source
+    // trivia. Strip it for parsing, then account for its one UTF-16 code unit
+    // when mapping AST offsets back into the untouched source string.
+    const hasBom = source.charCodeAt(0) === 0xfeff
+    return {
+      tree: mdxProcessor.parse(hasBom ? source.slice(1) : source),
+      sourceOffset: hasBom ? 1 : 0,
+    }
   } catch {
     fail('UNSUPPORTED_SYNTAX', 'The fixture is not valid MDX syntax.')
   }
@@ -98,9 +105,13 @@ function rejectDirectEval(root) {
   }
 }
 
-function sourceRange(source, esmNode, initializer) {
-  const blockStart = esmNode.position?.start?.offset
-  const blockEnd = esmNode.position?.end?.offset
+function sourceRange(source, esmNode, initializer, sourceOffset = 0) {
+  const blockStart = Number.isInteger(esmNode.position?.start?.offset)
+    ? esmNode.position.start.offset + sourceOffset
+    : undefined
+  const blockEnd = Number.isInteger(esmNode.position?.end?.offset)
+    ? esmNode.position.end.offset + sourceOffset
+    : undefined
   if (!Number.isInteger(blockStart) || !Number.isInteger(blockEnd)) {
     fail('UNSUPPORTED_TARGET', 'The MDX parser did not provide source offsets for a gallery array.')
   }
@@ -124,7 +135,7 @@ function sourceRange(source, esmNode, initializer) {
   return range
 }
 
-function findGalleryArrays(source, mdast, galleryImportSource) {
+function findGalleryArrays(source, mdast, galleryImportSource, sourceOffset) {
   const esmNodes = []
   const galleryNodes = []
   const jsxNameReferences = []
@@ -276,7 +287,7 @@ function findGalleryArrays(source, mdast, galleryImportSource) {
     return {
       id: target.id,
       order,
-      range: sourceRange(source, esmNode, declaration.init),
+      range: sourceRange(source, esmNode, declaration.init, sourceOffset),
     }
   })
 
@@ -288,7 +299,8 @@ export function hashSource(source) {
 }
 
 function inspectSource(source, galleryImportSource) {
-  const galleries = findGalleryArrays(source, parseMdx(source), galleryImportSource)
+  const parsed = parseMdx(source)
+  const galleries = findGalleryArrays(source, parsed.tree, galleryImportSource, parsed.sourceOffset)
     .map(({ id, order }) => ({ id, order }))
   return { galleries, hash: hashSource(source) }
 }
@@ -298,7 +310,8 @@ function patchSource(source, galleryId, requestedOrder, expectedHash, galleryImp
     fail('STALE_HASH', 'The source changed since it was loaded. Reload before editing.')
   }
 
-  const galleries = findGalleryArrays(source, parseMdx(source), galleryImportSource)
+  const parsed = parseMdx(source)
+  const galleries = findGalleryArrays(source, parsed.tree, galleryImportSource, parsed.sourceOffset)
   const gallery = galleries.find((item) => item.id === galleryId)
   if (!gallery) fail('UNSUPPORTED_TARGET', 'The requested Gallery id is not present in this source.')
   if (!Array.isArray(requestedOrder) || requestedOrder.length !== gallery.order.length ||
@@ -308,9 +321,19 @@ function patchSource(source, galleryId, requestedOrder, expectedHash, galleryImp
     fail('UNSUPPORTED_VALUE', 'Only reordering the selected Gallery’s existing image slugs is allowed.')
   }
 
+  if (requestedOrder.every((slug, index) => slug === gallery.order[index])) {
+    return { source, ...inspectSource(source, galleryImportSource), diff: null }
+  }
+
   const replacement = JSON.stringify(requestedOrder)
+  const before = source.slice(gallery.range.start, gallery.range.end)
   const updatedSource = source.slice(0, gallery.range.start) + replacement + source.slice(gallery.range.end)
-  return { source: updatedSource, ...inspectSource(updatedSource, galleryImportSource) }
+  const validated = inspectSource(updatedSource, galleryImportSource)
+  return {
+    source: updatedSource,
+    ...validated,
+    diff: { start: gallery.range.start, end: gallery.range.end, before, after: replacement },
+  }
 }
 
 /**

@@ -6,6 +6,6 @@ import BaseLayout from '../layouts/BaseLayout.astro'
   <main class="mx-auto max-w-4xl p-8">
     <h1 class="mb-4 text-3xl font-semibold">Astro visual CMS – sicher begrenzter Spike</h1>
     <p class="mb-6">Die MDX-Fixture ist eine echte Astro-Seite. Der lokale Editor läuft separat.</p>
-    <a class="btn" href="/fixture/">Gerenderte Fixture öffnen</a>
+    <a class="btn" href={`${import.meta.env.BASE_URL}fixture/`}>Gerenderte Fixture öffnen</a>
   </main>
 </BaseLayout>

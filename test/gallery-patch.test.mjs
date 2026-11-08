@@ -60,6 +60,45 @@ export const SECOND = ["evening-window"];`,
     { id: 'SECOND', order: ['evening-window'] },
   ])
   assert.equal(patched.hash, hashSource(expected))
+  assert.deepEqual(patched.diff, {
+    start: originalArrayStart,
+    end: originalArrayStart + originalArray.length,
+    before: originalArray,
+    after: JSON.stringify(order),
+  })
+})
+
+test('an exact no-op preserves source bytes and hash and reports no diff', () => {
+  const source = sourceWith(
+    `export const FIRST = [ 'story-cover' ,\t"market-detail" ];\nexport const SECOND = ["evening-window"];`,
+    simpleGalleries,
+  ).replaceAll('\n', '\r\n')
+  const current = inspectFixture(source)
+  const result = patchFixtureSource(source, 'FIRST', current.galleries[0].order, current.hash)
+
+  assert.deepEqual(Buffer.from(result.source, 'utf8'), Buffer.from(source, 'utf8'))
+  assert.equal(result.hash, current.hash)
+  assert.equal(result.diff, null)
+})
+
+test('leading BOM, CRLF, and Unicode retain exact bytes outside the patched array', () => {
+  const source = `\uFEFF${sourceWith(
+    `export const FIRST = ["story-cover", "market-detail"];\nexport const SECOND = ["evening-window"];`,
+    simpleGalleries,
+    { before: '# 🧭 Synthetischer Küstenweg\n\nUnicode vor dem Ziel: Grüße, 東京, 🌊.\n' },
+  ).replaceAll('\n', '\r\n')}`
+  const current = inspectFixture(source)
+  const order = [...current.galleries[0].order].reverse()
+  const result = patchFixtureSource(source, 'FIRST', order, current.hash)
+  const originalArray = '["story-cover", "market-detail"]'
+  const start = source.indexOf(originalArray)
+  const expected = source.slice(0, start) + JSON.stringify(order) + source.slice(start + originalArray.length)
+
+  assert.equal(source.charCodeAt(0), 0xfeff)
+  assert.deepEqual(Buffer.from(result.source, 'utf8'), Buffer.from(expected, 'utf8'))
+  assert.equal(result.source.charCodeAt(0), 0xfeff)
+  assert.equal(result.diff.start, start)
+  assert.equal(result.diff.before, originalArray)
 })
 
 test('stale hashes and requests that add, drop, duplicate, path-inject, or target an unknown gallery fail closed', () => {
@@ -255,4 +294,10 @@ test('ambiguous exports and comments fail closed', () => {
   assert.throws(() => inspectFixture(source.replace('FIRST = [', 'FIRST = [\n  /* keep order */ ')))
   assert.throws(() => inspectFixture(source.replace('export const FIRST', 'const FIRST').replace('<Gallery', 'export { FIRST };\n<Gallery')))
   assert.throws(() => inspectFixture(source.replace('import Gallery', '/* comment */\nimport Gallery')))
+  assert.throws(
+    () => inspectFixture(source.replace('FIRST = [', 'FIRST = [/* keep this */ ')),
+    { code: 'UNSUPPORTED_COMMENT' },
+  )
+  assert.throws(() => inspectFixture(source.replace('export const FIRST', '// ambiguous source comment\nexport const FIRST')))
+  assert.throws(() => inspectFixture(source.replace('<Gallery', '<!-- editor must not reinterpret comments -->\n<Gallery')))
 })

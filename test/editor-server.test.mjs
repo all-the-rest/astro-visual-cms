@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:http'
+import { createServer, request as httpRequest } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import test from 'node:test'
-import { inspectFixture } from '../src/lib/gallery-patch.mjs'
+import { hashSource, inspectFixture } from '../src/lib/gallery-patch.mjs'
 import { createEditorServer, isLoopbackAddress, validateDemoImageSlugs } from '../src/editor/server.mjs'
 
 function listen(server) {
@@ -23,6 +23,22 @@ function close(server) {
   server.closeAllConnections?.()
   return new Promise((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve())
+  })
+}
+
+function getWithHost(port, host) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      hostname: '127.0.0.1',
+      port,
+      path: '/api/state',
+      headers: { host },
+    }, (response) => {
+      response.resume()
+      response.on('end', () => resolve(response.statusCode))
+    })
+    request.once('error', reject)
+    request.end()
   })
 }
 
@@ -117,22 +133,38 @@ test('standalone editor closes cleanly on SIGTERM', async () => {
   }
 })
 
-test('reorder requires the per-server token and accepts a correct token on a synthetic fixture', async (t) => {
+test('preview and commit require the token, show only the exact diff, and write only after confirmation', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-server-'))
   const fixturePath = path.join(directory, 'fixture.mdx')
   const source = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-01", "noise-fixture-03"];\n\n<Gallery sorted={FIRST} />\n`
   await writeFile(fixturePath, source, 'utf8')
   t.after(() => rm(directory, { recursive: true, force: true }))
 
-  const editor = createEditorServer({ port: 0, fixturePath })
+  assert.throws(() => createEditorServer({ fixturePath, basePath: '/unsafe/../path/' }), TypeError)
+  const sitePort = 4321
+  const editor = createEditorServer({ port: 0, sitePort, fixturePath, basePath: '/synthetic-preview/' })
   const port = await listen(editor)
   const origin = `http://127.0.0.1:${port}`
 
   try {
-    const html = await (await fetch(`${origin}/`)).text()
+    const htmlResponse = await fetch(`${origin}/`)
+    const html = await htmlResponse.text()
+    assert.match(html, new RegExp(`http:\\/\\/127\\.0\\.0\\.1:${sitePort}\\/synthetic-preview\\/src\\/styles\\/global\\.css`))
+    assert.match(html, /const siteBasePath = '\/synthetic-preview\/'/)
+    assert.match(html, /fixture: `\$\{siteOrigin\}\$\{siteBasePath\}fixture\//)
     const token = (await (await fetch(`${origin}/api/session`)).json()).token
     assert.match(token, /^[a-f0-9]{64}$/, 'The client must receive a random session token.')
     assert.doesNotMatch(html, new RegExp(token), 'The token must not be embedded in the served HTML.')
+    const policy = htmlResponse.headers.get('content-security-policy')
+    assert.ok(policy)
+    assert.match(policy, /script-src 'nonce-[A-Za-z0-9_-]+'/)
+    assert.match(html, /<script nonce="[A-Za-z0-9_-]+">/)
+    assert.match(policy, new RegExp(`style-src http:\\/\\/127\\.0\\.0\\.1:${sitePort}`))
+    assert.doesNotMatch(policy, /\*/)
+    assert.match(policy, /connect-src 'self'/)
+    assert.match(policy, /frame-src http:\/\/127\.0\.0\.1:/)
+    assert.doesNotMatch(html, /__CSP_NONCE__|__SITE_BASE_PATH__/)
+    assert.equal(htmlResponse.headers.get('access-control-allow-origin'), null)
     const stateResponse = await fetch(`${origin}/api/state`)
     const stateText = await stateResponse.text()
     assert.equal(stateResponse.status, 200)
@@ -142,16 +174,57 @@ test('reorder requires the per-server token and accepts a correct token on a syn
     const payload = JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash })
     const headers = { origin, 'content-type': 'application/json' }
 
-    const missingToken = await fetch(`${origin}/api/reorder`, {
+    assert.equal(await getWithHost(port, `localhost:${port}`), 403)
+    const wrongOrigin = await fetch(`${origin}/api/preview`, {
+      method: 'POST', headers: { ...headers, origin: `http://localhost:${port}`, 'x-editor-token': token }, body: payload,
+    })
+    assert.equal(wrongOrigin.status, 403)
+    const missingToken = await fetch(`${origin}/api/preview`, {
       method: 'POST', headers, body: payload,
     })
     assert.equal(missingToken.status, 403)
-    const wrongToken = await fetch(`${origin}/api/reorder`, {
+    const wrongToken = await fetch(`${origin}/api/preview`, {
       method: 'POST', headers: { ...headers, 'x-editor-token': `${token[0] === '0' ? '1' : '0'}${token.slice(1)}` }, body: payload,
     })
     assert.equal(wrongToken.status, 403)
-    const accepted = await fetch(`${origin}/api/reorder`, {
+    const oldDirectWrite = await fetch(`${origin}/api/reorder`, {
       method: 'POST', headers: { ...headers, 'x-editor-token': token }, body: payload,
+    })
+    assert.equal(oldDirectWrite.status, 404, 'The old write endpoint must not bypass confirmation.')
+
+    const invalidExtraField = await fetch(`${origin}/api/preview`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': token },
+      body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash, path: '/tmp/source' }),
+    })
+    assert.equal(invalidExtraField.status, 422)
+    const previewResponse = await fetch(`${origin}/api/preview`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': token }, body: payload,
+    })
+    assert.equal(previewResponse.status, 200)
+    const preview = await previewResponse.json()
+    assert.match(preview.previewId, /^[a-f0-9]{64}$/)
+    assert.deepEqual(preview.diff, {
+      start: source.indexOf('["noise-fixture-01", "noise-fixture-03"]'),
+      end: source.indexOf('["noise-fixture-01", "noise-fixture-03"]') + '["noise-fixture-01", "noise-fixture-03"]'.length,
+      before: '["noise-fixture-01", "noise-fixture-03"]',
+      after: '["noise-fixture-03","noise-fixture-01"]',
+    })
+    assert.deepEqual(Object.keys(preview).sort(), ['diff', 'hash', 'nextHash', 'previewId'])
+    assert.doesNotMatch(JSON.stringify(preview), /fixture\.mdx|src\/pages|import Gallery|<Gallery/)
+    assert.deepEqual(await readFile(fixturePath, 'utf8'), source, 'Preview must never write source.')
+
+    const mismatchedCommit = await fetch(`${origin}/api/commit`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': token },
+      body: JSON.stringify({ previewId: preview.previewId, galleryId: state.galleries[0].id, order: state.galleries[0].order, hash: state.hash }),
+    })
+    assert.equal(mismatchedCommit.status, 409)
+    const freshPreviewResponse = await fetch(`${origin}/api/preview`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': token }, body: payload,
+    })
+    const freshPreview = await freshPreviewResponse.json()
+    const accepted = await fetch(`${origin}/api/commit`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': token },
+      body: JSON.stringify({ ...JSON.parse(payload), previewId: freshPreview.previewId }),
     })
     assert.equal(accepted.status, 200)
     const saved = await accepted.json()
@@ -187,12 +260,17 @@ test('a restarted editor rotates its token and rejects the previous session toke
       hash: state.hash,
     })
     const headers = { origin: secondOrigin, 'content-type': 'application/json' }
-    const previousToken = await fetch(`${secondOrigin}/api/reorder`, {
+    const preview = await fetch(`${secondOrigin}/api/preview`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': secondToken }, body: payload,
+    })
+    const previewResult = await preview.json()
+    const previousToken = await fetch(`${secondOrigin}/api/commit`, {
       method: 'POST', headers: { ...headers, 'x-editor-token': firstToken }, body: payload,
     })
     assert.equal(previousToken.status, 403)
-    const rotatedToken = await fetch(`${secondOrigin}/api/reorder`, {
-      method: 'POST', headers: { ...headers, 'x-editor-token': secondToken }, body: payload,
+    const rotatedToken = await fetch(`${secondOrigin}/api/commit`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': secondToken },
+      body: JSON.stringify({ ...JSON.parse(payload), previewId: previewResult.previewId }),
     })
     assert.equal(rotatedToken.status, 200)
   } finally {
@@ -200,16 +278,88 @@ test('a restarted editor rotates its token and rejects the previous session toke
   }
 })
 
+test('a source change after preview returns 409 and preserves the external edit', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-stale-preview-'))
+  const fixturePath = path.join(directory, 'fixture.mdx')
+  const source = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-01", "noise-fixture-03"];\n\n<Gallery sorted={FIRST} />\n`
+  await writeFile(fixturePath, source, 'utf8')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+
+  const editor = createEditorServer({ port: 0, fixturePath })
+  const port = await listen(editor)
+  const origin = `http://127.0.0.1:${port}`
+  const token = (await (await fetch(`${origin}/api/session`)).json()).token
+  const state = await (await fetch(`${origin}/api/state`)).json()
+  const operation = {
+    galleryId: state.galleries[0].id,
+    order: [...state.galleries[0].order].reverse(),
+    hash: state.hash,
+  }
+  const headers = { origin, 'content-type': 'application/json', 'x-editor-token': token }
+
+  try {
+    const previewResponse = await fetch(`${origin}/api/preview`, {
+      method: 'POST', headers, body: JSON.stringify(operation),
+    })
+    const preview = await previewResponse.json()
+    assert.equal(previewResponse.status, 200)
+    const externalEdit = '\n# synthetic external edit after preview\n'
+    await writeFile(fixturePath, source + externalEdit, 'utf8')
+
+    const commitResponse = await fetch(`${origin}/api/commit`, {
+      method: 'POST', headers,
+      body: JSON.stringify({ ...operation, previewId: preview.previewId }),
+    })
+    assert.equal(commitResponse.status, 409)
+    assert.equal((await commitResponse.json()).code, 'STALE_HASH')
+    assert.deepEqual(await readFile(fixturePath), Buffer.from(source + externalEdit))
+  } finally {
+    await close(editor)
+  }
+})
+
+test('unsupported synthetic MDX fails before the atomic writer can be called', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-unsupported-'))
+  const fixturePath = path.join(directory, 'fixture.mdx')
+  const source = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = [getImage()];\n\n<Gallery sorted={FIRST} />\n`
+  await writeFile(fixturePath, source, 'utf8')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  let writerCalls = 0
+  const editor = createEditorServer({
+    port: 0,
+    fixturePath,
+    writeSource: async () => { writerCalls += 1 },
+  })
+  const port = await listen(editor)
+  const origin = `http://127.0.0.1:${port}`
+  const token = (await (await fetch(`${origin}/api/session`)).json()).token
+
+  try {
+    const preview = await fetch(`${origin}/api/preview`, {
+      method: 'POST',
+      headers: { origin, 'content-type': 'application/json', 'x-editor-token': token },
+      body: JSON.stringify({ galleryId: 'FIRST', order: ['noise-fixture-01'], hash: hashSource(source) }),
+    })
+    assert.equal(preview.status, 422)
+    assert.equal(writerCalls, 0)
+    assert.deepEqual(await readFile(fixturePath), Buffer.from(source))
+  } finally {
+    await close(editor)
+  }
+})
+
 test('preview readiness waits for galleries in fixture order instead of accepting swapped markers', async () => {
   let renderedHtml = ''
   let previewRequests = 0
-  const site = createServer((_request, response) => {
+  let requestedPath = ''
+  const site = createServer((request, response) => {
     previewRequests += 1
+    requestedPath = request.url
     response.writeHead(200, { 'content-type': 'text/html' })
     response.end(renderedHtml)
   })
   const sitePort = await listen(site)
-  const editor = createEditorServer({ port: 0, sitePort })
+  const editor = createEditorServer({ port: 0, sitePort, basePath: '/synthetic-preview/' })
   const editorPort = await listen(editor)
   let switchToCorrectOrder
 
@@ -230,8 +380,10 @@ test('preview readiness waits for galleries in fixture order instead of acceptin
     const response = await ready
     assert.equal(response.status, 200)
     assert.ok(previewRequests > 1, 'Readiness must retry while markers are in the wrong order.')
+    assert.match(requestedPath, /^\/synthetic-preview\/fixture\/\?preview=/)
     const payload = await response.json()
     assert.deepEqual(payload.galleries, state.galleries)
+    assert.match(payload.previewUrl, new RegExp(`http:\\/\\/127\\.0\\.0\\.1:${sitePort}\\/synthetic-preview\\/fixture\\/\\?revision=`))
   } finally {
     clearTimeout(switchToCorrectOrder)
     await Promise.all([close(editor), close(site)])

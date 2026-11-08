@@ -36,7 +36,12 @@ test('separate editor and Astro ports render multiple galleries and persist one 
   const original = await readFile(FIXTURE_PATH)
   const child = spawn(process.execPath, ['scripts/dev.mjs'], {
     cwd: new URL('../', import.meta.url),
-    env: { ...process.env, ASTRO_PORT: String(SITE_PORT), EDITOR_PORT: String(EDITOR_PORT) },
+    env: {
+      ...process.env,
+      ASTRO_PORT: String(SITE_PORT),
+      EDITOR_PORT: String(EDITOR_PORT),
+      ASTRO_BASE_PATH: '/e2e-synthetic/',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   let logs = ''
@@ -44,7 +49,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
   child.stderr.on('data', (chunk) => { logs += chunk.toString() })
 
   try {
-    const siteResponse = await waitFor(`http://127.0.0.1:${SITE_PORT}/fixture/`, child)
+    const siteResponse = await waitFor(`http://127.0.0.1:${SITE_PORT}/e2e-synthetic/fixture/`, child)
     const editorResponse = await waitFor(`http://127.0.0.1:${EDITOR_PORT}/`, child)
     const html = await siteResponse.text()
     const editor = await editorResponse.text()
@@ -68,7 +73,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
     const editorToken = (await (await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/session`)).json()).token
     assert.match(editorToken, /^[a-f0-9]{64}$/, 'The editor session endpoint must return its per-session token.')
     assert.doesNotMatch(editor, new RegExp(editorToken), 'The token must not be embedded in editor HTML.')
-    const stylesheet = await fetch(`http://127.0.0.1:${SITE_PORT}/src/styles/global.css?direct`)
+    const stylesheet = await fetch(`http://127.0.0.1:${SITE_PORT}/e2e-synthetic/src/styles/global.css?direct`)
     assert.equal(stylesheet.status, 200)
     assert.match(await stylesheet.text(), /\.btn/)
 
@@ -77,7 +82,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
     const selected = state.galleries.find((gallery) => gallery.id === 'HIGHLIGHTS')
     const untouched = state.galleries.find((gallery) => gallery.id === 'DETAILS')
     const order = [...selected.order].reverse()
-    const rejectedOrigin = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/reorder`, {
+    const rejectedOrigin = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview`, {
       method: 'POST',
       headers: {
         origin: `http://localhost:${EDITOR_PORT}`,
@@ -87,7 +92,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order }),
     })
     assert.equal(rejectedOrigin.status, 403)
-    const rejectedClientPath = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/reorder`, {
+    const rejectedClientPath = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview`, {
       method: 'POST',
       headers: {
         origin: `http://127.0.0.1:${EDITOR_PORT}`,
@@ -97,7 +102,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order, filePath: '../../README.md' }),
     })
     assert.equal(rejectedClientPath.status, 422)
-    const resultResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/reorder`, {
+    const previewResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview`, {
       method: 'POST',
       headers: {
         origin: `http://127.0.0.1:${EDITOR_PORT}`,
@@ -105,6 +110,20 @@ test('separate editor and Astro ports render multiple galleries and persist one 
         'x-editor-token': editorToken,
       },
       body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order }),
+    })
+    assert.equal(previewResponse.status, 200)
+    const preview = await previewResponse.json()
+    assert.ok(preview.previewId)
+    assert.ok(preview.diff)
+    assert.deepEqual(await readFile(FIXTURE_PATH), original, 'A preview must leave the source bytes unchanged.')
+    const resultResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/commit`, {
+      method: 'POST',
+      headers: {
+        origin: `http://127.0.0.1:${EDITOR_PORT}`,
+        'content-type': 'application/json',
+        'x-editor-token': editorToken,
+      },
+      body: JSON.stringify({ previewId: preview.previewId, hash: state.hash, galleryId: selected.id, order }),
     })
     assert.equal(resultResponse.status, 200)
     const saved = await resultResponse.json()
@@ -132,7 +151,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       assert.deepEqual(positions, [...positions].sort((left, right) => left - right))
     }
 
-    const staleResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/reorder`, {
+    const staleResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview`, {
       method: 'POST',
       headers: {
         origin: `http://127.0.0.1:${EDITOR_PORT}`,
@@ -145,9 +164,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
     assert.deepEqual(await readFile(FIXTURE_PATH), Buffer.from(patchedSource, 'utf8'),
       'A second write based on the old revision must not overwrite the first accepted write.')
 
-    const externalLine = '\n// synthetic external modification after accepted save\n'
-    await appendFile(FIXTURE_PATH, externalLine)
-    const externalConflict = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/reorder`, {
+    const pendingResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview`, {
       method: 'POST',
       headers: {
         origin: `http://127.0.0.1:${EDITOR_PORT}`,
@@ -155,6 +172,19 @@ test('separate editor and Astro ports render multiple galleries and persist one 
         'x-editor-token': editorToken,
       },
       body: JSON.stringify({ hash: saved.hash, galleryId: selected.id, order: selected.order }),
+    })
+    assert.equal(pendingResponse.status, 200)
+    const pending = await pendingResponse.json()
+    const externalLine = '\n// synthetic external modification after accepted save\n'
+    await appendFile(FIXTURE_PATH, externalLine)
+    const externalConflict = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/commit`, {
+      method: 'POST',
+      headers: {
+        origin: `http://127.0.0.1:${EDITOR_PORT}`,
+        'content-type': 'application/json',
+        'x-editor-token': editorToken,
+      },
+      body: JSON.stringify({ previewId: pending.previewId, hash: saved.hash, galleryId: selected.id, order: selected.order }),
     })
     assert.equal(externalConflict.status, 409)
     assert.deepEqual(await readFile(FIXTURE_PATH), Buffer.concat([Buffer.from(patchedSource), Buffer.from(externalLine)]),
