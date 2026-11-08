@@ -67,7 +67,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
     const imageMetadata = await sharp(Buffer.from(await imageResponse.arrayBuffer())).metadata()
     assert.equal(imageMetadata.width, 640)
     assert.equal(imageMetadata.height, 400)
-    assert.match(editor, /<iframe[^>]+title="MDX-Fixture-Vorschau"/)
+    assert.match(editor, /<iframe[^>]+title="Seitenvorschau"/)
     assert.match(editor, /id="gallery-picker"/)
     assert.match(editor, new RegExp(`http://127\\.0\\.0\\.1:${SITE_PORT}`))
     const editorToken = (await (await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/session`)).json()).token

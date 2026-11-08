@@ -61,6 +61,37 @@ test('the fixed demo server keeps image slugs manifest-bound without constrainin
   ]), { code: 'UNSUPPORTED_IMAGE_SLUG' })
 })
 
+test('trusted preview routes are strictly validated and safely embedded while defaults remain intact', async (t) => {
+  const invalid = [
+    [{ id: 'x', label: 'X', path: '/a/../b' }], [{ id: 'x', label: 'X', path: 'https://evil.test/' }],
+    [{ id: 'x', label: 'X', path: '//evil.test/' }], [{ id: 'x', label: 'X', path: '/a?b' }],
+    [{ id: 'x', label: 'X', path: '/a#b' }], [{ id: 'x', label: 'X', path: '/a%2fb' }],
+    [{ id: 'x', label: 'X', path: '/%252e%252e/' }], [{ id: 'x', label: 'X', path: '/%252f' }],
+    [{ id: 'x', label: 'X', path: '/a%ZZ' }], [{ id: 'x', label: 'X', path: '/a%00b' }],
+    [{ id: 'x', label: 'X', path: '/a\\b' }], [{ id: 'same', label: 'A', path: '/' }, { id: 'same', label: 'B', path: '/b' }],
+    [], Array.from({ length: 33 }, (_, i) => ({ id: `r${i}`, label: 'Route', path: '/' })),
+  ]
+  for (const previewRoutes of invalid) assert.throws(() => createEditorServer({ previewRoutes }), TypeError)
+
+  const defaultEditor = createEditorServer({ port: 0 })
+  const defaultPort = await listen(defaultEditor)
+  t.after(() => close(defaultEditor))
+  const defaultHtml = await (await fetch(`http://127.0.0.1:${defaultPort}/`)).text()
+  assert.match(defaultHtml, /"id":"home","label":"Startseite","path":"\/"/)
+  assert.match(defaultHtml, /"id":"fixture","label":"Fixture","path":"\/fixture\/","cacheBustOnRevision":true/)
+
+  const editor = createEditorServer({ port: 0, sitePort: 4321, basePath: '/custom-base/', previewRoutes: [
+    { id: 'proof', label: '</script><script>alert(1)</script> ', path: '/proof/' },
+  ] })
+  const port = await listen(editor)
+  t.after(() => close(editor))
+  const html = await (await fetch(`http://127.0.0.1:${port}/`)).text()
+  assert.ok(html.includes('\\u003c/script>'))
+  assert.ok(html.includes('\\u2028'))
+  assert.match(html, /const siteBasePath = '\/custom-base\/'/)
+  assert.match(html, /button\.textContent = route\.label/)
+})
+
 test('loopback address helper accepts IPv4, IPv6, and mapped IPv4 loopback only', () => {
   for (const address of ['127.0.0.1', '::1', '::ffff:127.0.0.1', '::ffff:127.255.255.255']) {
     assert.equal(isLoopbackAddress(address), true, `${address} should be loopback`)
@@ -151,7 +182,8 @@ test('preview and commit require the token, show only the exact diff, and write 
     const html = await htmlResponse.text()
     assert.match(html, new RegExp(`http:\\/\\/127\\.0\\.0\\.1:${sitePort}\\/synthetic-preview\\/src\\/styles\\/global\\.css`))
     assert.match(html, /const siteBasePath = '\/synthetic-preview\/'/)
-    assert.match(html, /fixture: `\$\{siteOrigin\}\$\{siteBasePath\}fixture\//)
+    assert.match(html, /\{"id":"home","label":"Startseite","path":"\/","cacheBustOnRevision":false\}/)
+    assert.match(html, /\{"id":"fixture","label":"Fixture","path":"\/fixture\/","cacheBustOnRevision":true\}/)
     const token = (await (await fetch(`${origin}/api/session`)).json()).token
     assert.match(token, /^[a-f0-9]{64}$/, 'The client must receive a random session token.')
     assert.doesNotMatch(html, new RegExp(token), 'The token must not be embedded in the served HTML.')

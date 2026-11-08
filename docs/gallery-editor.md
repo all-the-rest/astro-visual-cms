@@ -199,3 +199,21 @@ These probes do not establish a distributable package install, a configured MDX
 target, browser iframe/editor interaction, MDX compatibility, ClientRouter/
 navigation behavior, broader external compatibility, or production readiness.
 The project has no `@astrojs/mdx` dependency.
+
+### Trusted project preview routes
+
+`createEditorServer()` accepts an optional trusted `previewRoutes` array. Each
+route has a bounded unique `id`, display `label`, same-origin pathname `path`,
+and optional `cacheBustOnRevision`; the browser receives no API for supplying
+route URLs. Paths are composed under the trusted Astro origin/base path. Without
+the option, the existing Startseite and Fixture routes remain the defaults;
+startup selects Fixture when available. Custom route labels are inserted as
+text, and selection is reflected through `aria-pressed` and the iframe title.
+
+This path was exercised in the isolated `powerbros.at` Astro 7.2.4 copy after
+`pnpm run build`: `previewRoutes=[references -> /referenzen/]` produced the
+accessible “Referenzen” button, and the iframe rendered the real
+“Quarter-Show JKU Astros” collection row. The custom route came from trusted
+server setup; the browser supplied only the route ID through the UI. This is a
+route/UI smoke test, not evidence of a distributable CMS installation or broader
+project compatibility.

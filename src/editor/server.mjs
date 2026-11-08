@@ -26,6 +26,31 @@ const MAX_PENDING_PREVIEWS = 32
 const MAX_MDX_COMPONENT_TARGETS = 16
 const MAX_MDX_SOURCE_BYTES = 1024 * 1024
 const MAX_MDX_COMPONENT_INSTANCES = 500
+const DEFAULT_PREVIEW_ROUTES = [
+  { id: 'home', label: 'Startseite', path: '/', cacheBustOnRevision: false },
+  { id: 'fixture', label: 'Fixture', path: '/fixture/', cacheBustOnRevision: true },
+]
+
+function validatePreviewRoutes(routes) {
+  if (!Array.isArray(routes) || routes.length < 1 || routes.length > 32) throw new TypeError('previewRoutes must contain 1–32 trusted routes.')
+  const ids = new Set()
+  return routes.map((route, index) => {
+    const keys = ['id', 'label', 'path', 'cacheBustOnRevision']
+    if (!route || typeof route !== 'object' || Array.isArray(route) || Object.keys(route).some((key) => !keys.includes(key)) ||
+        !['id', 'label', 'path'].every((key) => Object.hasOwn(route, key)) ||
+        Object.keys(route).length !== 3 + Number(Object.hasOwn(route, 'cacheBustOnRevision'))) throw new TypeError(`Invalid trusted preview route at index ${index}.`)
+    if (typeof route.id !== 'string' || !/^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(route.id) || ids.has(route.id)) throw new TypeError(`Invalid or duplicate preview route id at index ${index}.`)
+    if (typeof route.label !== 'string' || !route.label.trim() || route.label.length > 128 || /[\u0000-\u001f\u007f]/.test(route.label)) throw new TypeError(`Invalid preview route label at index ${index}.`)
+    let segments
+    try { segments = typeof route.path === 'string' ? route.path.split('/').map((part) => decodeURIComponent(part)) : [] } catch {
+      throw new TypeError(`Invalid same-origin preview pathname at index ${index}.`)
+    }
+    if (typeof route.path !== 'string' || !route.path.startsWith('/') || route.path.startsWith('//') || /[?#\\\u0000-\u001f\u007f]/.test(route.path) || /%25/i.test(route.path) || segments.some((part) => part === '.' || part === '..' || /[\\/\u0000-\u001f\u007f]/.test(part))) throw new TypeError(`Invalid same-origin preview pathname at index ${index}.`)
+    if (route.cacheBustOnRevision !== undefined && typeof route.cacheBustOnRevision !== 'boolean') throw new TypeError(`Invalid preview cache-bust setting at index ${index}.`)
+    ids.add(route.id)
+    return { id: route.id, label: route.label, path: route.path, cacheBustOnRevision: route.cacheBustOnRevision === true }
+  })
+}
 
 function json(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -192,12 +217,15 @@ export function createEditorServer({
   contentConfigPath,
   mdxComponentTargets,
   mdxParagraphTargets,
+  previewRoutes = DEFAULT_PREVIEW_ROUTES,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
   }
   const siteOrigin = `http://127.0.0.1:${sitePort}`
   const safeBasePath = normalizeAstroBasePath(basePath)
+  const trustedPreviewRoutes = validatePreviewRoutes(previewRoutes)
+  const embeddedPreviewRoutes = JSON.stringify(trustedPreviewRoutes).replaceAll('<', '\\u003c').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029')
   const editorSessions = new Map()
   const editorOrigin = () => `http://127.0.0.1:${server.address()?.port ?? port}`
   const pendingPreviews = new Map()
@@ -372,6 +400,7 @@ export function createEditorServer({
       const html = readFileSync(UI_PATH, 'utf8')
         .replaceAll('__SITE_ORIGIN__', siteOrigin)
         .replaceAll('__SITE_BASE_PATH__', safeBasePath)
+        .replaceAll('__PREVIEW_ROUTES__', embeddedPreviewRoutes)
         .replaceAll('__CSP_NONCE__', nonce)
       response.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',

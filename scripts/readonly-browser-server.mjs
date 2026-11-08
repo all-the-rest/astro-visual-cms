@@ -116,6 +116,11 @@ try {
   astroStarted = true
   editor = createEditorServer({
     port: editorPort, sitePort, fixturePath: fixture, basePath: '/browser-synthetic/',
+    ...(mode === 'collection' ? { previewRoutes: [
+      { id: 'home', label: 'Startseite', path: '/' },
+      { id: 'fixture', label: 'Fixture', path: '/fixture/', cacheBustOnRevision: true },
+      { id: 'collection', label: 'Collection proof', path: '/collection-proof/' },
+    ] } : {}),
     ...(mode === 'collection' ? { projectRoot: root, contentConfigPath: 'src/content.config.ts' } : {}),
     ...(mode === 'markdown' ? { mdxParagraphTargets: [{ id: 'markdown-note', instanceId: 'paragraph-one', projectRoot: root, filePath: path.join(root, 'src/pages/markdown-proof.mdx') }] } : {}),
     ...(['collection', 'markdown'].includes(mode) ? {} : { mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] }),

@@ -5,7 +5,7 @@ import test from 'node:test'
 
 const UI_PATH = new URL('../src/editor/index.html', import.meta.url)
 
-test('editor client previews and confirms one safe source delta, with fixed routes and real viewport presets', async () => {
+test('editor client previews and confirms source changes with trusted routes and real viewport presets', async () => {
   const html = await readFile(UI_PATH, 'utf8')
   const script = html.match(/<script nonce="__CSP_NONCE__">([\s\S]*?)<\/script>/)?.[1]
   assert.ok(script, 'The editor must include its browser client.')
@@ -34,8 +34,9 @@ test('editor client previews and confirms one safe source delta, with fixed rout
   assert.match(script, /api\/preview-ready\?hash=/)
   assert.match(script, /alle Galerien/)
   assert.doesNotMatch(script, /\/api\/reorder/)
-  assert.match(script, /home: `\$\{siteOrigin\}\$\{siteBasePath\}`/)
-  assert.match(script, /fixture: `\$\{siteOrigin\}\$\{siteBasePath\}fixture\//)
+  assert.match(script, /configuredPreviewRoutes/)
+  assert.match(script, /cacheBustOnRevision/)
+  assert.match(script, /button\.textContent = route\.label/)
   assert.match(script, /preview\.width = Number\(button\.dataset\.width\)/)
   assert.match(script, /preview\.height = Number\(button\.dataset\.height\)/)
   assert.match(html, /data-preview-preset="desktop" data-width="1280" data-height="800"/)

@@ -22,8 +22,6 @@
         <div class="card-body min-h-[70vh]">
           <h2 class="card-title">Gerenderte Astro-Seite</h2>
           <nav id="preview-navigation" class="flex flex-wrap gap-2" aria-label="Vorschau-Route">
-            <button class="btn btn-sm" type="button" data-preview-route="home" aria-pressed="false">Startseite</button>
-            <button class="btn btn-sm" type="button" data-preview-route="fixture" aria-pressed="true">Fixture</button>
           </nav>
           <div id="preview-presets" class="flex flex-wrap gap-2" role="group" aria-label="Vorschaugröße">
             <button class="btn btn-sm" type="button" data-preview-preset="desktop" data-width="1280" data-height="800" aria-pressed="true">Desktop</button>
@@ -31,7 +29,7 @@
             <button class="btn btn-sm" type="button" data-preview-preset="mobile" data-width="390" data-height="844" aria-pressed="false">Mobil</button>
           </div>
           <div class="max-w-full overflow-auto rounded-box border border-base-300">
-            <iframe id="preview" class="rounded-box" width="1280" height="800" title="MDX-Fixture-Vorschau"></iframe>
+            <iframe id="preview" class="rounded-box" width="1280" height="800" title="Seitenvorschau"></iframe>
           </div>
         </div>
       </section>
@@ -155,10 +153,21 @@
       const collectionDiffAfter = document.querySelector('#collection-diff-after');
       const confirmCollectionButton = document.querySelector('#confirm-collection-change');
       const cancelCollectionButton = document.querySelector('#cancel-collection-change');
-      const previewRoutes = Object.freeze({
-        home: `${siteOrigin}${siteBasePath}`,
-        fixture: `${siteOrigin}${siteBasePath}fixture/`,
-      });
+      const configuredPreviewRoutes = __PREVIEW_ROUTES__;
+      const previewRoutes = new Map(configuredPreviewRoutes.map((route) => [route.id, {
+        ...route,
+        url: `${siteOrigin}${siteBasePath}${route.path.slice(1)}`,
+      }]));
+      let selectedPreviewRouteId = previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id;
+      for (const route of configuredPreviewRoutes) {
+        const button = document.createElement('button');
+        button.className = 'btn btn-sm';
+        button.type = 'button';
+        button.dataset.previewRoute = route.id;
+        button.textContent = route.label;
+        button.setAttribute('aria-pressed', 'false');
+        previewNavigation.append(button);
+      }
       let current = { galleries: [], hash: '' };
       let collectionState = { configured: false, collections: [] };
       let mdxState = { configured: false, targets: [] };
@@ -574,10 +583,13 @@
       }
 
       function navigatePreview(route) {
-        if (!Object.hasOwn(previewRoutes, route)) return;
-        preview.src = route === 'fixture' && current.hash
-          ? `${previewRoutes.fixture}?revision=${current.hash}`
-          : previewRoutes[route];
+        const selected = previewRoutes.get(route);
+        if (!selected) return;
+        selectedPreviewRouteId = route;
+        preview.src = selected.cacheBustOnRevision && current.hash
+          ? `${selected.url}?revision=${encodeURIComponent(current.hash)}`
+          : selected.url;
+        preview.title = `${selected.label}-Vorschau`;
         for (const button of previewNavigation.querySelectorAll('[data-preview-route]')) {
           button.setAttribute('aria-pressed', String(button.dataset.previewRoute === route));
         }
@@ -627,7 +639,7 @@
         if (!galleryById(selectedGalleryId)) selectedGalleryId = current.galleries[0]?.id || '';
         render();
         renderMdx();
-        navigatePreview('fixture');
+        navigatePreview(selectedPreviewRouteId);
         status('Fixture geladen. Wähle eine Galerie zum Sortieren.', 'success');
       }
 
@@ -841,7 +853,7 @@
           const readyResponse = await fetch(`/api/preview-ready?hash=${encodeURIComponent(current.hash)}`, { cache: 'no-store' });
           const ready = await readyResponse.json();
           if (!readyResponse.ok) throw new Error(ready.error || `Status ${readyResponse.status}`);
-          navigatePreview('fixture');
+          navigatePreview(previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id);
           preview.src = ready.previewUrl;
           status('Gespeichert; Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert.', 'success');
         } catch (error) {
