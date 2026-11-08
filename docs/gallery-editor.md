@@ -175,12 +175,19 @@ without writing, confirmed a byte-exact single-scalar patch, then introduced a
 competing copied-file edit and observed HTTP 409 with those bytes preserved. The
 original entry SHA-256 stayed unchanged.
 
-A separate full temporary project copy retained the installed dependency graph.
-Its `pnpm run build` completed successfully, including `astro check`; `astro dev`
-served `/referenzen/`, and editing the copied Markdown entry caused the updated
-value to appear through Astro's live route after Content Sync/HMR. Both copies
-were removed after the probes. This establishes one external, static Markdown
-project build and file-change HMR slice—not installation/configuration of the CMS
-Astro integration in that project, full editor-to-Astro HMR, MDX compatibility,
-ClientRouter/navigation behavior, broader external compatibility, or production
-readiness. The project has no `@astrojs/mdx` dependency.
+A separate full temporary project copy retained the installed dependency graph
+and imported `createLoopbackDevIntegration()` from the local worktree by file
+URL (no package installation or original config change). Its `pnpm run build`
+completed successfully, including `astro check`, and generated files contained
+neither the bridge challenge nor the integration identifier. `astro dev` served
+`/referenzen/`; editing a copied Markdown entry caused its updated value to
+appear through the live route after Content Sync/HMR. Recorded probe output:
+`PROJECT_BUILD=PASS; Astro check passed=true; production bridge absent=true`,
+`DEV_ROUTE=PASS`, and `CONTENT_SYNC_HMR=PASS (true)`. All temporary copies were
+removed; the external worktree remained clean and the tested entry retained
+SHA-256 `f0e5a8da81aa080121a3dcc64e7603ec56641ce10972c8c3477a5d1d79e1130b`.
+This establishes one external project's local-source integration, production
+isolation, and static Markdown file-change HMR slice—not a distributable package
+install, configured MDX target, editor-commit-to-HMR browser flow, MDX
+compatibility, ClientRouter/navigation behavior, broader external compatibility,
+or production readiness. The project has no `@astrojs/mdx` dependency.
