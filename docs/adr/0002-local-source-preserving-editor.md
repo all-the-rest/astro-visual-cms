@@ -69,6 +69,17 @@ remaining race/security limitations are documented in
 
 A pure adapter now demonstrates literal string-prop edits on imported MDX
 components using a trusted module specifier and an explicit prop allow-list.
-It is not connected to the HTTP API or UI, does not write files, and is not
-production-ready. See [`gallery-editor.md`](../gallery-editor.md#phase-4-adapter-experiment-not-production-ready)
-for the deliberately narrow syntax and unresolved identity-analysis limits.
+The adapter is deliberately limited to an exact imported default binding,
+configured static identity attribute, and existing quoted string props. See
+[`gallery-editor.md`](../gallery-editor.md#phase-4-adapter-experiment-not-production-ready)
+for the supported syntax and unresolved identity-analysis limits.
+
+### Phase 4 editor integration (2026-11-08)
+
+The adapter is now optionally wired through trusted server-side target
+configuration to a path-free catalog and authenticated preview/confirm API.
+The UI only appears when targets are configured and renders the exact source
+diff using text nodes. Commits revalidate and use the existing atomic source
+writer. The feature remains a local prototype: shadowing/binding ambiguity,
+hostile concurrent filesystem changes, visual preview of arbitrary target
+routes, broader literal forms, and release compatibility gates remain unresolved.

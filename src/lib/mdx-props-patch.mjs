@@ -82,11 +82,22 @@ export function createMdxPropsAdapter({ importSource, idProp = 'id', editablePro
     patch(source, id, prop, value, expectedHash) {
       if (hashSource(source) !== expectedHash) reject('Source changed since preview.', 'STALE_HASH')
       if (!editableProps.includes(prop) || typeof value !== 'string') reject('Only configured string props can be edited.', 'UNSUPPORTED_VALUE')
-      const { records } = inspect(source)
+      const { records, hash: currentHash } = inspect(source)
       const matches = records.filter((record) => record.id === id)
       if (matches.length !== 1) reject('Target identity is missing or ambiguous.')
       const target = matches[0].values[prop]
       if (!target) reject('Configured prop is absent or not statically editable.')
+      if (target.value === value) {
+        return {
+          source,
+          instances: records.map(({ id: instanceId, values }) => ({
+            id: instanceId,
+            props: Object.fromEntries(Object.entries(values).map(([key, item]) => [key, item.value])),
+          })),
+          hash: currentHash,
+          diff: null,
+        }
+      }
       const before = source.slice(target.range.start, target.range.end)
       const after = JSON.stringify(value)
       const updated = source.slice(0, target.range.start) + after + source.slice(target.range.end)

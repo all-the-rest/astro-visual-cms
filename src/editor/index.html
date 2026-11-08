@@ -93,6 +93,21 @@
           </div>
         </div>
       </section>
+      <section id="mdx-components-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+        <div class="card-body"><h2 class="card-title">MDX-Komponenten</h2>
+          <p id="mdx-reason" class="alert alert-info" role="status" hidden></p>
+          <label>Ziel<select id="mdx-target" class="select select-bordered"></select></label>
+          <label>Instanz<select id="mdx-instance" class="select select-bordered"></select></label>
+          <label>Eigenschaft<select id="mdx-prop" class="select select-bordered"></select></label>
+          <label>Neuer String-Wert<input id="mdx-value" class="input input-bordered" type="text" maxlength="512"></label>
+          <button id="mdx-preview-button" class="btn" type="button">Vorschau</button>
+          <section id="mdx-confirmation" hidden><h3>Änderung bestätigen</h3><p id="mdx-diff-range"></p>
+            <div class="grid gap-4 md:grid-cols-2"><div><h4>Vorher</h4><pre><code id="mdx-diff-before"></code></pre></div><div><h4>Nachher</h4><pre><code id="mdx-diff-after"></code></pre></div></div>
+            <button id="mdx-confirm-button" class="btn btn-primary" type="button">Änderung bestätigen und speichern</button>
+            <button id="mdx-cancel-button" class="btn" type="button">Abbrechen</button>
+          </section>
+        </div>
+      </section>
     </main>
     <script nonce="__CSP_NONCE__">
       const siteOrigin = '__SITE_ORIGIN__';
@@ -129,6 +144,15 @@
       });
       let current = { galleries: [], hash: '' };
       let collectionState = { configured: false, collections: [] };
+      let mdxState = { configured: false, targets: [] };
+      let pendingMdxPreview = null;
+      const mdxPanel = document.querySelector('#mdx-components-panel');
+      const mdxTarget = document.querySelector('#mdx-target');
+      const mdxReason = document.querySelector('#mdx-reason');
+      const mdxInstance = document.querySelector('#mdx-instance');
+      const mdxProp = document.querySelector('#mdx-prop');
+      const mdxValue = document.querySelector('#mdx-value');
+      const mdxConfirmation = document.querySelector('#mdx-confirmation');
       let selectedGalleryId = '';
       let selectedCollectionId = '';
       let selectedEntryId = '';
@@ -144,7 +168,37 @@
       }
 
       function busy() {
-        return saving || pendingPreview !== null || pendingCollectionPreview !== null;
+        return saving || pendingPreview !== null || pendingCollectionPreview !== null || pendingMdxPreview !== null;
+      }
+
+      function mdxFill(select, values, selected, label) {
+        select.replaceChildren();
+        for (const value of values) { const option = document.createElement('option'); option.value = value; option.textContent = value; select.append(option); }
+        if (selected && values.includes(selected)) select.value = selected;
+        select.setAttribute('aria-label', label);
+      }
+      function renderMdx() {
+        mdxPanel.hidden = !mdxState.configured || !mdxState.targets?.length;
+        if (mdxPanel.hidden) return;
+        const target = mdxState.targets.find((item) => item.id === mdxTarget.value) || mdxState.targets[0];
+        mdxReason.hidden = !target?.error;
+        mdxReason.textContent = target?.error || '';
+        mdxFill(mdxTarget, mdxState.targets.map((item) => item.id), target?.id, 'MDX-Ziel');
+        const supported = target?.supported ? target.instances || [] : [];
+        const instance = supported.find((item) => item.id === mdxInstance.value) || supported[0];
+        mdxFill(mdxInstance, supported.map((item) => item.id), instance?.id, 'MDX-Instanz');
+        const props = Object.keys(instance?.props || {});
+        mdxFill(mdxProp, props, mdxProp.value, 'Bearbeitbare MDX-Eigenschaft');
+        if (instance && Object.hasOwn(instance.props, mdxProp.value)) mdxValue.value = instance.props[mdxProp.value];
+        for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue, document.querySelector('#mdx-preview-button')]) control.disabled = busy() || !supported.length;
+        mdxConfirmation.hidden = !pendingMdxPreview;
+        document.querySelector('#mdx-confirm-button').disabled = saving || !pendingMdxPreview;
+        document.querySelector('#mdx-cancel-button').disabled = saving || !pendingMdxPreview;
+        if (pendingMdxPreview) {
+          document.querySelector('#mdx-diff-range').textContent = `Quelloffset ${pendingMdxPreview.diff.start}–${pendingMdxPreview.diff.end}`;
+          document.querySelector('#mdx-diff-before').textContent = pendingMdxPreview.diff.before;
+          document.querySelector('#mdx-diff-after').textContent = pendingMdxPreview.diff.after;
+        }
       }
 
       function galleryById(id) {
@@ -441,6 +495,9 @@
         const collectionResponse = await fetch('/api/collections', { cache: 'no-store' });
         if (!collectionResponse.ok) throw new Error(`Collections ${collectionResponse.status}`);
         collectionState = await collectionResponse.json();
+        const mdxResponse = await fetch('/api/mdx-components', { cache: 'no-store' });
+        if (!mdxResponse.ok) throw new Error(`MDX-Komponenten ${mdxResponse.status}`);
+        mdxState = await mdxResponse.json();
         if (!collectionState.configured) collectionState.collections = [];
         if (!selectedCollection()) {
           selectedCollectionId = collectionState.collections?.[0]?.id || '';
@@ -450,6 +507,7 @@
         }
         if (!galleryById(selectedGalleryId)) selectedGalleryId = current.galleries[0]?.id || '';
         render();
+        renderMdx();
         navigatePreview('fixture');
         status('Fixture geladen. Wähle eine Galerie zum Sortieren.', 'success');
       }
@@ -469,6 +527,42 @@
           body: JSON.stringify(operation),
         });
       }
+
+      async function prepareMdxChange() {
+        if (busy()) return;
+        const target = mdxState.targets.find((item) => item.id === mdxTarget.value);
+        const instance = target?.instances?.find((item) => item.id === mdxInstance.value);
+        const prop = mdxProp.value;
+        if (!target?.supported || !instance || !Object.hasOwn(instance.props, prop) || mdxValue.value.length > 512) return;
+        const operation = { targetId: target.id, instanceId: instance.id, prop, value: mdxValue.value, hash: target.hash };
+        saving = true; renderMdx(); status('MDX-Änderung wird vorbereitet …');
+        try {
+          const response = await postOperation('/api/mdx-components/preview', operation);
+          const result = await response.json();
+          if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
+          if (!result.diff || !result.previewId) { status('Der MDX-Wert ist unverändert; es wurde nichts geschrieben.'); return; }
+          pendingMdxPreview = { ...operation, previewId: result.previewId, diff: result.diff, hash: result.hash };
+          renderMdx(); status('Diff prüfen. Erst nach Bestätigung wird geschrieben.', 'warning');
+        } catch (error) { status(`Keine MDX-Vorschau erstellt: ${error.message}`, 'error'); if (error.status === 409 || error.status === 403) await load(); }
+        finally { saving = false; renderMdx(); }
+      }
+      async function commitMdxChange() {
+        if (saving || !pendingMdxPreview) return;
+        const op = pendingMdxPreview; saving = true; renderMdx();
+        try {
+          const response = await postOperation('/api/mdx-components/commit', op);
+          const result = await response.json();
+          if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
+          pendingMdxPreview = null; await load(); status('MDX-Änderung gespeichert.', 'success');
+        } catch (error) { pendingMdxPreview = null; status(`Nicht gespeichert: ${error.message}`, 'warning'); await load(); }
+        finally { saving = false; renderMdx(); }
+      }
+      document.querySelector('#mdx-preview-button').addEventListener('click', prepareMdxChange);
+      document.querySelector('#mdx-confirm-button').addEventListener('click', commitMdxChange);
+      document.querySelector('#mdx-cancel-button').addEventListener('click', () => { if (saving || !pendingMdxPreview) return; pendingMdxPreview = null; renderMdx(); status('MDX-Änderung abgebrochen; die Datei blieb unverändert.'); });
+      mdxTarget.addEventListener('change', renderMdx);
+      mdxInstance.addEventListener('change', renderMdx);
+      mdxProp.addEventListener('change', renderMdx);
 
       async function prepareOrder(galleryId, order) {
         const gallery = galleryById(galleryId);

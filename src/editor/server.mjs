@@ -9,6 +9,8 @@ import { normalizeAstroBasePath } from './base-path.mjs'
 import { patchFrontmatterField } from './collection-discovery.mjs'
 import { createCollectionRuntime, publicCollectionState } from './collection-runtime.mjs'
 import { writeSourceAtomically } from './source-write.mjs'
+import { createMdxPropsAdapter } from '../lib/mdx-props-patch.mjs'
+import { lstatSync, realpathSync } from 'node:fs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURE_PATH = path.join(PROJECT_ROOT, 'src/pages/fixture.mdx')
@@ -19,6 +21,9 @@ const PREVIEW_SYNC_TIMEOUT_MS = 4_000
 const PREVIEW_POLL_INTERVAL_MS = 100
 const PREVIEW_TTL_MS = 5 * 60_000
 const MAX_PENDING_PREVIEWS = 32
+const MAX_MDX_COMPONENT_TARGETS = 16
+const MAX_MDX_SOURCE_BYTES = 1024 * 1024
+const MAX_MDX_COMPONENT_INSTANCES = 500
 
 function json(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -183,6 +188,7 @@ export function createEditorServer({
   writeSource = writeSourceAtomically,
   projectRoot,
   contentConfigPath,
+  mdxComponentTargets,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
@@ -198,6 +204,77 @@ export function createEditorServer({
   const collectionRuntime = projectRoot === undefined
     ? null
     : createCollectionRuntime({ projectRoot, contentConfigPath })
+
+  const mdxTargets = mdxComponentTargets === undefined ? [] : (() => {
+    if (!Array.isArray(mdxComponentTargets) || mdxComponentTargets.length > MAX_MDX_COMPONENT_TARGETS) {
+      throw new TypeError(`mdxComponentTargets must contain at most ${MAX_MDX_COMPONENT_TARGETS} trusted targets.`)
+    }
+    const targets = mdxComponentTargets.map((target, index) => {
+      const keys = ['id', 'projectRoot', 'filePath', 'importSource', 'idProp', 'editableProps']
+      if (!target || typeof target !== 'object' || Object.keys(target).some((key) => !keys.includes(key)) ||
+          keys.some((key) => !Object.hasOwn(target, key))) throw new TypeError(`Invalid MDX target configuration at index ${index}.`)
+      if (typeof target.id !== 'string' || !/^[A-Za-z_$][\w$-]{0,63}$/.test(target.id) ||
+          typeof target.projectRoot !== 'string' || !path.isAbsolute(target.projectRoot) ||
+          typeof target.filePath !== 'string' || !path.isAbsolute(target.filePath)) throw new TypeError(`Invalid MDX target paths or id at index ${index}.`)
+      const root = path.resolve(target.projectRoot), file = path.resolve(target.filePath)
+      const realRoot = realpathSync(root)
+      if (realRoot !== root || !lstatSync(root).isDirectory() || !file.startsWith(`${root}${path.sep}`)) throw new TypeError('MDX target must be inside a canonical project root.')
+      const adapter = createMdxPropsAdapter(target)
+      assertMdxTargetSafe(root, file)
+      return { id: target.id, root, file, adapter }
+    })
+    if (new Set(targets.map((target) => target.id)).size !== targets.length) throw new TypeError('MDX target ids must be unique.')
+    return targets
+  })()
+  const pendingMdxPreviews = new Map()
+
+  function assertMdxTargetSafe(root, file) {
+    const relative = path.relative(root, file)
+    let current = root
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment)
+      const stat = lstatSync(current)
+      if (stat.isSymbolicLink()) { const error = new Error('Symbolic links in configured MDX paths are not editable.'); error.code = 'UNSAFE_MDX_PATH'; throw error }
+    }
+    const stat = lstatSync(file)
+    if (!stat.isFile() || realpathSync(file) !== file) { const error = new Error('Configured MDX target is not a regular in-root file.'); error.code = 'UNSAFE_MDX_PATH'; throw error }
+    if (stat.size > MAX_MDX_SOURCE_BYTES) { const error = new Error('Configured MDX target exceeds the safe source size limit.'); error.code = 'MDX_SOURCE_LIMIT'; throw error }
+  }
+
+  function readMdxTargetSource(target) {
+    assertMdxTargetSafe(target.root, target.file)
+    const bytes = readFileSync(target.file)
+    if (bytes.length > MAX_MDX_SOURCE_BYTES) {
+      const error = new Error('Configured MDX target exceeds the safe source size limit.')
+      error.code = 'MDX_SOURCE_LIMIT'
+      throw error
+    }
+    const source = bytes.toString('utf8')
+    if (!Buffer.from(source, 'utf8').equals(bytes)) {
+      const error = new Error('Configured MDX target is not valid UTF-8 source.')
+      error.code = 'UNSUPPORTED_ENCODING'
+      throw error
+    }
+    return source
+  }
+
+  function safeMdxFailure(error) {
+    const code = typeof error?.code === 'string' && /^(STALE_HASH|UNSUPPORTED_[A-Z_]+|INVALID_[A-Z_]+|UNSAFE_MDX_PATH|MDX_(SOURCE|INSTANCE)_LIMIT)$/.test(error.code)
+      ? error.code
+      : 'MDX_EDIT_FAILED'
+    const message = code === 'UNSAFE_MDX_PATH'
+      ? 'Configured MDX target is not available as a safe in-root file.'
+      : code === 'MDX_SOURCE_LIMIT'
+        ? 'Configured MDX target exceeds the safe source size limit.'
+        : code === 'MDX_INSTANCE_LIMIT'
+          ? 'Configured MDX target exceeds the safe component instance limit.'
+          : code === 'STALE_HASH'
+            ? 'The MDX source changed; reload and prepare the edit again.'
+            : code === 'MDX_EDIT_FAILED'
+              ? 'MDX edit could not be completed safely.'
+              : error.message
+    return { code, error: message }
+  }
 
   function prepareCollectionPatch(operation) {
     const target = collectionRuntime.getEntryForEdit(operation.collectionId, operation.entryId, operation.field)
@@ -220,11 +297,13 @@ export function createEditorServer({
 
   function prunePreviews() {
     const now = Date.now()
-    for (const [id, pending] of pendingPreviews) {
-      if (pending.expiresAt <= now) pendingPreviews.delete(id)
-    }
-    while (pendingPreviews.size >= MAX_PENDING_PREVIEWS) {
-      pendingPreviews.delete(pendingPreviews.keys().next().value)
+    for (const pendingMap of [pendingPreviews, pendingMdxPreviews]) {
+      for (const [id, pending] of pendingMap) {
+        if (pending.expiresAt <= now) pendingMap.delete(id)
+      }
+      while (pendingMap.size >= MAX_PENDING_PREVIEWS) {
+        pendingMap.delete(pendingMap.keys().next().value)
+      }
     }
   }
 
@@ -290,6 +369,80 @@ export function createEditorServer({
       }
       if (!collectionRuntime) return json(response, 200, { configured: false })
       return json(response, 200, publicCollectionState(collectionRuntime.inspect()))
+    }
+
+    if (request.method === 'GET' && request.url === '/api/mdx-components') {
+      if (request.headers.origin && request.headers.origin !== editorOrigin()) return json(response, 403, { error: 'Only the editor origin is allowed.' })
+      const targets = []
+      for (const target of mdxTargets) {
+        try {
+          const state = target.adapter.inspect(readMdxTargetSource(target))
+          if (state.instances.length > MAX_MDX_COMPONENT_INSTANCES) {
+            const error = new Error('Configured MDX target exceeds the safe component instance limit.')
+            error.code = 'MDX_INSTANCE_LIMIT'
+            throw error
+          }
+          targets.push({ id: target.id, instances: state.instances, hash: state.hash, supported: true })
+        } catch (error) {
+          const failure = safeMdxFailure(error)
+          targets.push({ id: target.id, supported: false, error: failure.error })
+        }
+      }
+      return json(response, 200, { configured: mdxTargets.length > 0, targets })
+    }
+
+    if (request.method === 'POST' && (request.url === '/api/mdx-components/preview' || request.url === '/api/mdx-components/commit')) {
+      if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      if (!mdxTargets.length) return json(response, 404, { error: 'MDX component editing is not configured.' })
+      try {
+        const payload = await readJson(request)
+        const previewing = request.url.endsWith('/preview')
+        const expected = previewing ? ['targetId', 'instanceId', 'prop', 'value', 'hash'] : ['previewId', 'targetId', 'instanceId', 'prop', 'value', 'hash']
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== expected.length || Object.keys(payload).some((key) => !expected.includes(key)) ||
+            typeof payload.targetId !== 'string' || payload.targetId.length > 64 ||
+            typeof payload.instanceId !== 'string' || payload.instanceId.length > 512 ||
+            typeof payload.prop !== 'string' || payload.prop.length > 64 ||
+            typeof payload.value !== 'string' || payload.value.length > 512 ||
+            !/^[a-f0-9]{64}$/.test(payload.hash) || (!previewing && !/^[a-f0-9]{64}$/.test(payload.previewId))) {
+          return json(response, 422, { code: 'INVALID_REQUEST', error: 'Invalid MDX edit operation.' })
+        }
+        const target = mdxTargets.find((item) => item.id === payload.targetId)
+        if (!target) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Unknown configured target.' })
+        const prepare = () => {
+          const source = readMdxTargetSource(target)
+          const result = target.adapter.patch(source, payload.instanceId, payload.prop, payload.value, payload.hash)
+          const checked = target.adapter.inspect(result.source)
+          if (checked.instances.length > MAX_MDX_COMPONENT_INSTANCES) {
+            const error = new Error('Configured MDX target exceeds the safe component instance limit.')
+            error.code = 'MDX_INSTANCE_LIMIT'
+            throw error
+          }
+          if (checked.hash !== result.hash) throw Object.assign(new Error('Patched MDX failed parser revalidation.'), { code: 'UNSUPPORTED_OUTPUT' })
+          return { result, source }
+        }
+        if (previewing) {
+          const { result } = prepare()
+          if (!result.diff) return json(response, 200, { previewId: null, diff: null, hash: result.hash })
+          prunePreviews(); const id = previewId()
+          const operation = { targetId: payload.targetId, instanceId: payload.instanceId, prop: payload.prop, value: payload.value, hash: payload.hash }
+          pendingMdxPreviews.set(id, { operation, diff: result.diff, nextHash: result.hash, expiresAt: Date.now() + PREVIEW_TTL_MS })
+          return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, diff: result.diff })
+        }
+        prunePreviews()
+        const pending = pendingMdxPreviews.get(payload.previewId)
+        pendingMdxPreviews.delete(payload.previewId)
+        if (!pending || pending.expiresAt <= Date.now()) return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired.' })
+        const operation = { targetId: payload.targetId, instanceId: payload.instanceId, prop: payload.prop, value: payload.value, hash: payload.hash }
+        if (JSON.stringify(operation) !== JSON.stringify(pending.operation)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit differs from preview.' })
+        const { result } = prepare()
+        if (!result.diff || result.hash !== pending.nextHash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Source no longer matches preview.' })
+        assertMdxTargetSafe(target.root, target.file)
+        await writeSource(target.file, payload.hash, result.source)
+        return json(response, 200, { targetId: target.id, hash: result.hash })
+      } catch (error) {
+        const failure = safeMdxFailure(error)
+        return json(response, failure.code === 'STALE_HASH' ? 409 : 422, failure)
+      }
     }
 
     if (request.method === 'GET' && request.url?.startsWith('/api/preview-ready?')) {

@@ -87,8 +87,18 @@ be patched; dynamic values, spreads, duplicate identities, unknown props, and
 unsupported imports are read-only. The adapter replaces only the literal range.
 It does not evaluate MDX or configuration and accepts no filesystem path.
 
-This is currently a pure adapter experiment: it is not wired to the editor HTTP
-API or UI, and therefore does not yet provide preview/confirmation/write flow.
-Do not use it on real content or treat it as production-ready. It does not claim
-to resolve JavaScript shadowing or every MDX binding ambiguity; keep usage limited
-to synthetic fixtures until those cases and the server lifecycle are addressed.
+The dev-only server can optionally receive `mdxComponentTargets`, an array of
+trusted `{ id, projectRoot, filePath, importSource, idProp, editableProps }`
+records. Roots and absolute target files are configuration-only, validated at
+startup and before access; symlink paths are rejected. `GET /api/mdx-components`
+returns a path-free catalog. Authenticated `POST /api/mdx-components/preview`
+and `/commit` use exact operation schemas, the same origin/host/token guards and
+8 KiB request limit as other writes, at most 16 configured targets, 1 MiB per
+source, 500 matching component instances, and one-shot five-minute preview bindings. No write
+occurs until a matching explicit commit; stale sources conflict. The API is
+experimental and exposed in the editor when configured targets are present. The
+UI limits edits to catalogued instances and allow-listed props, previews the exact
+source delta, and writes only after explicit confirmation. Unsupported MDX syntax remains
+read-only. Writer lifecycle limitations described above still apply; do not use
+this with real content or treat it as production-ready, and make no readiness
+claim. JavaScript shadowing and every MDX binding ambiguity are not resolved.
