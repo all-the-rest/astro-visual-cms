@@ -6,7 +6,7 @@ import {
   realpathSync,
 } from 'node:fs'
 import path from 'node:path'
-import { discoverContentCollections, planCollectionFieldExtension } from './collection-discovery.mjs'
+import { discoverContentCollections, planCollectionCreation, planCollectionFieldExtension } from './collection-discovery.mjs'
 
 export const MAX_COLLECTION_ENTRIES = 250
 const MAX_SCANNED_NODES = 10_000
@@ -199,6 +199,8 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
           collections: [],
           configEditing: {
             supported: false,
+            creationSupported: false,
+            fieldExtensionSupported: false,
             mode: 'read-only',
             reason: 'Collection creation and schema extension are not connected to the confirmed-write API.',
           },
@@ -282,8 +284,10 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
         collections,
         configEditing: {
           supported: config.discovery.supported,
-          mode: config.discovery.supported ? 'schema-extension' : 'read-only',
-          reason: config.discovery.supported ? 'Only explicit schema field extension is available; collection creation remains read-only.' : 'Unsupported or dynamic config syntax remains read-only.',
+          creationSupported: config.discovery.supported,
+          fieldExtensionSupported: config.discovery.supported,
+          mode: config.discovery.supported ? 'creation-and-schema-extension' : 'read-only',
+          reason: config.discovery.supported ? 'API-only static collection creation and explicit schema field extension are available.' : 'Unsupported or dynamic config syntax remains read-only.',
         },
         _configHash: config.hash,
         _collectionBases: new Map(config.discovery.collections
@@ -303,6 +307,8 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
           : 'Content config could not be read safely; collection editing is read-only.',
         configEditing: {
           supported: false,
+          creationSupported: false,
+          fieldExtensionSupported: false,
           mode: 'read-only',
           reason: 'Content config could not be read safely.',
         },
@@ -364,10 +370,23 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
     return planCollectionFieldExtension(config.source, { collection: operation.collection, field: operation.field, expectedHash: operation.hash })
   }
 
+  function planCreation(operation) {
+    const config = readConfig()
+    if (config.hash !== operation.hash) throw safeFailure('STALE_CONFIG', 'Content config changed; prepare the edit again.')
+    if (!config.discovery.supported) throw safeFailure('UNSUPPORTED_CONFIG', 'Content config is outside the supported static subset.')
+    const basePath = path.resolve(root, operation.base)
+    assertSafePath(root, basePath, 'directory')
+    return planCollectionCreation(config.source, {
+      name: operation.name, base: operation.base, pattern: operation.pattern,
+      fields: operation.fields, expectedHash: operation.hash,
+    })
+  }
+
   return {
     inspect,
     getEntryForEdit,
     planFieldExtension,
+    planCreation,
     configPath: configFile,
     assertEntrySafe(filePath) {
       assertSafePath(root, filePath, 'file')

@@ -59,9 +59,8 @@ The detailed comparison and command evidence are recorded in the Phase 0
 The development-only editor now has an opt-in, server-configured content-collection
 catalog and confirmed frontmatter-scalar edits for a narrowly supported static
 Astro subset. The default synthetic gallery workflow is unchanged when no trusted
-collection config is supplied. Collection creation remains read-only; a
-server-configured, diff-only planner for static schema-field extension now has an
-authenticated preview/confirm/cancel API. This follow-on does not expand the ADR
+collection config is supplied. Collection-configuration writes are limited to
+the bounded API-only slice below. This follow-on does not expand the ADR
 into a general content writer or approve production use. The supported paths,
 patterns, validation boundary, and
 remaining race/security limitations are documented in
@@ -69,12 +68,14 @@ remaining race/security limitations are documented in
 
 ### Phase 3 schema configuration write slice (2026-11-08)
 
-Only one field may be added to an already supported static collection schema.
-The config target remains server-trusted; preview binds the original config hash,
-exact diff, and operation; commit replans before using the atomic writer. New
-collection creation remains read-only, and the UI has no config-edit controls yet.
-This narrowly tested capability does not establish Astro/Zod compatibility or
-production readiness.
+The API-only config endpoint supports one new static glob collection or one
+field on an existing supported schema. The config target remains server-trusted;
+preview binds the original config hash, exact diff, operation, and editor
+session; commit replans before using the atomic writer. No collection UI is
+connected. New collection bases must already exist as regular in-root directories;
+this operation does not create content directories or entries. This narrowly
+tested capability does not establish Astro/Zod compatibility or production
+readiness.
 
 ## Phase 4 bounded adapter experiment (2026-11-08)
 

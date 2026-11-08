@@ -297,6 +297,17 @@ export function createEditorServer({
     return { target, result }
   }
 
+  async function writeCollectionConfigSource(expectedHash, source) {
+    try {
+      await writeSource(collectionRuntime.configPath, expectedHash, source)
+    } catch (error) {
+      if (error.code !== 'STALE_HASH') throw error
+      const conflict = new Error('Content config changed during the write; reload and prepare the edit again.')
+      conflict.code = 'STALE_CONFIG'
+      throw conflict
+    }
+  }
+
   function prunePreviews() {
     const now = Date.now()
     for (const pendingMap of [pendingPreviews, pendingMdxPreviews, pendingConfigPreviews]) {
@@ -384,11 +395,12 @@ export function createEditorServer({
       return json(response, 200, publicCollectionState(collectionRuntime.inspect()))
     }
 
-    if (request.method === 'POST' && (request.url === '/api/collections/config/preview' || request.url === '/api/collections/config/commit' || request.url === '/api/collections/config/cancel')) {
+    if (request.method === 'POST' && (request.url === '/api/collections/config/preview' || request.url === '/api/collections/config/commit' || request.url === '/api/collections/config/cancel' || request.url === '/api/collections/config/create/preview' || request.url === '/api/collections/config/create/commit' || request.url === '/api/collections/config/create/cancel')) {
       if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
       if (!collectionRuntime) return json(response, 404, { error: 'Collection editing is not configured.' })
       try {
         const payload = await readJson(request)
+        const createRoute = request.url.includes('/create/')
         const route = request.url.split('/').at(-1)
         const sessionToken = request.headers['x-editor-token']
         if (route === 'cancel') {
@@ -397,6 +409,46 @@ export function createEditorServer({
           if (pending && pending.sessionToken !== sessionToken) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
           pendingConfigPreviews.delete(payload.previewId)
           return json(response, 200, { cancelled: true })
+        }
+        if (createRoute) {
+          const createKeys = route === 'preview' ? ['name', 'base', 'pattern', 'fields', 'hash'] : ['previewId', 'name', 'base', 'pattern', 'fields', 'hash']
+          const validField = (field) => field && typeof field === 'object' && !Array.isArray(field) &&
+            Object.keys(field).every((key) => ['name', 'type', 'required', 'values', 'default'].includes(key)) &&
+            typeof field.name === 'string' && /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(field.name) && ['string', 'number', 'boolean', 'enum'].includes(field.type) &&
+            (field.required === undefined || typeof field.required === 'boolean') &&
+            (field.type !== 'enum' || Array.isArray(field.values) && field.values.length > 0 && field.values.length <= 32 && field.values.every((v) => typeof v === 'string' && v.length > 0 && v.length <= 128) && new Set(field.values).size === field.values.length) &&
+            (field.type === 'enum' || field.values === undefined) &&
+            (field.default === undefined || typeof field.default === 'string' && field.default.length <= 512 || typeof field.default === 'number' && Number.isFinite(field.default) || typeof field.default === 'boolean') &&
+            Object.keys(field).length <= 5
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== createKeys.length || Object.keys(payload).some((key) => !createKeys.includes(key)) ||
+              typeof payload.name !== 'string' || !/^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(payload.name) || typeof payload.base !== 'string' || payload.base.length > 256 ||
+              typeof payload.pattern !== 'string' || !['*.md', '*.mdx', '**/*.md', '**/*.mdx'].includes(payload.pattern) || !Array.isArray(payload.fields) || payload.fields.length < 1 || payload.fields.length > 32 || !payload.fields.every(validField) ||
+              new Set(payload.fields.map((field) => field.name)).size !== payload.fields.length || !/^[a-f0-9]{64}$/.test(payload.hash) || (route === 'commit' && !/^[a-f0-9]{64}$/.test(payload.previewId || ''))) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Invalid static collection creation operation.' })
+          const operation = {
+            name: payload.name,
+            base: payload.base,
+            pattern: payload.pattern,
+            fields: payload.fields.map(({ required, ...field }) => ({ ...field, optional: required === false })),
+            hash: payload.hash,
+          }
+          const prepare = () => collectionRuntime.planCreation(operation)
+          if (route === 'preview') {
+            const result = prepare(); prunePreviews(); const id = previewId()
+            pendingConfigPreviews.set(id, { operation, diff: result.diff, hash: result.hash, sessionToken, expiresAt: Date.now() + PREVIEW_TTL_MS })
+            return json(response, 200, { previewId: id, hash: operation.hash, nextHash: result.hash, diff: result.diff })
+          }
+          prunePreviews()
+          const pending = pendingConfigPreviews.get(payload.previewId)
+          if (!pending || pending.expiresAt <= Date.now()) return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired.' })
+          if (pending.sessionToken !== sessionToken) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
+          pendingConfigPreviews.delete(payload.previewId)
+          if (JSON.stringify(pending.operation) !== JSON.stringify(operation)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit differs from preview.' })
+          const result = prepare()
+          if (!result.diff || result.hash !== pending.hash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Config no longer matches preview.' })
+          const confirmed = prepare()
+          if (confirmed.hash !== pending.hash || JSON.stringify(confirmed.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Config changed immediately before write.' })
+          await writeCollectionConfigSource(operation.hash, result.source)
+          return json(response, 200, { hash: result.hash })
         }
         const expected = route === 'preview' ? ['collection', 'field', 'hash'] : ['previewId', 'collection', 'field', 'hash']
         if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== expected.length || Object.keys(payload).some((key) => !expected.includes(key)) ||
@@ -429,11 +481,10 @@ export function createEditorServer({
         if (!result.diff || result.hash !== pending.hash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Config no longer matches preview.' })
         const confirmed = collectionRuntime.planFieldExtension(normalizedOperation)
         if (confirmed.hash !== pending.hash || JSON.stringify(confirmed.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Config changed immediately before write.' })
-        await writeSource(collectionRuntime.configPath, operation.hash, result.source)
+        await writeCollectionConfigSource(operation.hash, result.source)
         return json(response, 200, { hash: result.hash })
       } catch (error) {
-        const code = error.code === 'STALE_HASH' ? 'STALE_CONFIG' :
-          ['STALE_CONFIG', 'UNSUPPORTED_CONFIG', 'UNSUPPORTED_COLLECTION_EDIT'].includes(error.code) ? error.code : 'CONFIG_EDIT_FAILED'
+        const code = ['STALE_CONFIG', 'UNSUPPORTED_CONFIG', 'UNSUPPORTED_COLLECTION_EDIT', 'UNSAFE_COLLECTION_PATH'].includes(error.code) ? error.code : 'CONFIG_EDIT_FAILED'
         const message = code === 'CONFIG_EDIT_FAILED'
           ? 'Schema config edit could not be completed safely.'
           : code === 'STALE_CONFIG'

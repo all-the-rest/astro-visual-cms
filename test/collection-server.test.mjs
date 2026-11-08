@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -82,7 +82,8 @@ test('discovery endpoint exposes a bounded, path-free catalog and explicit unsup
   assert.equal(unsupported.mode, 'read-only')
   assert.match(unsupported.reason, /patterns are supported/)
   assert.deepEqual(unsupported.entries, [])
-  assert.equal(state.configEditing.mode, 'schema-extension')
+  assert.equal(state.configEditing.mode, 'creation-and-schema-extension')
+  assert.equal(state.configEditing.creationSupported, true)
   assert.equal(state.configEditing.supported, true)
   const wrongOrigin = await fetch(`${origin}/api/collections`, { headers: { origin: 'http://localhost:4322' } })
   assert.equal(wrongOrigin.status, 403)
@@ -117,6 +118,132 @@ test('schema extension config API previews exact patch and writes only after a m
   assert.equal(commit.status, 200, JSON.stringify(await commit.json()))
   assert.equal(writes, 1)
   assert.match(await readFile(project.configPath, 'utf8'), /"summary": z\.string\(\)\.optional\(\)/)
+})
+
+test('static collection creation previews, validates and writes only the trusted config after same-session confirmation', async (t) => {
+  const project = await makeProject(t)
+  const collectionBase = path.join(project.projectRoot, 'src/content/notes')
+  await mkdir(collectionBase, { recursive: true })
+  let writes = 0
+  const { origin, headers } = await start(t, {
+    projectRoot: project.projectRoot,
+    contentConfigPath: project.configPath,
+    writeSource: async (...args) => { writes += 1; const { writeSourceAtomically } = await import('../src/editor/source-write.mjs'); return writeSourceAtomically(...args) },
+  })
+  const original = await readFile(project.configPath, 'utf8')
+  const operation = {
+    name: 'notes', base: './src/content/notes', pattern: '*.md', hash: hash(original),
+    fields: [
+      { name: 'title', type: 'string', required: true },
+      { name: 'summary', type: 'string', required: false },
+      { name: 'kind', type: 'enum', values: ['note', 'story'], default: 'note' },
+    ],
+  }
+  const previewResponse = await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })
+  assert.equal(previewResponse.status, 200)
+  const preview = await previewResponse.json()
+  assert.equal(writes, 0)
+  assert.deepEqual(preview.diff.before, '')
+  assert.match(preview.diff.after, /"notes": defineCollection/)
+  assert.match(preview.diff.after, /"summary": z\.string\(\)\.optional\(\)/)
+  assert.match(preview.diff.after, /z\.enum\(\["note","story"\]\)\.default\("note"\)/)
+  assert.equal(Object.hasOwn(preview, 'source'), false)
+  assert.equal(JSON.stringify(preview).includes(project.projectRoot), false)
+  assert.equal(await readFile(project.configPath, 'utf8'), original)
+
+  const pathInjection = await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, filePath: project.configPath }) })
+  assert.equal(pathInjection.status, 422)
+  const duplicateEnum = await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, fields: [{ name: 'kind', type: 'enum', values: ['note', 'note'] }] }) })
+  assert.equal(duplicateEnum.status, 422)
+  const unsupportedFieldOptions = await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, fields: [{ name: 'title', type: 'string', min: 1 }] }) })
+  assert.equal(unsupportedFieldOptions.status, 422)
+  const secondToken = (await (await fetch(`${origin}/api/session`)).json()).token
+  const foreignCommit = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers: { ...headers, 'x-editor-token': secondToken }, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(foreignCommit.status, 409)
+  assert.equal((await foreignCommit.json()).code, 'PREVIEW_SESSION_MISMATCH')
+  assert.equal(writes, 0)
+
+  const commit = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(commit.status, 200)
+  assert.equal(writes, 1)
+  const updated = await readFile(project.configPath, 'utf8')
+  assert.equal(updated, original.slice(0, preview.diff.start) + preview.diff.after + original.slice(preview.diff.end))
+  assert.equal(hash(updated), preview.nextHash)
+  assert.match(updated, /"notes": defineCollection/)
+  assert.equal(await readFile(project.entryPath, 'utf8'), entrySource)
+  assert.deepEqual(await readdir(collectionBase), [], 'creation never adds content files')
+  const catalog = await (await fetch(`${origin}/api/collections`)).json()
+  assert.ok(catalog.collections.some((collection) => collection.id === 'notes' && collection.supported))
+})
+
+test('collection creation cancel, stale config and unsafe bases never write', async (t) => {
+  const project = await makeProject(t)
+  const collectionBase = path.join(project.projectRoot, 'src/content/notes')
+  await mkdir(collectionBase, { recursive: true })
+  let writes = 0
+  const { origin, headers } = await start(t, {
+    projectRoot: project.projectRoot,
+    contentConfigPath: project.configPath,
+    writeSource: async () => { writes += 1 },
+  })
+  const original = await readFile(project.configPath, 'utf8')
+  const operation = { name: 'notes', base: './src/content/notes', pattern: '*.md', fields: [{ name: 'title', type: 'string' }], hash: hash(original) }
+  const missingBase = await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, name: 'missingNotes', base: './src/content/missing-notes' }) })
+  assert.equal(missingBase.status, 422)
+  const outsideBase = path.join(project.projectRoot, 'outside-content')
+  const linkedBase = path.join(project.projectRoot, 'src/content/linked-notes')
+  await mkdir(outsideBase)
+  await symlink(outsideBase, linkedBase)
+  const symlinkBase = await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, name: 'linkedNotes', base: './src/content/linked-notes' }) })
+  assert.equal(symlinkBase.status, 422)
+  assert.equal(writes, 0)
+  const cancelled = await (await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  await fetch(`${origin}/api/collections/config/create/cancel`, { method: 'POST', headers, body: JSON.stringify({ previewId: cancelled.previewId }) })
+  const cancelledCommit = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: cancelled.previewId }) })
+  assert.equal(cancelledCommit.status, 409)
+  assert.equal(writes, 0)
+
+  const stalePreview = await (await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  await writeFile(project.configPath, `${original}\n// external change\n`)
+  const staleCommit = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: stalePreview.previewId }) })
+  assert.equal(staleCommit.status, 409)
+  assert.equal((await staleCommit.json()).code, 'STALE_CONFIG')
+  assert.equal(writes, 0)
+  assert.match(await readFile(project.configPath, 'utf8'), /external change/)
+})
+
+test('collection creation revalidates its base and reports a stale atomic write as 409', async (t) => {
+  const project = await makeProject(t)
+  const collectionBase = path.join(project.projectRoot, 'src/content/notes')
+  const outsideBase = path.join(project.projectRoot, 'outside-notes')
+  await mkdir(collectionBase, { recursive: true })
+  await mkdir(outsideBase)
+  let writes = 0
+  const { origin, headers } = await start(t, {
+    projectRoot: project.projectRoot,
+    contentConfigPath: project.configPath,
+    writeSource: async () => { writes += 1; const error = new Error('private config path'); error.code = 'STALE_HASH'; throw error },
+  })
+  const original = await readFile(project.configPath, 'utf8')
+  const operation = { name: 'notes', base: './src/content/notes', pattern: '*.md', fields: [{ name: 'title', type: 'string' }], hash: hash(original) }
+  const preview = await (await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  await rm(collectionBase, { recursive: true })
+  await symlink(outsideBase, collectionBase)
+  const unsafeCommit = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(unsafeCommit.status, 422)
+  assert.equal(writes, 0, 'the revalidated symlink base must prevent reaching the writer')
+  assert.equal(await readFile(project.configPath, 'utf8'), original)
+
+  await rm(collectionBase)
+  await mkdir(collectionBase)
+  const writerPreview = await (await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  const staleWrite = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: writerPreview.previewId }) })
+  assert.equal(staleWrite.status, 409)
+  const result = await staleWrite.json()
+  assert.equal(result.code, 'STALE_CONFIG')
+  assert.doesNotMatch(result.error, /private config path/)
+  assert.equal(writes, 1)
+  assert.equal(await readFile(project.configPath, 'utf8'), original)
 })
 
 test('schema config preview cancellation and stale config never invoke the writer', async (t) => {
