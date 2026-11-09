@@ -12,28 +12,86 @@ function staleHashError() {
   return error
 }
 
+function concurrentWriteError() {
+  const error = new Error('Source is already being written; reload before saving.')
+  error.code = 'STALE_HASH'
+  return error
+}
+
+async function acquireSourceWriteLock(filePath, fs) {
+  const lockPath = `${path.resolve(filePath)}.avcms-lock`
+  let handle
+  try {
+    handle = await fs.open(lockPath, 'wx', 0o600)
+  } catch (error) {
+    if (error.code === 'EEXIST') throw concurrentWriteError()
+    throw error
+  }
+
+  try {
+    await handle.writeFile(`pid=${process.pid}\n`, 'utf8')
+    await handle.sync()
+    const identity = await handle.stat()
+    return async () => {
+      await handle.close()
+      let current
+      try {
+        current = await fs.lstat(lockPath)
+      } catch (error) {
+        if (error.code === 'ENOENT') return
+        throw error
+      }
+      if (current.dev === identity.dev && current.ino === identity.ino) {
+        try {
+          await fs.unlink(lockPath)
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error
+        }
+      }
+    }
+  } catch (error) {
+    let identity
+    try {
+      identity = await handle.stat()
+    } catch {
+      // The lock may already have been removed; do not guess at its owner.
+    }
+    await handle.close().catch(() => {})
+    if (identity) {
+      try {
+        const current = await fs.lstat(lockPath)
+        if (current.dev === identity.dev && current.ino === identity.ino) await fs.unlink(lockPath)
+      } catch {
+        // Preserve the original lock initialization error.
+      }
+    }
+    throw error
+  }
+}
+
 /**
- * Write source atomically after checking the original hash twice. `fs` only needs
- * readFile(path), writeFile(path, data, options), rename(from, to), and unlink(path).
- * Wrapping rename in tests can model an external writer in the final check-to-rename
- * race window; this is not a cross-process compare-and-swap operation.
+ * Write source atomically after checking the original hash twice. An exclusive
+ * same-directory sidecar lock serializes cooperating editor processes from the
+ * first read through rename; contention fails closed as a stale-source conflict.
+ * It is not a lock for unrelated programs that do not use this writer.
  */
 export async function writeSourceAtomically(filePath, expectedHash, nextSource, fs = defaultFs) {
   if (typeof expectedHash !== 'string' || !/^[a-f0-9]{64}$/.test(expectedHash)) {
     throw staleHashError()
   }
 
-  const initialStat = await fs.stat(filePath)
-  if (!initialStat.isFile()) throw staleHashError()
-  const initialBytes = await fs.readFile(filePath)
-  if (sha256(initialBytes) !== expectedHash) throw staleHashError()
-
-  const directory = path.dirname(filePath)
-  const basename = path.basename(filePath)
+  const releaseLock = await acquireSourceWriteLock(filePath, fs)
   let tempPath
   let tempExists = false
 
   try {
+    const initialStat = await fs.stat(filePath)
+    if (!initialStat.isFile()) throw staleHashError()
+    const initialBytes = await fs.readFile(filePath)
+    if (sha256(initialBytes) !== expectedHash) throw staleHashError()
+
+    const directory = path.dirname(filePath)
+    const basename = path.basename(filePath)
     while (!tempExists) {
       const candidate = path.join(directory, `.${basename}.${randomBytes(16).toString('hex')}.tmp`)
       try {
@@ -58,12 +116,16 @@ export async function writeSourceAtomically(filePath, expectedHash, nextSource, 
     await fs.rename(tempPath, filePath)
     tempExists = false
   } finally {
-    if (tempExists) {
-      try {
-        await fs.unlink(tempPath)
-      } catch (error) {
-        if (error.code !== 'ENOENT') throw error
+    try {
+      if (tempExists) {
+        try {
+          await fs.unlink(tempPath)
+        } catch (error) {
+          if (error.code !== 'ENOENT') throw error
+        }
       }
+    } finally {
+      await releaseLock()
     }
   }
 }

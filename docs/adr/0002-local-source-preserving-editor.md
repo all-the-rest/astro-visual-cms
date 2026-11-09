@@ -94,8 +94,26 @@ configuration to a path-free catalog and authenticated preview/confirm API.
 The UI only appears when targets are configured and renders the exact source
 diff using text nodes. Commits revalidate and use the existing atomic source
 writer. The feature remains a local prototype: shadowing/binding ambiguity,
-hostile concurrent filesystem changes, visual preview of arbitrary target
-routes, broader literal forms, and release compatibility gates remain unresolved.
+non-cooperating concurrent filesystem changes, visual preview of arbitrary
+target routes, broader literal forms, and release compatibility gates remain
+unresolved.
+
+### Per-source writer lock (2026-11-09)
+
+`writeSourceAtomically` now creates an exclusive same-directory sidecar lock
+before reading the source and holds it through the atomic rename. Concurrent
+editor requests/processes using this writer fail closed with a stale-source
+conflict; the source hash is checked only after the lock is acquired. Same-
+process and child-process tests hold the lock while competing writes attempt
+different edits, then confirm the winner's bytes survive and no temporary or
+lock files remain.
+Normal failures release the lock in `finally`. A forced process termination can
+leave a stale lock; inspect its recorded PID and remove the sidecar only after
+confirming its owner is gone. This is a cooperative writer protocol, not a
+portable filesystem compare-and-swap: arbitrary external programs that ignore
+the lock can still modify the target during the final check-to-rename interval.
+The Issue #1 cross-writer gate therefore remains partial until that boundary is
+accepted or all relevant writers participate in a stronger protocol.
 
 ### Phase 5 explicit-marker selection proof (2026-11-08)
 

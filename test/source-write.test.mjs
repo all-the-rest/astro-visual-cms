@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import * as fs from 'node:fs/promises'
 import { createHash } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -93,26 +94,100 @@ test('atomic replacement preserves restrictive source permission bits', async (t
   await assertNoTempFiles(directory)
 })
 
-test('residual race boundary: a change after the final hash check and before rename is overwritten', async (t) => {
+test('concurrent writes in one editor process are rejected while the source lock is held', async (t) => {
   const original = 'synthetic fixture source\n'
-  const external = `${original}// external synthetic edit in final race window\n`
-  const nextSource = 'synthetic requested replacement\n'
   const { directory, filePath } = await makeFixture(t, original)
+  let signalLock
+  let releaseWrite
+  const lockHeld = new Promise((resolve) => { signalLock = resolve })
+  const writeGate = new Promise((resolve) => { releaseWrite = resolve })
   let reads = 0
   const injectedFs = {
     ...fs,
-    async readFile(...args) {
-      reads += 1
-      return fs.readFile(...args)
-    },
-    async rename(tempPath, targetPath) {
-      assert.equal(reads, 2, 'the simulated external write must be after the final hash check')
-      await fs.writeFile(targetPath, external, 'utf8')
-      return fs.rename(tempPath, targetPath)
+    async readFile(target, ...args) {
+      const bytes = await fs.readFile(target, ...args)
+      if (target === filePath && ++reads === 2) {
+        signalLock()
+        await writeGate
+      }
+      return bytes
     },
   }
+  const winner = writeSourceAtomically(filePath, hash(original), 'synthetic in-process winner\n', injectedFs)
+  let timeout
+  const lockTimeout = new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('source writer did not acquire the lock')), 5_000) })
+  try {
+    await Promise.race([lockHeld, lockTimeout])
+    await assert.rejects(writeSourceAtomically(filePath, hash(original), 'synthetic in-process loser\n'), { code: 'STALE_HASH' })
+  } finally {
+    clearTimeout(timeout)
+    releaseWrite()
+  }
+  await winner
+  assert.equal(await fs.readFile(filePath, 'utf8'), 'synthetic in-process winner\n')
+  await assertNoTempFiles(directory)
+})
 
-  await writeSourceAtomically(filePath, hash(original), nextSource, injectedFs)
-  assert.deepEqual(await fs.readFile(filePath), Buffer.from(nextSource, 'utf8'))
+test('a competing process cannot overwrite a source write while holding the per-file lock', async (t) => {
+  const original = 'synthetic fixture source\n'
+  const competingEdit = 'synthetic edit from the other editor process\n'
+  const { directory, filePath } = await makeFixture(t, original)
+  const moduleUrl = new URL('../src/editor/source-write.mjs', import.meta.url).href
+  const childScript = `
+    import * as fs from 'node:fs/promises'
+    import { writeSourceAtomically } from ${JSON.stringify(moduleUrl)}
+    const filePath = ${JSON.stringify(filePath)}
+    const source = ${JSON.stringify(competingEdit)}
+    const expectedHash = ${JSON.stringify(hash(original))}
+    let reads = 0
+    const injectedFs = {
+      ...fs,
+      async readFile(target, ...args) {
+        const bytes = await fs.readFile(target, ...args)
+        if (target === filePath && ++reads === 2) {
+          process.stdout.write('LOCK_HELD\\n')
+          await new Promise((resolve) => process.stdin.once('data', resolve))
+        }
+        return bytes
+      },
+    }
+    await writeSourceAtomically(filePath, expectedHash, source, injectedFs)
+    process.stdout.write('CHILD_COMMITTED\\n')
+  `
+  const child = spawn(process.execPath, ['--input-type=module', '-e', childScript], { stdio: ['pipe', 'pipe', 'pipe'] })
+  t.after(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL') })
+  let stdout = ''
+  let stderr = ''
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => { stdout += chunk })
+  child.stderr.on('data', (chunk) => { stderr += chunk })
+  const childClosed = new Promise((resolve) => child.once('close', (code, signal) => resolve([code, signal])))
+
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`child did not acquire its write lock: ${stderr}`)), 5_000)
+    const check = () => {
+      if (stdout.includes('LOCK_HELD\n')) {
+        clearTimeout(timeout)
+        resolve()
+      }
+    }
+    child.stdout.on('data', check)
+    child.once('error', (error) => { clearTimeout(timeout); reject(error) })
+    child.once('exit', (code) => {
+      if (!stdout.includes('LOCK_HELD\n')) {
+        clearTimeout(timeout)
+        reject(new Error(`child exited before acquiring its write lock (${code}): ${stderr}`))
+      }
+    })
+    check()
+  })
+
+  await assert.rejects(writeSourceAtomically(filePath, hash(original), 'synthetic competing local edit\n'), { code: 'STALE_HASH' })
+  child.stdin.end('continue\n')
+  const [code, signal] = await childClosed
+  assert.equal(code, 0, `child failed (${signal}): ${stderr}`)
+  assert.match(stdout, /CHILD_COMMITTED\n/)
+  assert.deepEqual(await fs.readFile(filePath), Buffer.from(competingEdit, 'utf8'))
   await assertNoTempFiles(directory)
 })
