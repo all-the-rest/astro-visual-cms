@@ -2,123 +2,125 @@ import { createProcessor } from '@mdx-js/mdx'
 import { hashSource } from './gallery-patch.mjs'
 
 const processor = createProcessor({ format: 'mdx' })
+function reject(message, code = 'UNSUPPORTED_TARGET') { throw Object.assign(new Error(message), { code }) }
 
-function reject(message, code = 'UNSUPPORTED_TARGET') {
-  const error = new Error(message)
-  error.code = code
-  throw error
+function normalizeFields(editableProps, fields) {
+  if (fields === undefined && Array.isArray(editableProps)) fields = editableProps.map((name) => ({ name, type: 'string' }))
+  if (!Array.isArray(fields) || !fields.length || fields.length > 32) reject('Invalid trusted component field list.', 'INVALID_ADAPTER_CONFIG')
+  const names = new Set()
+  return fields.map((field) => {
+    const allowed = ['name', 'type', 'label', 'min', 'max', 'step', 'values']
+    if (!field || typeof field !== 'object' || Array.isArray(field) || Object.keys(field).some((key) => !allowed.includes(key)) ||
+        typeof field.name !== 'string' || !/^[A-Za-z_$][\w$-]*$/.test(field.name) || names.has(field.name) ||
+        !['string', 'number', 'boolean', 'enum'].includes(field.type)) reject('Invalid trusted component field descriptor.', 'INVALID_ADAPTER_CONFIG')
+    names.add(field.name)
+    if (field.label !== undefined && (typeof field.label !== 'string' || !field.label.trim() || field.label.length > 80 || /[\u0000-\u001f\u007f]/.test(field.label))) reject('Invalid field label.', 'INVALID_ADAPTER_CONFIG')
+    if (field.type === 'number') {
+      if (Object.hasOwn(field, 'values') || ['min', 'max', 'step'].some((key) => Object.hasOwn(field, key) && (typeof field[key] !== 'number' || !Number.isFinite(field[key]))) ||
+          field.min !== undefined && field.max !== undefined && field.min > field.max || field.step !== undefined && field.step <= 0) reject('Invalid numeric field constraints.', 'INVALID_ADAPTER_CONFIG')
+    } else if (field.type === 'enum') {
+      if (!Array.isArray(field.values) || !field.values.length || field.values.length > 32 || field.values.some((item) => typeof item !== 'string' || !item || item.length > 128) || new Set(field.values).size !== field.values.length || ['min', 'max', 'step'].some((key) => Object.hasOwn(field, key))) reject('Invalid enum choices.', 'INVALID_ADAPTER_CONFIG')
+    } else if (['min', 'max', 'step', 'values'].some((key) => Object.hasOwn(field, key))) reject('Constraints are unsupported for this field type.', 'INVALID_ADAPTER_CONFIG')
+    return Object.freeze({ ...field })
+  })
 }
 
-/** Build a narrow, trusted adapter for literal string props on imported MDX components. */
-export function createMdxPropsAdapter({ importSource, idProp = 'id', editableProps }) {
-  if (typeof importSource !== 'string' || !importSource || typeof idProp !== 'string' ||
-      !/^[A-Za-z_$][\w$-]*$/.test(idProp) || !Array.isArray(editableProps) || editableProps.length === 0 ||
-      editableProps.some((prop) => typeof prop !== 'string' || !/^[A-Za-z_$][\w$-]*$/.test(prop)) ||
-      new Set(editableProps).size !== editableProps.length || editableProps.includes(idProp)) {
-    reject('Invalid trusted component adapter configuration.', 'INVALID_ADAPTER_CONFIG')
+function literal(source, attr, descriptor) {
+  const start = attr.position?.start?.offset, end = attr.position?.end?.offset
+  if (!Number.isInteger(start) || !Number.isInteger(end)) reject('Parser did not provide an exact attribute source range.')
+  const raw = source.slice(start, end), name = String(attr.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  let expression, value, encoded
+  if (descriptor.type === 'string' || descriptor.type === 'enum') {
+    const match = new RegExp(`^${name}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")$`).exec(raw)
+    if (!match) reject(`Prop ${attr.name} must be a quoted static string.`)
+    try { value = JSON.parse(match[1]) } catch { reject('String literal is not an exact JSON string.') }
+    if (value !== attr.value) reject('String literal decoding is ambiguous.')
+    expression = match[1]; encoded = JSON.stringify
+  } else {
+    const match = new RegExp(`^${name}\\s*=\\s*\\{(true|false|-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\}$`).exec(raw)
+    if (!match) reject(`Prop ${attr.name} must use a simple static scalar expression.`)
+    expression = match[1]; value = expression === 'true' ? true : expression === 'false' ? false : Number(expression)
+    if (descriptor.type === 'boolean' && typeof value !== 'boolean' || descriptor.type === 'number' && (typeof value !== 'number' || !Number.isFinite(value))) reject(`Prop ${attr.name} has the wrong scalar type.`)
+    encoded = (next) => `{${String(next)}}`
   }
+  if (!validValue(descriptor, value)) reject(`Prop ${attr.name} violates its trusted field constraints.`)
+  const offset = start + (descriptor.type === 'number' || descriptor.type === 'boolean' ? raw.indexOf('{') : raw.lastIndexOf(expression))
+  const rangeEnd = descriptor.type === 'number' || descriptor.type === 'boolean' ? source.indexOf('}', offset) + 1 : offset + expression.length
+  if (rangeEnd <= offset) reject('Scalar expression source range is ambiguous.')
+  return { value, range: { start: offset, end: rangeEnd }, encode: encoded }
+}
 
+function validValue(field, value) {
+  if (field.type === 'string') return typeof value === 'string' && value.length <= 512
+  if (field.type === 'enum') return typeof value === 'string' && field.values.includes(value)
+  if (field.type === 'boolean') return typeof value === 'boolean'
+  if (typeof value !== 'number' || !Number.isFinite(value) || field.min !== undefined && value < field.min || field.max !== undefined && value > field.max) return false
+  if (field.step === undefined) return true
+  const steps = (value - (field.min ?? 0)) / field.step
+  return Math.abs(steps - Math.round(steps)) <= Number.EPSILON * Math.max(1, Math.abs(steps)) * 8
+}
+
+export function createMdxPropsAdapter({ importSource, idProp = 'id', editableProps, fields }) {
+  const descriptors = normalizeFields(editableProps, fields)
+  if (typeof importSource !== 'string' || !importSource || typeof idProp !== 'string' || !/^[A-Za-z_$][\w$-]*$/.test(idProp) || descriptors.some((item) => item.name === idProp)) reject('Invalid trusted component adapter configuration.', 'INVALID_ADAPTER_CONFIG')
+  const byName = new Map(descriptors.map((item) => [item.name, item]))
   function inspect(source) {
     let tree
     try { tree = processor.parse(source) } catch { reject('The MDX source is unsupported.', 'UNSUPPORTED_SYNTAX') }
-    const imports = []
-    const instances = []
+    const imports = [], instances = []
     const visit = (node) => {
       if (!node || typeof node !== 'object') return
-      if (node.type === 'mdxjsEsm') {
-        // Deliberately accept only static import declarations parsed by the MDX ESM parser.
-        const ast = node.data?.estree
-        for (const item of ast?.body || []) {
-          if (item.type === 'ImportDeclaration' && item.source.value === importSource) {
-            if (item.importKind === 'type') reject('Type-only component imports are not editable.')
-            const named = item.specifiers.filter((s) => s.type === 'ImportDefaultSpecifier')
-            if (named.length !== 1 || item.specifiers.length !== 1) reject('Target must be one default-only import from the trusted source.')
-            imports.push(named[0].local.name)
-          }
-        }
+      if (node.type === 'mdxjsEsm') for (const item of node.data?.estree?.body || []) if (item.type === 'ImportDeclaration' && item.source.value === importSource) {
+        if (item.importKind === 'type' || item.specifiers.length !== 1 || item.specifiers[0].type !== 'ImportDefaultSpecifier') reject('Target must be one default-only static import.')
+        imports.push(item.specifiers[0].local.name)
       }
       if (['mdxJsxFlowElement', 'mdxJsxTextElement'].includes(node.type) && node.name) instances.push(node)
-      for (const [key, value] of Object.entries(node)) {
-        if (key === 'position' || key === 'data') continue
-        if (Array.isArray(value)) value.forEach(visit)
-        else if (value && typeof value === 'object') visit(value)
-      }
+      for (const [key, value] of Object.entries(node)) if (key !== 'position' && key !== 'data') Array.isArray(value) ? value.forEach(visit) : value && typeof value === 'object' && visit(value)
     }
     visit(tree)
     if (imports.length !== 1) reject('Expected one target default import from the trusted module.')
-    const binding = imports[0]
-    // Alias imports are supported by binding name, while mismatched JSX names are inert.
-    const targets = instances.filter((node) => node.name === binding)
-    if (targets.length === 0) reject('No uniquely identified target component instance exists.')
-    const seenIds = new Set()
+    const targets = instances.filter((node) => node.name === imports[0])
+    if (!targets.length) reject('No target component instance exists.')
+    const ids = new Set()
     const records = targets.map((node) => {
       const attrs = node.attributes || []
-      if (attrs.some((a) => a.type !== 'mdxJsxAttribute')) reject('Spread attributes are read-only.')
-      const ids = attrs.filter((a) => a.name === idProp)
-      if (ids.length !== 1 || typeof ids[0].value !== 'string') reject('Target identity must be one static string literal.')
-      const id = ids[0].value
-      if (seenIds.has(id)) reject('Duplicate target identity is ambiguous.')
-      seenIds.add(id)
-      const values = {}
-      const seenProps = new Set()
+      if (attrs.some((attr) => attr.type !== 'mdxJsxAttribute')) reject('Spread attributes are read-only.')
+      const idAttrs = attrs.filter((attr) => attr.name === idProp)
+      if (idAttrs.length !== 1 || typeof idAttrs[0].value !== 'string') reject('Identity must be one static string.')
+      const id = idAttrs[0].value
+      if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || ids.has(id)) reject('Duplicate or invalid target identity.')
+      ids.add(id)
+      const values = {}, seen = new Set()
       for (const attr of attrs) {
         if (attr.name === idProp) continue
-        if (!editableProps.includes(attr.name)) reject(`Unknown prop ${attr.name} is read-only.`)
-        if (seenProps.has(attr.name)) reject(`Duplicate prop ${attr.name} is ambiguous.`)
-        seenProps.add(attr.name)
-        if (typeof attr.value !== 'string') reject(`Prop ${attr.name} must be a static string literal.`)
-        values[attr.name] = { value: attr.value, range: literalRange(source, attr) }
+        if (seen.has(attr.name)) reject(`Duplicate prop ${attr.name} is ambiguous.`)
+        seen.add(attr.name)
+        const descriptor = byName.get(attr.name)
+        if (!descriptor) continue
+        values[attr.name] = { ...literal(source, attr, descriptor), descriptor }
       }
       return { id, values }
     })
-    return { instances: records.map(({ id, values }) => ({ id, props: Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.value])) })), hash: hashSource(source), records }
+    return { records, hash: hashSource(source) }
   }
-
   return Object.freeze({
+    descriptors,
     inspect(source) {
-      const { instances, hash } = inspect(source)
-      return { instances, hash }
+      const state = inspect(source)
+      return { instances: state.records.map(({ id, values }) => ({ id, props: Object.fromEntries(Object.entries(values).map(([key, item]) => [key, item.value])) })), fields: descriptors, hash: state.hash }
     },
     patch(source, id, prop, value, expectedHash) {
       if (hashSource(source) !== expectedHash) reject('Source changed since preview.', 'STALE_HASH')
-      if (!editableProps.includes(prop) || typeof value !== 'string') reject('Only configured string props can be edited.', 'UNSUPPORTED_VALUE')
-      const { records, hash: currentHash } = inspect(source)
-      const matches = records.filter((record) => record.id === id)
-      if (matches.length !== 1) reject('Target identity is missing or ambiguous.')
+      const descriptor = byName.get(prop)
+      if (!descriptor || !validValue(descriptor, value)) reject('Value violates the trusted component field.', 'UNSUPPORTED_VALUE')
+      const state = inspect(source), matches = state.records.filter((record) => record.id === id)
+      if (matches.length !== 1 || !matches[0].values[prop]) reject('Target identity or configured prop is absent or ambiguous.')
       const target = matches[0].values[prop]
-      if (!target) reject('Configured prop is absent or not statically editable.')
-      if (target.value === value) {
-        return {
-          source,
-          instances: records.map(({ id: instanceId, values }) => ({
-            id: instanceId,
-            props: Object.fromEntries(Object.entries(values).map(([key, item]) => [key, item.value])),
-          })),
-          hash: currentHash,
-          diff: null,
-        }
-      }
-      const before = source.slice(target.range.start, target.range.end)
-      const after = JSON.stringify(value)
+      if (target.value === value) return { source, instances: this.inspect(source).instances, hash: state.hash, diff: null }
+      const before = source.slice(target.range.start, target.range.end), after = target.encode(value)
       const updated = source.slice(0, target.range.start) + after + source.slice(target.range.end)
       const checked = inspect(updated)
       return { source: updated, instances: checked.records.map(({ id: instanceId, values }) => ({ id: instanceId, props: Object.fromEntries(Object.entries(values).map(([key, item]) => [key, item.value])) })), hash: checked.hash, diff: { start: target.range.start, end: target.range.end, before, after } }
     },
   })
-}
-
-function literalRange(source, attribute) {
-  const start = attribute.position?.start?.offset
-  const end = attribute.position?.end?.offset
-  if (!Number.isInteger(start) || !Number.isInteger(end)) reject('Parser did not provide a literal source range.')
-  const raw = source.slice(start, end)
-  const escapedName = String(attribute.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = new RegExp(`^${escapedName}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")$`).exec(raw)
-  if (!match) reject('Only exact JSON-compatible quoted string attribute ranges are supported.')
-  let decoded
-  try { decoded = JSON.parse(match[1]) } catch { reject('Only JSON-compatible quoted string literals are supported.') }
-  if (decoded !== attribute.value) reject('Quoted literal decoding is ambiguous for this MDX parser value.')
-  const literalStart = start + raw.indexOf(match[1])
-  const literalEnd = literalStart + match[1].length
-  return { start: literalStart, end: literalEnd }
 }

@@ -7,6 +7,25 @@ import test from 'node:test'
 import { createEditorServer } from '../src/editor/server.mjs'
 import { writeSourceAtomically } from '../src/editor/source-write.mjs'
 
+test('editor entrypoint accepts only a configured toolbar route ID and health probes require the preview origin', async (t) => {
+  const server = createEditorServer({ port: 0, sitePort: 4321, previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }] })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const configured = await (await fetch(`${origin}/?route=references`)).text()
+  assert.match(configured, /const requestedPreviewRouteId = "references"/)
+  assert.equal(configured.includes('/referenzen/'), true)
+  const unmapped = await (await fetch(`${origin}/?route=not-configured`)).text()
+  assert.match(unmapped, /const requestedPreviewRouteId = null/)
+  assert.equal(unmapped.includes('not-configured'), false)
+  assert.equal((await fetch(`${origin}/?route=references&path=%2Fetc%2Fpasswd`)).status, 404)
+  const allowedHealth = await fetch(`${origin}/api/health`, { headers: { origin: 'http://127.0.0.1:4321' } })
+  assert.equal(allowedHealth.status, 204)
+  assert.equal(allowedHealth.headers.get('access-control-allow-origin'), 'http://127.0.0.1:4321')
+  assert.equal((await fetch(`${origin}/api/health`)).status, 403)
+  assert.equal((await fetch(`${origin}/api/health`, { headers: { origin: 'http://localhost:4321' } })).status, 403)
+})
+
 test('configured MDX target exposes path-free state and requires a matching explicit commit', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'mdx-target-'))
   const file = path.join(root, 'src/page.mdx')

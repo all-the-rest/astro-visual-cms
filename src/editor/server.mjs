@@ -266,9 +266,10 @@ export function createEditorServer({
       throw new TypeError(`mdxComponentTargets must contain at most ${MAX_MDX_COMPONENT_TARGETS} trusted targets.`)
     }
     const targets = mdxComponentTargets.map((target, index) => {
-      const keys = ['id', 'projectRoot', 'filePath', 'importSource', 'idProp', 'editableProps']
+      const keys = ['id', 'projectRoot', 'filePath', 'importSource', 'idProp', 'editableProps', 'fields']
       if (!target || typeof target !== 'object' || Object.keys(target).some((key) => !keys.includes(key)) ||
-          keys.some((key) => !Object.hasOwn(target, key))) throw new TypeError(`Invalid MDX target configuration at index ${index}.`)
+          ['id', 'projectRoot', 'filePath', 'importSource'].some((key) => !Object.hasOwn(target, key)) ||
+          (Object.hasOwn(target, 'editableProps') === Object.hasOwn(target, 'fields'))) throw new TypeError(`Invalid MDX target configuration at index ${index}.`)
       if (typeof target.id !== 'string' || !/^[A-Za-z_$][\w$-]{0,63}$/.test(target.id) ||
           typeof target.projectRoot !== 'string' || !path.isAbsolute(target.projectRoot) ||
           typeof target.filePath !== 'string' || !path.isAbsolute(target.filePath)) throw new TypeError(`Invalid MDX target paths or id at index ${index}.`)
@@ -419,12 +420,31 @@ export function createEditorServer({
       return json(response, 403, { error: 'Only the configured loopback Host is allowed.' })
     }
 
-    if (request.method === 'GET' && request.url === '/') {
+    if (request.method === 'GET' && request.url === '/api/health') {
+      const origin = request.headers.origin
+      if (origin !== siteOrigin) return json(response, 403, { error: 'Only the configured local preview origin is allowed.' })
+      response.writeHead(204, {
+        'access-control-allow-origin': siteOrigin,
+        vary: 'Origin',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+      })
+      return response.end()
+    }
+
+    let editorRequestUrl
+    try { editorRequestUrl = new URL(request.url, editorOrigin()) } catch {}
+    const routeQueryKeys = editorRequestUrl ? [...editorRequestUrl.searchParams.keys()] : []
+    const rootRequest = editorRequestUrl?.pathname === '/' && routeQueryKeys.every((key) => key === 'route') && editorRequestUrl.searchParams.getAll('route').length <= 1
+    if (request.method === 'GET' && rootRequest) {
       const nonce = randomBytes(18).toString('base64url')
+      const requestedRouteId = editorRequestUrl.searchParams.get('route')
+      const initialRouteId = trustedPreviewRoutes.find((route) => route.id === requestedRouteId)?.id || null
       const html = readFileSync(UI_PATH, 'utf8')
         .replaceAll('__SITE_ORIGIN__', siteOrigin)
         .replaceAll('__SITE_BASE_PATH__', safeBasePath)
         .replaceAll('__PREVIEW_ROUTES__', embeddedPreviewRoutes)
+        .replaceAll('__INITIAL_PREVIEW_ROUTE_ID__', JSON.stringify(initialRouteId))
         .replaceAll('__CSP_NONCE__', nonce)
       response.writeHead(200, {
         'content-type': 'text/html; charset=utf-8',
@@ -586,7 +606,7 @@ export function createEditorServer({
             error.code = 'MDX_INSTANCE_LIMIT'
             throw error
           }
-          targets.push({ id: target.id, kind: target.kind || 'component-prop', instances: state.instances, hash: state.hash, supported: true })
+           targets.push({ id: target.id, kind: target.kind || 'component-prop', fields: state.fields, instances: state.instances, hash: state.hash, supported: true })
         } catch (error) {
           const failure = safeMdxFailure(error)
           targets.push({ id: target.id, kind: target.kind || 'component-prop', supported: false, error: failure.error })
@@ -606,7 +626,7 @@ export function createEditorServer({
             typeof payload.targetId !== 'string' || payload.targetId.length > 64 ||
             typeof payload.instanceId !== 'string' || payload.instanceId.length > 512 ||
             typeof payload.prop !== 'string' || payload.prop.length > 64 ||
-            typeof payload.value !== 'string' || payload.value.length > 512 ||
+             !(typeof payload.value === 'string' && payload.value.length <= 512 || typeof payload.value === 'number' && Number.isFinite(payload.value) || typeof payload.value === 'boolean') ||
             !/^[a-f0-9]{64}$/.test(payload.hash) || (!previewing && !/^[a-f0-9]{64}$/.test(payload.previewId))) {
           return json(response, 422, { code: 'INVALID_REQUEST', error: 'Invalid MDX edit operation.' })
         }

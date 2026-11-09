@@ -100,11 +100,13 @@ function assertNoCmsProductionArtifacts() {
 
   const cmsMarkers = [
     'astro-visual-cms-loopback-dev-boundary',
+    'astro-visual-cms-editor',
     'avcms:challenge',
     'avcms:ready',
     'avcms:selection',
     'data-astro-visual-cms-target',
     'id="collections-panel"',
+    'id="mdx-components-panel"',
     'id="collection-diff-confirmation"',
     'http://127.0.0.1:4322',
     '/api/commit',
@@ -118,6 +120,10 @@ function assertNoCmsProductionArtifacts() {
     '/api/collections/config/',
     '/api/collections/preview',
     '/api/collections/commit',
+    '/api/health',
+    '/api/mdx-components',
+    '/api/mdx-components/preview',
+    '/api/mdx-components/commit',
   ]
   const textFiles = files.filter((file) => /\.(?:html|js|mjs|css|json)$/.test(file))
   for (const file of textFiles) {
@@ -167,15 +173,17 @@ try {
   })
   const previewUrl = `http://127.0.0.1:${previewPort}`
   await waitForPage(`${previewUrl}/referenzen/`, 'Street-Show Porec')
-  const cmsApiResponse = await fetch(`${previewUrl}/api/collections`, { signal: AbortSignal.timeout(2_000) })
-  assert.equal(cmsApiResponse.status, 404, 'Ordinary Astro preview must not expose the editor collection API.')
+  for (const endpoint of ['/api/collections', '/api/mdx-components', '/api/health']) {
+    const cmsApiResponse = await fetch(`${previewUrl}${endpoint}`, { signal: AbortSignal.timeout(2_000) })
+    assert.equal(cmsApiResponse.status, 404, `Ordinary Astro preview must not expose ${endpoint}.`)
+  }
 
   console.log(`EXTERNAL_CONSUMER=${CONSUMER_ROOT}`)
   console.log(`TARBALL_INSTALL=PASS; ${packed.filename}`)
   console.log('EDITOR_PROCESS=NOT_STARTED')
   console.log('PRODUCTION_ISOLATION=PASS; no CMS routes, UI, dev bridge, or collection write endpoints in dist')
   console.log('ORDINARY_PREVIEW=PASS; /referenzen/ served real project content with Astro only')
-  console.log('CMS_API_ABSENT=PASS; /api/collections returns 404')
+  console.log('CMS_API_ABSENT=PASS; collection, MDX-component, and health endpoints return 404')
 } finally {
   await stopPreview()
   await stopTemporaryProcesses()

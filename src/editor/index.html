@@ -121,7 +121,7 @@
           <label>Ziel<select id="mdx-target" class="select select-bordered"></select></label>
           <label>Instanz<select id="mdx-instance" class="select select-bordered"></select></label>
           <label>Eigenschaft<select id="mdx-prop" class="select select-bordered"></select></label>
-          <label>Neuer String-Wert<input id="mdx-value" class="input input-bordered" type="text" maxlength="512"></label>
+          <label id="mdx-value-label">Neuer Wert<div id="mdx-value-control"></div></label>
           <button id="mdx-preview-button" class="btn" type="button">Vorschau</button>
           <section id="mdx-confirmation" hidden><h3>Änderung bestätigen</h3><p id="mdx-diff-range"></p>
             <div class="grid gap-4 md:grid-cols-2"><div><h4>Vorher</h4><pre><code id="mdx-diff-before"></code></pre></div><div><h4>Nachher</h4><pre><code id="mdx-diff-after"></code></pre></div></div>
@@ -168,7 +168,9 @@
         ...route,
         url: `${siteOrigin}${siteBasePath}${route.path.slice(1)}`,
       }]));
-      let selectedPreviewRouteId = previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id;
+       let selectedPreviewRouteId = previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id;
+       const requestedPreviewRouteId = __INITIAL_PREVIEW_ROUTE_ID__;
+      if (requestedPreviewRouteId && previewRoutes.has(requestedPreviewRouteId)) selectedPreviewRouteId = requestedPreviewRouteId;
       for (const route of configuredPreviewRoutes) {
         const button = document.createElement('button');
         button.className = 'btn btn-sm';
@@ -222,7 +224,7 @@
       const mdxReason = document.querySelector('#mdx-reason');
       const mdxInstance = document.querySelector('#mdx-instance');
       const mdxProp = document.querySelector('#mdx-prop');
-      const mdxValue = document.querySelector('#mdx-value');
+      let mdxValue = null;
       const mdxConfirmation = document.querySelector('#mdx-confirmation');
       let selectedGalleryId = '';
       let selectedCollectionId = '';
@@ -261,10 +263,26 @@
         const supported = target?.supported ? target.instances || [] : [];
         const instance = supported.find((item) => item.id === mdxInstance.value) || supported[0];
         mdxFill(mdxInstance, supported.map((item) => item.id), instance?.id, 'MDX-Instanz');
-        const props = Object.keys(instance?.props || {});
+        const descriptors = target?.fields || Object.keys(instance?.props || {}).map((name) => ({ name, type: 'string' }));
+        const props = descriptors.filter((field) => Object.hasOwn(instance?.props || {}, field.name)).map((field) => field.name);
         mdxFill(mdxProp, props, mdxProp.value, 'Bearbeitbare MDX-Eigenschaft');
-        if (instance && Object.hasOwn(instance.props, mdxProp.value)) mdxValue.value = instance.props[mdxProp.value];
-        for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue, document.querySelector('#mdx-preview-button')]) control.disabled = busy() || !supported.length || mdxSelectionReadOnly;
+        const descriptor = descriptors.find((field) => field.name === mdxProp.value);
+        const selectedPropEditable = Boolean(instance && Object.hasOwn(instance.props, mdxProp.value));
+        const controlHost = document.querySelector('#mdx-value-control');
+        const control = document.createElement(descriptor?.type === 'enum' ? 'select' : descriptor?.type === 'boolean' ? 'input' : 'input');
+        control.id = 'mdx-value'; control.className = descriptor?.type === 'enum' ? 'select select-bordered' : 'input input-bordered';
+        if (descriptor?.type === 'enum') for (const item of descriptor.values || []) { const option = document.createElement('option'); option.value = item; option.textContent = item; control.append(option); }
+        else if (descriptor?.type === 'boolean') control.type = 'checkbox';
+        else if (descriptor?.type === 'number') { control.type = 'number'; if (descriptor.min !== undefined) control.min = descriptor.min; if (descriptor.max !== undefined) control.max = descriptor.max; if (descriptor.step !== undefined) control.step = descriptor.step; }
+        else { control.type = 'text'; control.maxLength = 512; }
+        control.setAttribute('aria-label', descriptor?.label || descriptor?.name || 'Neuer Wert');
+        controlHost.replaceChildren(control); mdxValue = control;
+        document.querySelector('#mdx-value-label').firstChild.textContent = `${descriptor?.label || descriptor?.name || 'Neuer Wert'} `;
+        if (instance && Object.hasOwn(instance.props, mdxProp.value)) {
+          if (descriptor?.type === 'boolean') mdxValue.checked = instance.props[mdxProp.value];
+          else mdxValue.value = instance.props[mdxProp.value];
+        }
+        for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue, document.querySelector('#mdx-preview-button')]) control.disabled = busy() || !supported.length || !selectedPropEditable || mdxSelectionReadOnly;
         mdxConfirmation.hidden = !pendingMdxPreview;
         document.querySelector('#mdx-confirm-button').disabled = saving || !pendingMdxPreview;
         document.querySelector('#mdx-cancel-button').disabled = saving || !pendingMdxPreview;
@@ -686,15 +704,20 @@
 
       async function load() {
         await refreshSession();
-        const response = await fetch('/api/state', { cache: 'no-store' });
-        if (!response.ok) throw new Error(`Status ${response.status}`);
-        current = await response.json();
-        const collectionResponse = await fetch('/api/collections', { cache: 'no-store' });
-        if (!collectionResponse.ok) throw new Error(`Collections ${collectionResponse.status}`);
-        collectionState = await collectionResponse.json();
-        const mdxResponse = await fetch('/api/mdx-components', { cache: 'no-store' });
-        if (!mdxResponse.ok) throw new Error(`MDX-Komponenten ${mdxResponse.status}`);
-        mdxState = await mdxResponse.json();
+        const unavailable = [];
+        const loadPanelState = async (endpoint, label, fallback) => {
+          try {
+            const response = await fetch(endpoint, { cache: 'no-store' });
+            if (!response.ok) throw new Error(String(response.status));
+            return await response.json();
+          } catch (error) {
+            unavailable.push(`${label} (${error.message})`);
+            return fallback;
+          }
+        };
+        current = await loadPanelState('/api/state', 'Galerie-Fixture', { galleries: [], hash: '' });
+        collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
+        mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
         if (!collectionState.configured) collectionState.collections = [];
         if (!selectedCollection()) {
           selectedCollectionId = collectionState.collections?.[0]?.id || '';
@@ -706,7 +729,9 @@
         render();
         renderMdx();
         navigatePreview(selectedPreviewRouteId);
-        status('Fixture geladen. Wähle eine Galerie zum Sortieren.', 'success');
+        status(unavailable.length
+          ? `Teilweise geladen: ${unavailable.join(', ')}. Andere konfigurierte Bereiche bleiben verfügbar.`
+          : 'Fixture geladen. Wähle eine Galerie zum Sortieren.', unavailable.length ? 'warning' : 'success');
       }
 
       async function move(galleryId, index, delta) {
@@ -731,7 +756,10 @@
         const instance = target?.instances?.find((item) => item.id === mdxInstance.value);
         const prop = mdxProp.value;
         if (!target?.supported || !instance || !Object.hasOwn(instance.props, prop) || mdxValue.value.length > 512) return;
-        const operation = { targetId: target.id, instanceId: instance.id, prop, value: mdxValue.value, hash: target.hash };
+        const descriptor = target.fields?.find((field) => field.name === prop);
+        const value = descriptor?.type === 'boolean' ? mdxValue.checked : descriptor?.type === 'number' ? (mdxValue.value === '' ? Number.NaN : Number(mdxValue.value)) : mdxValue.value;
+        if (descriptor?.type === 'number' && !Number.isFinite(value)) { status('Bitte einen gültigen Zahlenwert eingeben.', 'warning'); return; }
+        const operation = { targetId: target.id, instanceId: instance.id, prop, value, hash: target.hash };
         saving = true; renderMdx(); status('MDX-Änderung wird vorbereitet …');
         try {
           const response = await postOperation('/api/mdx-components/preview', operation);

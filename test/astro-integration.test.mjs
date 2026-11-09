@@ -31,6 +31,7 @@ test('Astro base paths normalize safely and reject traversal, query, and hash va
 test('loopback integration only changes Astro dev configuration, never build or preview', () => {
   assert.throws(() => createLoopbackDevIntegration({ editorPort: '0' }), TypeError)
   assert.throws(() => createLoopbackDevIntegration({ editorPort: 'not-a-port' }), TypeError)
+  assert.throws(() => createLoopbackDevIntegration({ previewRoutes: [{ id: '../bad', path: '/safe/' }] }), TypeError)
   const integration = createLoopbackDevIntegration()
   assert.equal(integration.name, 'astro-visual-cms-loopback-dev-boundary')
   assert.deepEqual(Object.keys(integration.hooks), ['astro:config:setup'])
@@ -38,12 +39,18 @@ test('loopback integration only changes Astro dev configuration, never build or 
   const updates = []
   const injected = []
 
-  const args = (command) => ({ command, updateConfig: (config) => updates.push(config), injectScript: (...values) => injected.push(values) })
+  const toolbarApps = []
+  const args = (command) => ({ command, updateConfig: (config) => updates.push(config), injectScript: (...values) => injected.push(values), addDevToolbarApp: (app) => toolbarApps.push(app) })
   hook(args('dev'))
   hook(args('build'))
   hook(args('preview'))
   assert.deepEqual(updates, [{ server: { host: '127.0.0.1' } }])
   assert.equal(injected.length, 1)
+  assert.equal(toolbarApps.length, 1)
+  assert.equal(toolbarApps[0].name, 'Seite bearbeiten')
+  const appUrl = new URL(toolbarApps[0].entrypoint)
+  assert.equal(appUrl.searchParams.get('port'), '4322')
+  assert.deepEqual(JSON.parse(appUrl.searchParams.get('routes')), [])
   assert.equal(injected[0][0], 'page')
   assert.match(injected[0][1], /127\.0\.0\.1:4322/)
   assert.match(injected[0][1], /avcms:ready/)
@@ -53,6 +60,11 @@ test('loopback integration only changes Astro dev configuration, never build or 
     command: 'dev', updateConfig() {}, injectScript: (...values) => customPort.push(values),
   })
   assert.match(customPort[0][1], /127\.0\.0\.1:15432/)
+  const mappedApps = []
+  createLoopbackDevIntegration({ previewRoutes: [{ id: 'about', label: 'Über uns', path: '/about/' }] }).hooks['astro:config:setup']({
+    command: 'dev', updateConfig() {}, injectScript() {}, addDevToolbarApp: (app) => mappedApps.push(app),
+  })
+  assert.deepEqual(JSON.parse(new URL(mappedApps[0].entrypoint).searchParams.get('routes')), [{ id: 'about', path: '/about/', label: 'Über uns' }])
 
   const markdownIntegration = createLoopbackDevIntegration({
     markdownParagraphTargets: [{ id: 'note', instanceId: 'paragraph-one', filePath: path.join(ROOT, 'src/pages/fixture.mdx') }],

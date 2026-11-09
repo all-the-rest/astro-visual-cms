@@ -46,9 +46,40 @@ test('the local JSX binding is taken from the trusted default-import alias', () 
   assert.equal(result.source, aliasSource.replace('title="Old"', 'title="New"'))
 })
 
-test('rejects stale hashes and unknown props', () => {
+test('rejects stale writes while preserving unconfigured component props unchanged', () => {
   const { hash } = adapter.inspect(source)
   assert.throws(() => adapter.patch(source, 'one', 'title', 'New', '0'.repeat(64)), { code: 'STALE_HASH' })
-  assert.throws(() => adapter.inspect(source.replace(' title="Old"', ' other="x"')))
+  const withOpaqueProps = source.replace('<Card id=', '<Card className="hero" active={isReady} id=')
+  const opaqueState = adapter.inspect(withOpaqueProps)
+  const result = adapter.patch(withOpaqueProps, 'one', 'title', 'New', opaqueState.hash)
+  assert.equal(result.source, withOpaqueProps.replace('title="Old"', 'title="New"'))
+  assert.throws(() => adapter.inspect(withOpaqueProps.replace(' active={isReady}', ' active={isReady} active={false}')))
   assert.equal(hash.length, 64)
+})
+
+test('typed static scalar fields patch only their literal and enforce trusted bounds and choices', () => {
+  const typed = createMdxPropsAdapter({ importSource: '../components/Card.astro', fields: [
+    { name: 'title', type: 'string', label: 'Title' },
+    { name: 'rank', type: 'number', min: 1, max: 5, step: 1 },
+    { name: 'enabled', type: 'boolean' },
+    { name: 'tone', type: 'enum', values: ['quiet', 'loud'] },
+  ] })
+  const input = `import Card from '../components/Card.astro'\n\n<Card id="typed" title="Old" rank={2} enabled={true} tone="quiet" />\n`
+  const original = typed.inspect(input)
+  assert.deepEqual(original.instances[0].props, { title: 'Old', rank: 2, enabled: true, tone: 'quiet' })
+  for (const [prop, value, before, after] of [
+    ['title', 'New', '"Old"', '"New"'], ['rank', 4, '{2}', '{4}'], ['enabled', false, '{true}', '{false}'], ['tone', 'loud', '"quiet"', '"loud"'],
+  ]) {
+    const result = typed.patch(input, 'typed', prop, value, original.hash)
+    assert.equal(result.source, input.replace(before, after))
+    assert.equal(result.diff.before, before)
+    assert.equal(input.slice(0, result.diff.start) + result.diff.after + input.slice(result.diff.end), result.source)
+  }
+  assert.throws(() => typed.patch(input, 'typed', 'rank', 6, original.hash), { code: 'UNSUPPORTED_VALUE' })
+  assert.throws(() => typed.patch(input, 'typed', 'tone', 'wild', original.hash), { code: 'UNSUPPORTED_VALUE' })
+  const decimal = createMdxPropsAdapter({ importSource: '../components/Card.astro', fields: [{ name: 'opacity', type: 'number', min: 0, max: 1, step: 0.1 }] })
+  const decimalInput = `import Card from '../components/Card.astro'\n\n<Card id="decimal" opacity={0.2} />`
+  const decimalState = decimal.inspect(decimalInput)
+  assert.equal(decimal.patch(decimalInput, 'decimal', 'opacity', 0.3, decimalState.hash).source, decimalInput.replace('opacity={0.2}', 'opacity={0.3}'))
+  assert.throws(() => createMdxPropsAdapter({ importSource: './Card.astro', fields: [{ name: 'n', type: 'number', min: 3, max: 1 }] }), { code: 'INVALID_ADAPTER_CONFIG' })
 })

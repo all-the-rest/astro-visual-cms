@@ -103,6 +103,27 @@ read-only. Writer lifecycle limitations described above still apply; do not use
 this with real content or treat it as production-ready, and make no readiness
 claim. JavaScript shadowing and every MDX binding ambiguity are not resolved.
 
+Typed component fields may instead be configured explicitly:
+
+```json
+{"mdxComponentTargets":[{"id":"home-hero","projectRoot":".","filePath":"src/content/home.mdx","importSource":"../../components/Hero.astro","idProp":"cmsId","fields":[{"name":"heading","type":"string","label":"Heading"},{"name":"priority","type":"number","min":1,"max":5,"step":1},{"name":"visible","type":"boolean"},{"name":"tone","type":"enum","values":["light","dark"]}]}]}
+```
+
+Legacy `editableProps: ["heading"]` remains a string-only shorthand. Strings
+must be quoted literals; number/boolean values must be simple JSX literals
+(`{12}`, `{true}`, `{false}`); enums must be quoted members of the configured
+choice list. Unconfigured props (including dynamic expressions) stay opaque and
+byte-preserved; only declared fields can be edited. Spreads, duplicate
+attributes/IDs, and dynamic values for declared fields remain read-only;
+component and MDX code is never evaluated.
+
+The optional toolbar launcher uses
+`createLoopbackDevIntegration({ editorPort: 4322, previewRoutes: [{ id: "home", path: "/" }, { id: "about", path: "/about/" }] })`.
+It registers `Seite bearbeiten` only in dev. An exact trusted pathname match
+sends only its route ID to the local editor; unmapped paths use the default,
+and the preview stays open. Start the editor separately on the configured port.
+URLs contain neither source paths nor session credentials.
+
 `pnpm run browser-tests:readonly` separately runs a browser acceptance check in
 a temporary copy of this tracked Astro project (with repo-local dependencies
 linked, no install/network). It introduces duplicate static IDs in that copy and
