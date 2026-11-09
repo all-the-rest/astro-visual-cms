@@ -181,6 +181,7 @@
         previewNavigation.append(button);
       }
       let current = { galleries: [], hash: '' };
+      let astroGalleryState = { configured: false, targets: [] };
       let collectionState = { configured: false, collections: [] };
       let mdxState = { configured: false, targets: [] };
       let mdxSelectionReadOnly = false;
@@ -568,7 +569,7 @@
           const button = document.createElement('button');
           button.className = 'btn btn-sm';
           button.type = 'button';
-          button.textContent = gallery.id;
+          button.textContent = gallery.kind === 'astro-internal-gallery' ? `${gallery.id} · Astro` : gallery.id;
           button.dataset.galleryId = gallery.id;
           button.setAttribute('aria-pressed', String(gallery.id === selectedGalleryId));
           button.disabled = busy();
@@ -716,6 +717,8 @@
           }
         };
         current = await loadPanelState('/api/state', 'Galerie-Fixture', { galleries: [], hash: '' });
+        astroGalleryState = await loadPanelState('/api/astro-galleries', 'Astro-interne Galerien', { configured: false, targets: [] });
+        current.galleries = [...(current.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astroGalleryState.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
         collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
         mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
         if (!collectionState.configured) collectionState.collections = [];
@@ -802,8 +805,12 @@
         render();
         status(`Änderung für ${galleryId} wird vorbereitet …`);
         try {
-          const operation = { hash: current.hash, galleryId, order };
-          const response = await postOperation('/api/preview', operation);
+          const operation = gallery.kind === 'astro-internal-gallery'
+            ? { targetId: galleryId, hash: gallery.hash, order, kind: gallery.kind }
+            : { hash: current.hash, galleryId, order, kind: 'fixture' };
+          const response = gallery.kind === 'astro-internal-gallery'
+            ? await postOperation('/api/astro-galleries/preview', { targetId: operation.targetId, hash: operation.hash, order })
+            : await postOperation('/api/preview', { hash: operation.hash, galleryId, order });
           const result = await response.json();
           if (!response.ok) {
             const error = new Error(result.error || `Status ${response.status}`);
@@ -984,12 +991,9 @@
         status('Bestätigte Änderung wird atomar gespeichert …');
         let saved = false;
         try {
-          const response = await postOperation('/api/commit', {
-            previewId: operation.previewId,
-            galleryId: operation.galleryId,
-            order: operation.order,
-            hash: operation.hash,
-          });
+          const response = operation.kind === 'astro-internal-gallery'
+            ? await postOperation('/api/astro-galleries/commit', { previewId: operation.previewId, targetId: operation.targetId, order: operation.order, hash: operation.hash })
+            : await postOperation('/api/commit', { previewId: operation.previewId, galleryId: operation.galleryId, order: operation.order, hash: operation.hash });
           const result = await response.json();
           if (!response.ok) {
             const error = new Error(result.error || `Status ${response.status}`);
@@ -997,10 +1001,16 @@
             throw error;
           }
           pendingPreview = null;
-          current = result;
+          if (operation.kind !== 'astro-internal-gallery') current = result;
           focusImageSlugAfterRender = operation.focusSlug;
           saved = true;
           render();
+          if (operation.kind === 'astro-internal-gallery') {
+            await load();
+            status('Astro-Galerie gespeichert; Astro-HMR aktualisiert die Vorschau.', 'success');
+            saved = true;
+            return;
+          }
           status('Gespeichert. Prüfe, ob Astro alle Galerien neu gerendert hat …');
           const readyResponse = await fetch(`/api/preview-ready?hash=${encodeURIComponent(current.hash)}`, { cache: 'no-store' });
           const ready = await readyResponse.json();

@@ -12,6 +12,7 @@ import { createSourceExclusively, writeSourceAtomically } from './source-write.m
 import { createMdxPropsAdapter } from '../lib/mdx-props-patch.mjs'
 import { createMarkdownParagraphAdapter } from '../lib/markdown-paragraph-map.mjs'
 import { lstatSync, realpathSync } from 'node:fs'
+import { createAstroGalleryAdapter } from '../lib/astro-gallery-patch.mjs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURE_PATH = path.join(PROJECT_ROOT, 'src/pages/fixture.mdx')
@@ -241,6 +242,7 @@ export function createEditorServer({
   contentConfigPath,
   mdxComponentTargets,
   mdxParagraphTargets,
+  astroGalleryTargets = [],
   previewRoutes = DEFAULT_PREVIEW_ROUTES,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
@@ -309,6 +311,66 @@ export function createEditorServer({
   const mdxTargets = [...componentTargets, ...paragraphTargets]
   if (new Set(mdxTargets.map((target) => target.id)).size !== mdxTargets.length) throw new TypeError('MDX target ids must be unique.')
   const pendingMdxPreviews = new Map()
+  if (!Array.isArray(astroGalleryTargets) || astroGalleryTargets.length > 16) throw new TypeError('astroGalleryTargets must contain at most 16 trusted targets.')
+  const astroTargets = astroGalleryTargets.map((target) => {
+    const allowed = ['id', 'projectRoot', 'filePath', 'variableName', 'identityProperty', 'labelProperty']
+    if (!target || typeof target !== 'object' || Array.isArray(target) ||
+        Object.keys(target).some((key) => !allowed.includes(key)) ||
+        !['id', 'projectRoot', 'filePath', 'variableName'].every((key) => Object.hasOwn(target, key)) ||
+        typeof target.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(target.id) ||
+        typeof target.projectRoot !== 'string' || !path.isAbsolute(target.projectRoot) ||
+        typeof target.filePath !== 'string' || !path.isAbsolute(target.filePath) ||
+        !path.resolve(target.filePath).startsWith(`${path.resolve(target.projectRoot)}${path.sep}`)) {
+      throw new TypeError('Invalid trusted Astro gallery target.')
+    }
+    const root = path.resolve(target.projectRoot)
+    const file = path.resolve(target.filePath)
+    if (realpathSync(root) !== root || lstatSync(root).isSymbolicLink()) throw new TypeError('Astro gallery root must be canonical.')
+    const adapter = createAstroGalleryAdapter(target)
+    return { id: target.id, root, file, adapter }
+  })
+  if (new Set(astroTargets.map((t) => t.id)).size !== astroTargets.length ||
+      new Set([...mdxTargets, ...astroTargets].map((t) => t.id)).size !== mdxTargets.length + astroTargets.length) {
+    throw new TypeError('Configured target ids must be unique.')
+  }
+  function readAstroTarget(target) {
+    let current = target.root
+    for (const part of path.relative(target.root, target.file).split(path.sep)) {
+      current = path.join(current, part)
+      const stat = lstatSync(current)
+      if (stat.isSymbolicLink()) throw Object.assign(new Error('Symlink target rejected.'), { code: 'UNSAFE_MDX_PATH' })
+    }
+    const stat = lstatSync(target.file)
+    if (!stat.isFile() || realpathSync(target.file) !== target.file) {
+      throw Object.assign(new Error('Unsafe target.'), { code: 'UNSAFE_MDX_PATH' })
+    }
+    if (stat.size > MAX_MDX_SOURCE_BYTES) throw Object.assign(new Error('Configured Astro target exceeds the safe source size limit.'), { code: 'MDX_SOURCE_LIMIT' })
+    const bytes = readFileSync(target.file)
+    if (bytes.length > MAX_MDX_SOURCE_BYTES) throw Object.assign(new Error('Configured Astro target exceeds the safe source size limit.'), { code: 'MDX_SOURCE_LIMIT' })
+    const source = bytes.toString('utf8')
+    if (!Buffer.from(source, 'utf8').equals(bytes)) throw Object.assign(new Error('Configured Astro target is not valid UTF-8.'), { code: 'UNSUPPORTED_ENCODING' })
+    return source
+  }
+  function safeAstroGalleryFailure(error) {
+    const allowedCodes = ['STALE_HASH', 'UNSAFE_MDX_PATH', 'UNSUPPORTED_COMMENT', 'UNSUPPORTED_DYNAMIC_VALUE', 'UNSUPPORTED_SYNTAX', 'UNSUPPORTED_TARGET', 'UNSUPPORTED_VALUE', 'UNSUPPORTED_OUTPUT']
+    const code = allowedCodes.includes(error?.code)
+      ? error.code
+        : error?.code === 'MDX_SOURCE_LIMIT' || error?.code === 'UNSUPPORTED_ENCODING'
+        ? error.code
+        : 'ASTRO_GALLERY_EDIT_FAILED'
+    const message = code === 'UNSAFE_MDX_PATH'
+      ? 'Configured Astro gallery is not available as a safe in-root file.'
+      : code === 'MDX_SOURCE_LIMIT'
+        ? 'Configured Astro gallery exceeds the safe source size limit.'
+        : code === 'UNSUPPORTED_ENCODING'
+          ? 'Configured Astro gallery is not valid UTF-8 source.'
+          : code === 'STALE_HASH'
+            ? 'The Astro gallery source changed; reload and prepare the edit again.'
+            : code.startsWith('UNSUPPORTED_')
+              ? error.message
+              : 'Astro gallery edit could not be completed safely.'
+    return { code, error: message }
+  }
 
   function assertMdxTargetSafe(root, file) {
     const relative = path.relative(root, file)
@@ -595,6 +657,40 @@ export function createEditorServer({
       }
     }
 
+    if (request.method === 'GET' && request.url === '/api/astro-galleries') {
+      const targets = astroTargets.map((target) => {
+        try {
+          return { id: target.id, kind: 'astro-internal-gallery', ...target.adapter.inspect(readAstroTarget(target)), supported: true }
+        } catch (error) {
+          return { id: target.id, kind: 'astro-internal-gallery', supported: false, ...safeAstroGalleryFailure(error) }
+        }
+      })
+      return json(response, 200, { configured: astroTargets.length > 0, targets })
+    }
+    if (request.method === 'POST' && ['/api/astro-galleries/preview', '/api/astro-galleries/commit'].includes(request.url)) {
+      if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      try {
+        const payload = await readJson(request), previewing = request.url.endsWith('/preview')
+        const keys = previewing ? ['targetId', 'order', 'hash'] : ['previewId', 'targetId', 'order', 'hash']
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== keys.length || Object.keys(payload).some((k) => !keys.includes(k)) || typeof payload.targetId !== 'string' || !Array.isArray(payload.order) || payload.order.length > 100 || payload.order.some((v) => typeof v !== 'string') || !/^[a-f0-9]{64}$/.test(payload.hash) || (!previewing && !/^[a-f0-9]{64}$/.test(payload.previewId))) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Invalid Astro gallery operation.' })
+        const target = astroTargets.find((t) => t.id === payload.targetId)
+        if (!target) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Unknown configured target.' })
+        const operation = { targetId: target.id, order: payload.order, hash: payload.hash }
+        const prepare = () => { const result = target.adapter.patch(readAstroTarget(target), payload.order, payload.hash); return result }
+        if (previewing) { const result = prepare(); if (!result.diff) return json(response, 200, { diff: null, hash: result.hash }); prunePreviews(); const id = previewId(); pendingMdxPreviews.set(id, { kind: 'astro-gallery', operation, diff: result.diff, nextHash: result.hash, sessionToken: request.headers['x-editor-token'], expiresAt: Date.now() + PREVIEW_TTL_MS }); return json(response, 200, { previewId: id, diff: result.diff, hash: payload.hash, nextHash: result.hash }) }
+        prunePreviews(); const pending = pendingMdxPreviews.get(payload.previewId)
+        if (!pending || pending.kind !== 'astro-gallery' || pending.expiresAt <= Date.now()) return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired.' })
+        if (pending.sessionToken !== request.headers['x-editor-token']) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to another session.' })
+        pendingMdxPreviews.delete(payload.previewId)
+        if (JSON.stringify(operation) !== JSON.stringify(pending.operation)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit differs from preview.' })
+        const result = prepare(); if (!result.diff || result.hash !== pending.nextHash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Source no longer matches preview.' })
+        readAstroTarget(target); await writeSource(target.file, payload.hash, result.source)
+        return json(response, 200, { targetId: target.id, hash: result.hash })
+      } catch (error) {
+        const failure = safeAstroGalleryFailure(error)
+        return json(response, failure.code === 'STALE_HASH' ? 409 : 422, failure)
+      }
+    }
     if (request.method === 'GET' && request.url === '/api/mdx-components') {
       if (request.headers.origin && request.headers.origin !== editorOrigin()) return json(response, 403, { error: 'Only the editor origin is allowed.' })
       const targets = []

@@ -95,7 +95,7 @@ function assertNoCmsProductionArtifacts() {
   assert.ok(files.some((file) => file.endsWith('.html')), 'Production build must emit ordinary Astro HTML pages.')
 
   const relativeFiles = files.map((file) => path.relative(distRoot, file).replaceAll(path.sep, '/'))
-  const cmsRoutes = relativeFiles.filter((file) => /(?:^|\/)(?:editor|api\/(?:collections|commit|preview|preview-ready|reorder|session|state))(?:\/|\.|$)/i.test(file))
+  const cmsRoutes = relativeFiles.filter((file) => /(?:^|\/)(?:editor|api\/(?:astro-galleries|collections|commit|preview|preview-ready|reorder|session|state))(?:\/|\.|$)/i.test(file))
   assert.deepEqual(cmsRoutes, [], 'Production output must not contain CMS UI or write/API routes.')
 
   const cmsMarkers = [
@@ -120,6 +120,9 @@ function assertNoCmsProductionArtifacts() {
     '/api/collections/config/',
     '/api/collections/preview',
     '/api/collections/commit',
+    '/api/astro-galleries',
+    '/api/astro-galleries/preview',
+    '/api/astro-galleries/commit',
     '/api/health',
     '/api/mdx-components',
     '/api/mdx-components/preview',
@@ -173,7 +176,7 @@ try {
   })
   const previewUrl = `http://127.0.0.1:${previewPort}`
   await waitForPage(`${previewUrl}/referenzen/`, 'Street-Show Porec')
-  for (const endpoint of ['/api/collections', '/api/mdx-components', '/api/health']) {
+  for (const endpoint of ['/api/collections', '/api/mdx-components', '/api/astro-galleries', '/api/health']) {
     const cmsApiResponse = await fetch(`${previewUrl}${endpoint}`, { signal: AbortSignal.timeout(2_000) })
     assert.equal(cmsApiResponse.status, 404, `Ordinary Astro preview must not expose ${endpoint}.`)
   }
@@ -183,7 +186,7 @@ try {
   console.log('EDITOR_PROCESS=NOT_STARTED')
   console.log('PRODUCTION_ISOLATION=PASS; no CMS routes, UI, dev bridge, or collection write endpoints in dist')
   console.log('ORDINARY_PREVIEW=PASS; /referenzen/ served real project content with Astro only')
-  console.log('CMS_API_ABSENT=PASS; collection, MDX-component, and health endpoints return 404')
+  console.log('CMS_API_ABSENT=PASS; collection, MDX-component, Astro-gallery, and health endpoints return 404')
 } finally {
   await stopPreview()
   await stopTemporaryProcesses()

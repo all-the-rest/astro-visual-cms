@@ -20,6 +20,11 @@ export async function startEditorServer({ configPath = process.env.AVCMS_CONFIG 
     const root = path.resolve(configDirectory, target.projectRoot ?? projectRoot ?? '.')
     return { ...target, projectRoot: root, ...(typeof target.filePath === 'string' ? { filePath: path.resolve(root, target.filePath) } : {}) }
   }) : targets
+  const astroGalleryTargets = Array.isArray(options.astroGalleryTargets) ? options.astroGalleryTargets.map((target) => {
+    if (!target || typeof target !== 'object') return target
+    const root = path.resolve(configDirectory, target.projectRoot ?? projectRoot ?? '.')
+    return { ...target, projectRoot: root, filePath: path.resolve(root, target.filePath) }
+  }) : options.astroGalleryTargets
   const server = createEditorServer({
     ...options,
     ...(projectRoot ? { projectRoot } : {}),
@@ -27,6 +32,7 @@ export async function startEditorServer({ configPath = process.env.AVCMS_CONFIG 
     fixturePath,
     ...(options.mdxComponentTargets !== undefined ? { mdxComponentTargets: resolveTargets(options.mdxComponentTargets) } : {}),
     ...(options.mdxParagraphTargets !== undefined ? { mdxParagraphTargets: resolveTargets(options.mdxParagraphTargets) } : {}),
+    ...(astroGalleryTargets !== undefined ? { astroGalleryTargets } : {}),
   })
   const port = Number(options.port ?? process.env.EDITOR_PORT ?? 4322)
   await new Promise((resolve, reject) => {

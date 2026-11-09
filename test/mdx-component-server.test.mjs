@@ -61,6 +61,73 @@ test('configured MDX target exposes path-free state and requires a matching expl
   assert.equal(writeCalls, 1)
 })
 
+test('Astro internal gallery endpoint enforces preview session, exact replay, stale hash, and writes only on confirmation', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'astro-gallery-target-'))
+  const file = path.join(root, 'src/Galerie.astro')
+  const source = `---\ntype Image = { name: string; alt: string };\nconst imageNames: Image[] = [\n  { name: "a", alt: "A" },\n  { name: "b", alt: "B" },\n]\n---\n`
+  await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, source)
+  t.after(() => rm(root, { recursive: true, force: true }))
+  let writes = 0
+  const server = createEditorServer({ port: 0, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async (...args) => { writes++; return writeSourceAtomically(...args) } })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise((resolve) => server.close(resolve)))
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const token = async () => (await (await fetch(`${origin}/api/session`)).json()).token
+  const headers = (value) => ({ origin, 'content-type': 'application/json', 'x-editor-token': value })
+  const state = await (await fetch(`${origin}/api/astro-galleries`)).json()
+  assert.deepEqual(state.targets[0].order, ['a', 'b'])
+  const op = { targetId: 'gal', order: ['b', 'a'], hash: state.targets[0].hash }
+  const preview = await (await fetch(`${origin}/api/astro-galleries/preview`, { method: 'POST', headers: headers(await token()), body: JSON.stringify(op) })).json()
+  const foreign = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(await token()), body: JSON.stringify({ ...op, previewId: preview.previewId }) })
+  assert.equal(foreign.status, 409); assert.equal((await foreign.json()).code, 'PREVIEW_SESSION_MISMATCH')
+  const session = (await (await fetch(`${origin}/api/session`)).json()).token
+  const own = await (await fetch(`${origin}/api/astro-galleries/preview`, { method: 'POST', headers: headers(session), body: JSON.stringify(op) })).json()
+  const mismatch = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...op, order: ['a', 'b'], previewId: own.previewId }) })
+  assert.equal(mismatch.status, 409); assert.equal((await readFile(file, 'utf8')), source)
+  const stalePreview = await (await fetch(`${origin}/api/astro-galleries/preview`, { method: 'POST', headers: headers(session), body: JSON.stringify(op) })).json()
+  await writeFile(file, source.replace('alt: "A"', 'alt: "External"'))
+  const stale = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...op, previewId: stalePreview.previewId }) })
+  assert.equal(stale.status, 409); assert.equal(writes, 0)
+  const latest = await (await fetch(`${origin}/api/astro-galleries`)).json()
+  const freshOp = { ...op, hash: latest.targets[0].hash }
+  const fresh = await (await fetch(`${origin}/api/astro-galleries/preview`, { method: 'POST', headers: headers(session), body: JSON.stringify(freshOp) })).json()
+  const commit = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...freshOp, previewId: fresh.previewId }) })
+  assert.equal(commit.status, 200); assert.equal(writes, 1)
+  const committedBytes = await readFile(file, 'utf8')
+  const replay = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...freshOp, previewId: fresh.previewId }) })
+  assert.equal(replay.status, 409); assert.equal(await readFile(file, 'utf8'), committedBytes); assert.equal(writes, 1)
+})
+
+test('Astro target configuration and source safety fail closed', async (t) => {
+  assert.throws(() => createEditorServer({ astroGalleryTargets: Array.from({ length: 17 }, (_, i) => ({ id: `g${i}`, projectRoot: '/tmp', filePath: '/tmp/a.astro', variableName: 'images' })) }), /at most 16/)
+  const root = await mkdtemp(path.join(tmpdir(), 'astro-gallery-safe-')); t.after(() => rm(root, { recursive: true, force: true }))
+  const file = path.join(root, 'a.astro'), target = { id: 'gal', projectRoot: root, filePath: file, variableName: 'images' }
+  assert.throws(() => createEditorServer({ astroGalleryTargets: [{ ...target, untrusted: true }] }), /Invalid trusted Astro/)
+  await writeFile(file, '---\nconst images = [{ name: "a", alt: "A" }]\n---\n')
+  const link = path.join(root, 'link.astro'); await symlink(file, link)
+  const linkedServer = createEditorServer({ port: 0, astroGalleryTargets: [{ ...target, filePath: link }] })
+  await new Promise((resolve) => linkedServer.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise((resolve) => linkedServer.close(resolve)))
+  const linkedOrigin = `http://127.0.0.1:${linkedServer.address().port}`
+  const linked = await (await fetch(`${linkedOrigin}/api/astro-galleries`)).json()
+  assert.equal(linked.targets[0].supported, false)
+  const linkedToken = (await (await fetch(`${linkedOrigin}/api/session`)).json()).token
+  const unsafePreview = await fetch(`${linkedOrigin}/api/astro-galleries/preview`, {
+    method: 'POST',
+    headers: { origin: linkedOrigin, 'content-type': 'application/json', 'x-editor-token': linkedToken },
+    body: JSON.stringify({ targetId: 'gal', order: ['a'], hash: '0'.repeat(64) }),
+  })
+  assert.equal(unsafePreview.status, 422)
+  const unsafeBody = await unsafePreview.json()
+  assert.equal(unsafeBody.code, 'UNSAFE_MDX_PATH')
+  assert.equal(JSON.stringify(unsafeBody).includes(root), false)
+  await rm(link)
+  await writeFile(file, Buffer.from([0xff, 0xfe]))
+  const badEncoding = await (await fetch(`http://127.0.0.1:${linkedServer.address().port}/api/astro-galleries`)).json()
+  assert.equal(badEncoding.targets[0].supported, false)
+  await writeFile(file, 'x'.repeat(1024 * 1024 + 1))
+  const oversized = await (await fetch(`http://127.0.0.1:${linkedServer.address().port}/api/astro-galleries`)).json()
+  assert.equal(oversized.targets[0].supported, false)
+})
+
 test('stale MDX source and unsupported syntax never reach the writer', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'mdx-stale-'))
   const file = path.join(root, 'page.mdx')

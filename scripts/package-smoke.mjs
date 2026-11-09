@@ -48,7 +48,7 @@ try {
   const packResult = JSON.parse(pack.stdout)
   const packed = Array.isArray(packResult) ? packResult[0] : packResult['@astro-visual-cms/editor']
   const names = packed.files.map((file) => file.path)
-  for (const required of ['LICENSE', 'src/editor/astro-integration.mjs', 'src/editor/toolbar-app.mjs', 'src/editor/server.mjs', 'src/editor/cli.mjs', 'docs/editor-package.md']) assert(names.includes(required), `tarball missing ${required}`)
+  for (const required of ['LICENSE', 'src/editor/astro-integration.mjs', 'src/editor/toolbar-app.mjs', 'src/editor/server.mjs', 'src/editor/cli.mjs', 'src/lib/astro-gallery-patch.mjs', 'docs/editor-package.md']) assert(names.includes(required), `tarball missing ${required}`)
   assert(!names.some((name) => name.startsWith('test/') || name.startsWith('src/pages/')), 'demo app/test files leaked into tarball')
   const consumer = path.join(temp, 'consumer')
   await mkdir(path.join(consumer, 'src/pages'), { recursive: true })
@@ -60,6 +60,10 @@ try {
   const sitePort = port + 1000
   await writeFile(path.join(consumer, 'astro.config.mjs'), `import { defineConfig } from 'astro/config'; import mdx from '@astrojs/mdx'; import { createLoopbackDevIntegration } from '@astro-visual-cms/editor/integration'; export default defineConfig({ integrations: [mdx(), createLoopbackDevIntegration({ editorPort: '${port}', previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }] })] })`)
   await writeFile(path.join(consumer, 'src/pages/referenzen.astro'), '<html><body>Referenzen-Beweis</body></html>')
+  const astroGalleryFile = path.join(consumer, 'src/components/InternalGallery.astro')
+  const astroGallerySource = `---\ntype GalleryImage = { name: string; alt: string; note: string };\nconst imageNames: GalleryImage[] = [\n  { name: "alpha", alt: "Alpha", note: "keep-alpha" },\n  { name: "beta", alt: "Beta", note: "keep-beta" },\n]\n---\n{imageNames.map((image) => <span data-image={image.name}>{image.alt}:{image.note}</span>)}`
+  await writeFile(astroGalleryFile, astroGallerySource)
+  await writeFile(path.join(consumer, 'src/pages/internal-gallery.astro'), `---\nimport InternalGallery from '../components/InternalGallery.astro'\n---\n<InternalGallery />`)
   await writeFile(path.join(consumer, 'src/components/Gallery.astro'), '---\nconst { sorted = [] } = Astro.props\n---\n<section>{sorted.join(",")}</section>')
   const fixtureFile = path.join(consumer, 'src/pages/fixture.mdx')
   await writeFile(fixtureFile, 'import Gallery from "../components/Gallery.astro";\n\nexport const ITEMS = ["noise-fixture-01", "noise-fixture-02", "noise-fixture-03"];\n\n<Gallery sorted={ITEMS} />')
@@ -79,7 +83,7 @@ const notes = (await getCollection('notes')).sort((a, b) => a.data.order - b.dat
   await writeFile(path.join(consumer, 'src/content/notes/two.md'), '---\ntitle: Two\norder: 2\n---\nOther text')
   const install = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--no-save', path.join(temp, packed.filename), 'astro@7.4.7', '@astrojs/mdx@8.1.3'], { cwd: consumer, encoding: 'utf8', timeout: 180000 })
   assert.equal(install.status, 0, install.stderr)
-  const config = { port, sitePort, projectRoot: '.', contentConfigPath: 'src/content.config.ts', fixturePath: 'src/pages/mdx-proof.mdx', previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }], mdxComponentTargets: [{ id: 'fixture-gallery', projectRoot: '.', filePath: 'src/pages/mdx-proof.mdx', importSource: '../components/Card.astro', idProp: 'id', fields: [{ name: 'label', type: 'string' }, { name: 'rank', type: 'number', min: 1, max: 5, step: 1 }, { name: 'enabled', type: 'boolean' }, { name: 'tone', type: 'enum', values: ['quiet', 'bold'] }] }] }
+  const config = { port, sitePort, projectRoot: '.', contentConfigPath: 'src/content.config.ts', fixturePath: 'src/pages/mdx-proof.mdx', previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }], astroGalleryTargets: [{ id: 'internal-gallery', projectRoot: '.', filePath: 'src/components/InternalGallery.astro', variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], mdxComponentTargets: [{ id: 'fixture-gallery', projectRoot: '.', filePath: 'src/pages/mdx-proof.mdx', importSource: '../components/Card.astro', idProp: 'id', fields: [{ name: 'label', type: 'string' }, { name: 'rank', type: 'number', min: 1, max: 5, step: 1 }, { name: 'enabled', type: 'boolean' }, { name: 'tone', type: 'enum', values: ['quiet', 'bold'] }] }] }
   await writeFile(path.join(consumer, 'editor.json'), JSON.stringify(config))
   child = spawn(path.join(consumer, 'node_modules/.bin/astro-visual-cms-editor'), ['--config', 'editor.json'], { cwd: consumer, stdio: 'ignore', detached: process.platform !== 'win32' })
   let response
@@ -146,11 +150,12 @@ const entries = await getCollection('smokeNotes')
   await collectProductionFiles(path.join(consumer, 'dist'))
   for (const file of productionFiles.filter((name) => /\.(?:html|js|mjs|css|json)$/.test(name))) {
     const content = await readFile(file, 'utf8')
-    for (const marker of ['astro-visual-cms-editor', 'avcms:challenge', 'avcms:ready', '/api/collections', '/api/mdx-components']) {
+    for (const marker of ['astro-visual-cms-editor', 'avcms:challenge', 'avcms:ready', '/api/collections', '/api/mdx-components', '/api/astro-galleries']) {
       assert(!content.includes(marker), `production artifact ${path.relative(consumer, file)} contains dev-only marker ${marker}`)
     }
   }
   assert((await readFile(path.join(consumer, 'dist/mdx-proof/index.html'), 'utf8')).includes('Original MDX label'), 'Astro did not compile the synthetic MDX target')
+  assert((await readFile(path.join(consumer, 'dist/internal-gallery/index.html'), 'utf8')).includes('keep-alpha'), 'Astro did not compile the synthetic internal array gallery')
   const createdCollectionHtml = await readFile(path.join(consumer, 'dist/created-notes/index.html'), 'utf8')
   assert.match(createdCollectionHtml, /data-entry-id="first-note"/)
   assert.match(createdCollectionHtml, /Created collection entry — 東京/)
@@ -253,7 +258,8 @@ const entries = await getCollection('smokeNotes')
   }
   const uiBrowser = await chromium.launch({ headless: true })
   try {
-    const uiPage = await uiBrowser.newPage()
+    const uiContext = await uiBrowser.newContext()
+    const uiPage = await uiContext.newPage()
     await uiPage.goto(`http://127.0.0.1:${port}/?route=references`)
     await uiPage.locator('#mdx-components-panel:not([hidden])').waitFor({ timeout: 15_000 })
     await uiPage.locator('#mdx-prop').selectOption('label')
@@ -279,7 +285,26 @@ const entries = await getCollection('smokeNotes')
     const uiExpectedSource = mdxAfter.replace('rank={4}', 'rank={5}')
     assert.equal(await readFile(mdxFile, 'utf8'), uiExpectedSource, 'UI commit changed bytes outside the selected custom component scalar')
     mdxAfter = uiExpectedSource
+    const galleryPage = await uiContext.newPage()
+    await galleryPage.goto(`http://127.0.0.1:${port}/?route=references`)
+    await galleryPage.locator('#gallery-picker button[data-gallery-id="internal-gallery"]').waitFor()
+    await galleryPage.locator('#gallery-picker button[data-gallery-id="internal-gallery"]').click()
+    await galleryPage.locator('#images button[aria-label^="Nach unten"]').first().click()
+    await galleryPage.locator('#diff-confirmation:not([hidden])').waitFor()
+    assert.match(await galleryPage.locator('#diff-after').textContent(), /beta[\s\S]*alpha/)
+    const astroGalleryCommit = galleryPage.waitForResponse((response) => response.url().endsWith('/api/astro-galleries/commit') && response.request().method() === 'POST')
+    await galleryPage.locator('#confirm-change').click()
+    assert.equal((await astroGalleryCommit).status(), 200, 'Astro internal-array UI commit failed')
+    const expectedGallery = astroGallerySource.replace('{ name: "alpha", alt: "Alpha", note: "keep-alpha" },\n  { name: "beta", alt: "Beta", note: "keep-beta" },', '{ name: "beta", alt: "Beta", note: "keep-beta" },\n  { name: "alpha", alt: "Alpha", note: "keep-alpha" },')
+    assert.equal(await readFile(astroGalleryFile, 'utf8'), expectedGallery, 'Astro internal-gallery edit changed bytes outside the object-array reorder')
   } finally { await uiBrowser.close() }
+  let astroGalleryRendered = false
+  for (let n = 0; n < 100; n++) {
+    const response = await fetch(`http://127.0.0.1:${sitePort}/internal-gallery/`)
+    if (response.ok) { const html = await response.text(); if (html.indexOf('data-image="beta"') < html.indexOf('data-image="alpha"') && html.includes('keep-beta') && html.includes('keep-alpha')) { astroGalleryRendered = true; break } }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  assert(astroGalleryRendered, `Astro internal gallery did not HMR-render the reordered object array: ${astroLogs}`)
   let mdxRendered = false
   for (let n = 0; n < 100; n++) {
     const page = await fetch(`http://127.0.0.1:${sitePort}/mdx-proof/`)
@@ -292,7 +317,7 @@ const entries = await getCollection('smokeNotes')
   }
   const ui = await (await fetch(`http://127.0.0.1:${port}/`)).text()
   assert(ui.includes('/referenzen/'), 'custom preview route not rendered by editor UI')
-  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro production isolation, installed editor API, confirmed collection/entry creation, numeric Content Sync, Dev Toolbar route launch, typed custom-component UI/API preview/commit, exact source-byte preservation, and MDX HMR`)
+  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro production isolation, installed editor API, confirmed collection/entry creation, numeric Content Sync, Dev Toolbar route launch, typed custom-component UI/API preview/commit, exact source-byte preservation, Astro internal-array UI preview/commit, and MDX/Astro gallery HMR`)
 } finally {
   await stop(child)
   if (astro) {
