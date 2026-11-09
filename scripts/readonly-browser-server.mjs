@@ -121,9 +121,10 @@ try {
     env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', EDITOR_PORT: String(editorPort) },
   })
   astroStarted = true
+  // These disposable-copy modes exercise confirmed replacements; other modes retain the fail-closed default.
   editor = createEditorServer({
     port: editorPort, sitePort, fixturePath: fixture, basePath: '/browser-synthetic/',
-    ...(mode === 'gallery' ? { safeSourceReplacementMode: false } : {}),
+    ...(['gallery', 'collection', 'markdown'].includes(mode) ? { safeSourceReplacementMode: false } : {}),
     ...(mode === 'collection' ? { previewRoutes: [
       { id: 'home', label: 'Startseite', path: '/' },
       { id: 'fixture', label: 'Fixture', path: '/fixture/', cacheBustOnRevision: true },
