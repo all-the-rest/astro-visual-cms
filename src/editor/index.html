@@ -39,6 +39,7 @@
           <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Collections und vorhandene skalare Schemafelder sind bearbeitbar. Konfigurationsänderungen benötigen eine explizite Diff-Bestätigung.</p>
           <p id="collections-reason" class="alert alert-info" role="status" hidden></p>
           <div id="collection-conflicts" class="grid gap-2"></div>
+          <div id="create-entry-conflicts" class="grid gap-2"></div>
           <div class="grid gap-5 md:grid-cols-3">
             <section>
               <h3 class="font-semibold">Collections</h3>
@@ -197,6 +198,10 @@
       let current = { galleries: [], hash: '' };
       let astroGalleryState = { configured: false, targets: [] };
       let collectionState = { configured: false, collections: [] };
+      const createEntryDrafts = new Map();
+      const createEntryConflicts = new Map();
+      const createEntrySourceConflictCodes = new Set(['STALE_CONFIG', 'UNSUPPORTED_CONFIG', 'UNSUPPORTED_COLLECTION_EDIT', 'UNSUPPORTED_COLLECTION', 'UNSUPPORTED_FIELD', 'UNSAFE_COLLECTION_PATH', 'UNSAFE_CONFIG_PATH', 'CONFIG_LIMIT']);
+      let createEntryUnavailable = false;
       let mdxState = { configured: false, targets: [] };
       let mdxSelectionReadOnly = false;
       let previewNonce = '';
@@ -384,10 +389,11 @@
         const focusedSelection = focusedField instanceof HTMLInputElement && focusedField.type !== 'number'
           ? { start: focusedField.selectionStart, end: focusedField.selectionEnd, direction: focusedField.selectionDirection }
           : null;
-        collectionsPanel.hidden = !collectionState.configured && collectionConflicts.size === 0;
+        collectionsPanel.hidden = !collectionState.configured && collectionConflicts.size === 0 && createEntryConflicts.size === 0;
         renderCollectionConflicts();
+        renderCreateEntryConflicts();
         if (!collectionState.configured) {
-          if (collectionConflicts.size) {
+          if (collectionConflicts.size || createEntryConflicts.size) {
             collectionsReason.hidden = false;
             collectionsReason.textContent = 'Collections derzeit nicht verfügbar. Konflikte und lokale Entwürfe bleiben erhalten; Vorschau und Übernahme sind gesperrt.';
           }
@@ -564,11 +570,32 @@
       }
 
       function renderEntryCreation(collection) {
-        createEntryForm.hidden = !collection.creationSupported;
-        createEntryReason.hidden = collection.creationSupported || !collection.creationReason;
-        createEntryReason.textContent = collection.creationReason || '';
+        const key = collection.id;
+        const focusedControl = createEntryForm.contains(document.activeElement) ? document.activeElement : null;
+        const focusedFieldKey = focusedControl?.name === 'slug' ? '$slug' : focusedControl?.dataset.fieldName || '';
+        const focusedSelection = focusedControl instanceof HTMLInputElement && focusedControl.type !== 'number'
+          ? { start: focusedControl.selectionStart, end: focusedControl.selectionEnd, direction: focusedControl.selectionDirection }
+          : null;
+        let draft = createEntryDrafts.get(key);
+        if (!draft) {
+          draft = { slug: '', values: Object.create(null), types: Object.create(null), baseHash: collectionState.configHash || '', dirty: false };
+          createEntryDrafts.set(key, draft);
+        }
+        const conflict = createEntryConflicts.get(key);
+        createEntryForm.hidden = !collection.creationSupported && !conflict;
+        createEntryReason.hidden = createEntryUnavailable || !collection.creationSupported ? false : !collection.creationReason;
+        createEntryReason.textContent = createEntryUnavailable
+          ? 'Collection-Konfiguration derzeit nicht verfügbar. Entwürfe bleiben erhalten; Vorschau und Übernahme sind gesperrt.'
+          : collection.creationReason || '';
         document.querySelector('#create-entry-slug-label').firstChild.textContent = `Dateiname (Slug${collection.creationExtension || '.md'})`;
         createEntryFields.replaceChildren();
+        const slugInput = createEntryForm.elements.slug;
+        slugInput.value = draft.slug;
+        slugInput.disabled = busy() || createEntryUnavailable;
+        slugInput.oninput = () => {
+          draft.slug = slugInput.value; draft.dirty = true;
+          if (createEntryConflicts.has(key)) renderCreateEntryConflicts();
+        };
         for (const field of collection.fields || []) {
           if (!field.editable) {
             if (field.default !== undefined) {
@@ -610,12 +637,110 @@
           input.dataset.fieldName = field.name;
           input.dataset.fieldType = field.type;
           input.required = field.required && field.default === undefined;
-          if (field.default !== undefined) input.value = String(field.default);
-          input.disabled = busy();
+          const fieldKey = field.name;
+          if (Object.prototype.hasOwnProperty.call(draft.values, fieldKey)) input.value = draft.values[fieldKey];
+          else if (field.default !== undefined) input.value = String(field.default);
+          input.disabled = busy() || createEntryUnavailable;
+          input.oninput = input.onchange = () => {
+            draft.values[fieldKey] = input.value; draft.types[fieldKey] = field.type; draft.dirty = true;
+            if (createEntryConflicts.has(key)) renderCreateEntryConflicts();
+          };
           label.append(input);
           createEntryFields.append(label);
         }
-        for (const button of createEntryForm.querySelectorAll('button')) button.disabled = busy() || !collection.creationSupported;
+        for (const button of createEntryForm.querySelectorAll('button')) button.disabled = busy() || createEntryUnavailable || !collection.creationSupported;
+        for (const button of createEntryForm.querySelectorAll('button')) button.disabled ||= Boolean(conflict);
+        if (focusedFieldKey) {
+          const input = focusedFieldKey === '$slug'
+            ? slugInput
+            : [...createEntryFields.querySelectorAll('[data-field-name]')].find((item) => item.dataset.fieldName === focusedFieldKey);
+          input?.focus();
+          if (input instanceof HTMLInputElement && focusedSelection) input.setSelectionRange(focusedSelection.start, focusedSelection.end, focusedSelection.direction);
+        }
+      }
+
+      function markCreateEntryConflict(collectionId, draft, latest = '') {
+        const existing = createEntryConflicts.get(collectionId);
+        createEntryConflicts.set(collectionId, { baseHash: existing?.baseHash || draft.baseHash, latest });
+        const pending = pendingCollectionPreview;
+        if (pending?.kind === 'create-entry' && pending.collectionId === collectionId) {
+          pendingCollectionPreview = null;
+          renderCollectionConfirmation();
+          status('Die Konfigurationsrevision hat sich seit der Vorschau geändert. Die Vorschau ist verworfen; dein Entwurf bleibt erhalten.', 'warning');
+          if (!saving) void postOperation('/api/collections/create-entry/cancel', { previewId: pending.previewId }).catch(() => {});
+        }
+      }
+
+      function reconcileCreateEntryDrafts(next, unavailable = false) {
+        createEntryUnavailable = unavailable || !next?.configured;
+        for (const [id, draft] of createEntryDrafts) {
+          const collection = next?.collections?.find((item) => item.id === id);
+          const latest = createEntryUnavailable ? '' : (next.configHash || '');
+          if (!draft.dirty) {
+            draft.baseHash = latest;
+            continue;
+          }
+          if (createEntryUnavailable || !collection?.creationSupported || latest !== draft.baseHash || createEntryConflicts.has(id)) {
+            markCreateEntryConflict(id, draft, latest);
+          }
+        }
+      }
+
+      function renderCreateEntryConflicts() {
+        const host = document.querySelector('#create-entry-conflicts');
+        const focus = host.contains(document.activeElement) ? { index: document.activeElement.dataset.conflictIndex, action: document.activeElement.dataset.conflictAction } : null;
+        host.replaceChildren();
+        for (const [index, [collectionId, conflict]] of [...createEntryConflicts].entries()) {
+          const draft = createEntryDrafts.get(collectionId);
+          if (!draft) continue;
+          const collection = collectionState.collections?.find((item) => item.id === collectionId);
+          const currentFields = new Map((collection?.fields || []).filter((field) => field.editable).map((field) => [field.name, field]));
+          const incompatibleDraft = Object.entries(draft.values).some(([name, value]) => {
+            const field = currentFields.get(name);
+            if (!field || (draft.types[name] && draft.types[name] !== field.type)) return true;
+            if (field.type === 'enum' && value !== '' && !field.values?.includes(value)) return true;
+            if (field.type === 'boolean' && value !== '' && !['true', 'false'].includes(value)) return true;
+            if (field.type === 'number' && value !== '' && !Number.isFinite(Number(value))) return true;
+            return false;
+          });
+          const box = document.createElement('section'); box.setAttribute('role', 'alert'); box.setAttribute('aria-live', 'assertive'); box.className = 'alert alert-warning grid gap-2';
+          for (const [label, value] of [
+            ['Konflikt', `Eintragsentwurf in ${collectionId}`],
+            ['Basisrevision', conflict.baseHash || 'unbekannt'],
+            ['Aktuelle Revision', conflict.latest || 'nicht verfügbar'],
+            ['Lokaler Slug', JSON.stringify(draft.slug)],
+            ...Object.entries(draft.values).map(([name, value]) => [`Lokales Feld ${name}`, JSON.stringify(value)]),
+          ]) {
+            const line = document.createElement('p'); line.textContent = `${label}: ${value}`; box.append(line);
+          }
+          if (createEntryUnavailable || !collection?.creationSupported) {
+            const reason = document.createElement('p'); reason.textContent = 'Collection-Konfiguration derzeit nicht verfügbar oder nicht unterstützt. Der Entwurf bleibt erhalten; erneutes Anwenden ist gesperrt.'; box.append(reason);
+          }
+          if (incompatibleDraft) {
+            const reason = document.createElement('p'); reason.textContent = 'Mindestens ein lokales Feld fehlt im aktuellen Schema oder hat einen anderen Typ. Erneutes Anwenden ist gesperrt, damit kein Wert still verloren geht.'; box.append(reason);
+          }
+          const discard = document.createElement('button'); discard.type = 'button'; discard.textContent = 'Verwerfen und neu laden'; discard.disabled = saving; discard.dataset.conflictIndex = String(index); discard.dataset.conflictAction = 'discard';
+          discard.addEventListener('click', () => {
+            if (saving) return;
+            createEntryDrafts.delete(collectionId); createEntryConflicts.delete(collectionId);
+            if (pendingCollectionPreview?.kind === 'create-entry' && pendingCollectionPreview.collectionId === collectionId) pendingCollectionPreview = null;
+            render();
+          });
+          box.append(discard);
+          const reapply = document.createElement('button'); reapply.type = 'button'; reapply.textContent = 'Entwurf erneut anwenden und Vorschau erstellen';
+          reapply.disabled = saving || !collection?.creationSupported || !conflict.latest || createEntryUnavailable || incompatibleDraft;
+          reapply.dataset.conflictIndex = String(index); reapply.dataset.conflictAction = 'reapply';
+          reapply.addEventListener('click', () => {
+            if (saving || !collection?.creationSupported || !conflict.latest || createEntryUnavailable || incompatibleDraft) return;
+            selectedCollectionId = collectionId;
+            draft.baseHash = conflict.latest; draft.dirty = true;
+            createEntryConflicts.delete(collectionId);
+            render();
+            createEntryForm.requestSubmit();
+          });
+          box.append(reapply); host.append(box);
+        }
+        if (focus) host.querySelector(`[data-conflict-index="${focus.index}"][data-conflict-action="${focus.action}"]`)?.focus();
       }
 
       function configField(form) {
@@ -841,6 +966,7 @@
         astroGalleryState = await loadPanelState('/api/astro-galleries', 'Astro-interne Galerien', { configured: false, targets: [] });
         current.galleries = [...(current.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astroGalleryState.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
         collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
+        reconcileCreateEntryDrafts(collectionState, unavailable.some((item) => item.startsWith('Collections (')));
         mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
         for (const target of mdxState.targets || []) if (target.hash) mdxLastHashes.set(target.id, target.hash);
         if (previousSelection) {
@@ -892,6 +1018,7 @@
           const response = await fetch('/api/collections', { cache: 'no-store' });
           if (!response.ok) throw new Error(String(response.status));
           const next = await response.json(); collectionState = next;
+          reconcileCreateEntryDrafts(next);
           for (const [key, draft] of collectionDrafts) {
             const [collectionId, entryId, fieldName] = key.split('\u0000');
             const collection = next.collections?.find((item) => item.id === collectionId);
@@ -909,6 +1036,7 @@
             else if (collectionConflicts.has(key) || entry.hash !== draft.hash) markCollectionConflict(key, draft, entry.hash, collectionConflicts.get(key)?.blockedHash || '');
           }
         } catch {
+          reconcileCreateEntryDrafts(collectionState, true);
           for (const [key, draft] of collectionDrafts) if (draft.dirty) {
             const existing = collectionConflicts.get(key);
             if (existing?.kind === 'write-blocked') collectionConflicts.set(key, { ...existing, latest: '' });
@@ -1274,8 +1402,18 @@
       createEntryForm.addEventListener('submit', async (event) => {
         event.preventDefault();
         const collection = selectedCollection();
-        if (busy() || !collection?.creationSupported) return;
+        if (busy() || createEntryUnavailable || !collection?.creationSupported) return;
+        const draft = createEntryDrafts.get(collection.id);
+        if (createEntryConflicts.has(collection.id)) return;
+        if (!draft.dirty) draft.baseHash = collectionState.configHash || '';
+        else if (draft.baseHash !== collectionState.configHash) {
+          markCreateEntryConflict(collection.id, draft, collectionState.configHash || '');
+          render();
+          status('Die Collection-Konfiguration hat sich geändert. Prüfe den Konflikt, bevor du den Entwurf erneut anwendest.', 'warning');
+          return;
+        }
         const slug = createEntryForm.elements.slug.value.trim();
+        draft.slug = createEntryForm.elements.slug.value; draft.dirty = true;
         if (!/^[a-z0-9](?:[a-z0-9-]{0,62})?$/.test(slug)) {
           status('Dateiname muss ein sicherer kleingeschriebener Slug ohne Pfadtrenner sein.', 'error');
           return;
@@ -1300,21 +1438,26 @@
             values[field.name] = input.value;
           }
         }
-        const operation = { collectionId: collection.id, entryId: `${slug}${collection.creationExtension || '.md'}`, values, hash: collectionState.configHash };
+        const operation = { collectionId: collection.id, entryId: `${slug}${collection.creationExtension || '.md'}`, values, hash: draft.baseHash };
+        for (const input of createEntryFields.querySelectorAll('[data-field-name]')) {
+          draft.values[input.dataset.fieldName] = input.value;
+          draft.types[input.dataset.fieldName] = input.dataset.fieldType;
+        }
         saving = true;
         render();
         status(`Neuer Eintrag ${collection.name}/${operation.entryId} wird vorbereitet …`);
         try {
           const response = await postOperation('/api/collections/create-entry/preview', operation);
           const result = await response.json();
-          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status });
+          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
           if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau für den neuen Eintrag erhalten.');
           pendingCollectionPreview = { ...operation, kind: 'create-entry', previewId: result.previewId, diff: result.diff };
           render();
           status('Vollständigen Frontmatter-Diff prüfen. Erst nach Bestätigung wird die neue Datei angelegt.', 'warning');
         } catch (error) {
           status(`Eintragsvorschau fehlgeschlagen: ${error.message}`, 'error');
-          if (error.status === 403 || error.status === 409) await load();
+          if (createEntrySourceConflictCodes.has(error.code)) { markCreateEntryConflict(collection.id, draft); await pollCollections(); }
+          else if (error.status === 403 || error.status === 409) await pollCollections();
         } finally { saving = false; render(); }
       });
 
@@ -1351,7 +1494,10 @@
             throw error;
           }
           pendingCollectionPreview = null;
-          if (!creating) {
+          if (creating) {
+            createEntryDrafts.delete(operation.collectionId);
+            createEntryConflicts.delete(operation.collectionId);
+          } else {
             const key = collectionDraftKey(operation.collectionId, operation.entryId, operation.field);
             collectionDrafts.delete(key); collectionConflicts.delete(key);
           }
@@ -1361,6 +1507,10 @@
             : `Gespeichert. Bei späteren Schemaänderungen Astro Content Sync bzw. Dev-Server-Neustart prüfen. (${result.collectionId}/${result.entryId})`, 'success');
         } catch (error) {
           pendingCollectionPreview = null;
+          if (creating && createEntrySourceConflictCodes.has(error.code)) {
+            const draft = createEntryDrafts.get(operation.collectionId);
+            if (draft) markCreateEntryConflict(operation.collectionId, draft);
+          }
           if (!creating && error.code === 'SOURCE_REPLACEMENT_DISABLED') {
             const key = collectionDraftKey(operation.collectionId, operation.entryId, operation.field);
             const draft = collectionDrafts.get(key);
@@ -1375,7 +1525,7 @@
             }
           }
           status(`Nicht gespeichert: ${error.message}. Lade den aktuellen Stand …`, 'warning');
-          if (!creating && (error.code === 'SOURCE_REPLACEMENT_DISABLED' || collectionSourceConflictCodes.has(error.code))) await pollCollections();
+          if (creating || (!creating && (error.code === 'SOURCE_REPLACEMENT_DISABLED' || collectionSourceConflictCodes.has(error.code)))) await pollCollections();
           else try { await load(); } catch (loadError) { status(`Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
         } finally {
           saving = false;

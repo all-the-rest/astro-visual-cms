@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { readFile, writeFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 test('a confirmed MDX collection field edit is rendered by Astro in an isolated project copy', async ({ page, request }) => {
   const rootFixture = resolve('src/pages/fixture.mdx')
@@ -170,7 +170,102 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
   expect(await readFile(receipt.contentFile, 'utf8')).toBe(finalSource)
   await page.unroute('**/api/collections/commit')
 
-  expect(await readFile(receipt.configFile)).toEqual(config)
+  const createForm = page.locator('#create-entry-form')
+  const createSlug = createForm.locator('[name="slug"]')
+  const createTitle = page.locator('#create-entry-fields [data-field-name="title"]')
+  const createRank = page.locator('#create-entry-fields [data-field-name="rank"]')
+  const createdFile = (slug: string) => join(dirname(receipt.contentFile), `${slug}.mdx`)
+  const fileExists = async (file: string) => { try { await readFile(file); return true } catch { return false } }
+  expect(catalog.collections[0].creationSupported).toBe(true)
+  await createSlug.fill('poll-reapply-note')
+  await createTitle.fill('Created after config conflict')
+  await createRank.fill('21')
+  await createTitle.focus()
+  await createTitle.evaluate((input: HTMLInputElement) => input.setSelectionRange(7, 7))
+  await createTitle.evaluate((input: HTMLInputElement) => { input.dataset.beforeFocusPoll = 'true' })
+  const focusPoll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await focusPoll
+  await expect(createTitle).not.toHaveAttribute('data-before-focus-poll', 'true')
+  await expect(createSlug).toHaveValue('poll-reapply-note')
+  await expect(createTitle).toHaveValue('Created after config conflict')
+  await expect(createRank).toHaveValue('21')
+  await expect(createTitle).toBeFocused()
+  expect(await createTitle.evaluate((input: HTMLInputElement) => input.selectionStart)).toBe(7)
+
+  await page.route('**/api/collections', route => route.abort())
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.locator('#create-entry-conflicts').getByRole('alert')).toBeVisible()
+  await expect(page.locator('#create-entry-conflicts')).toContainText('nicht verfügbar')
+  await expect(createTitle).toHaveValue('Created after config conflict')
+  await expect(page.locator('#create-entry-conflicts').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' })).toBeDisabled()
+  await page.unroute('**/api/collections')
+  const reconnectPoll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await reconnectPoll
+  const configHashAfterReconnect = (await (await request.get('/api/collections')).json()).configHash as string
+  await expect(page.locator('#create-entry-conflicts')).toContainText(configHashAfterReconnect)
+  await expect(page.locator('#create-entry-conflicts').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' })).toBeEnabled()
+
+  const initialConfigHash = catalog.configHash as string
+  const configRevisionOne = `${(await readFile(receipt.configFile, 'utf8'))}\n// external config revision before entry preview\n`
+  await writeFile(receipt.configFile, configRevisionOne)
+  const configPollOne = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await configPollOne
+  const latestConfigHashOne = (await (await request.get('/api/collections')).json()).configHash as string
+  expect(latestConfigHashOne).not.toBe(initialConfigHash)
+  await expect(page.locator('#create-entry-conflicts').getByRole('alert')).toContainText(initialConfigHash)
+  await expect(page.locator('#create-entry-conflicts')).toContainText(latestConfigHashOne)
+  await expect(page.locator('#create-entry-conflicts')).toContainText('poll-reapply-note')
+  await expect(page.locator('#create-entry-conflicts')).toContainText('Created after config conflict')
+  await expect(createForm.locator('button[type="submit"]')).toBeDisabled()
+  await expect(fileExists(createdFile('poll-reapply-note'))).resolves.toBe(false)
+  const reapplyCreateDraft = page.locator('#create-entry-conflicts').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' })
+  await reapplyCreateDraft.focus()
+  await expect(reapplyCreateDraft).toBeFocused()
+  await page.keyboard.press('Enter')
+  await expect(page.locator('#collection-diff-after')).toContainText('Created after config conflict')
+  await page.locator('#confirm-collection-change').click()
+  await expect(page.locator('#status')).toContainText('Neuer Eintrag angelegt')
+  const createdSource = await readFile(createdFile('poll-reapply-note'), 'utf8')
+  expect(createdSource).toContain('Created after config conflict')
+  expect(createdSource).toContain('rank: 21')
+
+  await createSlug.fill('stale-create-note')
+  await createTitle.fill('Draft survives stale create commit')
+  await createRank.fill('22')
+  await createForm.locator('button[type="submit"]').click()
+  await expect(page.locator('#collection-diff-after')).toContainText('Draft survives stale create commit')
+  const configRevisionTwo = `${(await readFile(receipt.configFile, 'utf8'))}\n// external config revision between entry preview and commit\n`
+  await writeFile(receipt.configFile, configRevisionTwo)
+  await page.locator('#confirm-collection-change').click()
+  await expect(page.locator('#create-entry-conflicts')).toContainText('stale-create-note')
+  await expect(page.locator('#create-entry-conflicts')).toContainText('Draft survives stale create commit')
+  await expect(fileExists(createdFile('stale-create-note'))).resolves.toBe(false)
+  const latestConfigHashTwo = (await (await request.get('/api/collections')).json()).configHash as string
+  await expect(page.locator('#create-entry-conflicts')).toContainText(latestConfigHashTwo)
+  await page.locator('#create-entry-conflicts').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' }).click()
+  await expect(page.locator('#collection-diff-after')).toContainText('Draft survives stale create commit')
+  await page.locator('#confirm-collection-change').click()
+  await expect(page.locator('#status')).toContainText('Neuer Eintrag angelegt')
+  const staleRecoveredSource = await readFile(createdFile('stale-create-note'), 'utf8')
+  expect(staleRecoveredSource).toContain('Draft survives stale create commit')
+  expect(staleRecoveredSource).toContain('rank: 22')
+  expect(await readFile(receipt.configFile, 'utf8')).toBe(configRevisionTwo)
+
+  await createSlug.fill('discard-create-note')
+  await createTitle.fill('Discard this local draft')
+  await page.route('**/api/collections', route => route.abort())
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.locator('#create-entry-conflicts')).toContainText('discard-create-note')
+  await page.locator('#create-entry-conflicts').getByRole('button', { name: 'Verwerfen und neu laden' }).click()
+  await expect(page.locator('#create-entry-conflicts')).toBeEmpty()
+  await expect(createSlug).toHaveValue('')
+  await expect(createTitle).toHaveValue('')
+  await page.unroute('**/api/collections')
+
+  expect(await readFile(receipt.configFile)).toEqual(Buffer.from(configRevisionTwo))
   expect(await readFile(receipt.pageFile)).toEqual(pageSource)
   expect(await readFile(rootFixture)).toEqual(rootFixtureBytes)
   expect(await readFile(rootComponent)).toEqual(rootComponentBytes)
