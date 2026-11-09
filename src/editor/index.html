@@ -126,6 +126,11 @@
           <section id="mdx-conflict" class="alert alert-warning" role="alert" aria-live="assertive" hidden>
             <p id="mdx-conflict-message"></p>
             <p>Die Quelle hat sich geändert. Deine Eingabe bleibt erhalten. Wähle ausdrücklich, wie du fortfahren möchtest.</p>
+            <div class="grid gap-3 md:grid-cols-3" aria-label="Konfliktwerte">
+              <div><h3 class="font-semibold">Basisstand</h3><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="mdx-conflict-base"></code></pre></div>
+              <div><h3 class="font-semibold">Aktueller Quellstand</h3><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="mdx-conflict-external"></code></pre></div>
+              <div><h3 class="font-semibold">Dein Entwurf</h3><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="mdx-conflict-draft"></code></pre></div>
+            </div>
             <button id="mdx-conflict-discard" class="btn" type="button">Verwerfen und neu laden</button>
             <button id="mdx-conflict-reapply" class="btn btn-warning" type="button">Eingabe erneut anwenden und Diff erstellen</button>
             <button id="mdx-proposal-export" class="btn" type="button" hidden>Änderungsvorschlag herunterladen</button>
@@ -244,6 +249,7 @@
       let mdxValue = null;
       const mdxDraftKey = (targetId = mdxTarget.value, instanceId = mdxInstance.value, prop = mdxProp.value) => `${targetId}\u0000${instanceId}\u0000${prop}`;
       const selectedMdxDraftConflict = () => mdxDraftConflicts.get(mdxDraftKey()) || null;
+      const formatMdxConflictValue = (value) => value === undefined ? 'Nicht verfügbar' : JSON.stringify(value) ?? String(value);
       const mdxConfirmation = document.querySelector('#mdx-confirmation');
       let selectedGalleryId = '';
       let selectedCollectionId = '';
@@ -314,6 +320,9 @@
         const conflictBox = document.querySelector('#mdx-conflict');
         conflictBox.hidden = !draftConflict;
         document.querySelector('#mdx-conflict-message').textContent = draftConflict?.message || '';
+        document.querySelector('#mdx-conflict-base').textContent = formatMdxConflictValue(draftConflict?.baseValue);
+        document.querySelector('#mdx-conflict-external').textContent = formatMdxConflictValue(draftConflict?.externalValue);
+        document.querySelector('#mdx-conflict-draft').textContent = formatMdxConflictValue(draftConflict?.draftValue);
         document.querySelector('#mdx-conflict-discard').disabled = saving || !draftConflict;
         document.querySelector('#mdx-conflict-reapply').disabled = saving || !draftConflict || draftConflict.unavailable;
         const proposal = mdxProposals.get(conflictKey);
@@ -859,10 +868,13 @@
             });
           }
           const replacementDisabled = error.code === 'SOURCE_REPLACEMENT_DISABLED';
-          mdxDraftConflicts.set(key, { selectionKey: key, message: replacementDisabled
+          const baseTarget = mdxState.targets.find((item) => item.id === targetId);
+          const baseInstance = baseTarget?.instances?.find((item) => item.id === instanceId);
+          const baseValue = baseInstance?.props?.[prop];
+          mdxDraftConflicts.set(key, { selectionKey: key, baseValue, externalValue: baseValue, draftValue: value, message: replacementDisabled
             ? 'Speichern ist standardmäßig blockiert. Deine Eingabe bleibt erhalten; du kannst den basisgebundenen Vorschlag manuell herunterladen.'
             : `Commit abgelehnt oder Quelle nicht erreichbar (${error.message}). Deine Eingabe bleibt erhalten; prüfe die Revision und wähle eine Konfliktaktion.`, unavailable: false });
-          mdxConflictRevisions.set(key, Math.max(1, mdxConflictRevisions.get(key) || 0));
+          await pollMdxRevision();
           status(`Nicht gespeichert: ${error.message}. Deine Eingabe bleibt erhalten.`, 'warning');
         }
         finally { saving = false; renderMdx(); }
@@ -879,14 +891,19 @@
           const newTarget = latest.targets?.find((item) => item.id === selectedId);
           const selectedKey = mdxDraftKey(selectedId);
           let selectedConflict = mdxDraftConflicts.get(selectedKey);
-          if (selectedConflict && newTarget?.supported && newTarget.hash) {
-            selectedConflict = { ...selectedConflict, unavailable: false };
+          const selectedLatestInstance = newTarget?.instances?.find((item) => item.id === mdxInstance.value);
+          const selectedLatestHasValue = selectedLatestInstance && Object.hasOwn(selectedLatestInstance.props || {}, mdxProp.value);
+          if (selectedConflict && newTarget?.supported && newTarget.hash && selectedLatestHasValue) {
+            selectedConflict = { ...selectedConflict, externalValue: selectedLatestInstance.props[mdxProp.value], unavailable: false };
             mdxDraftConflicts.set(selectedKey, selectedConflict);
           }
           if (!newTarget?.supported || !newTarget?.hash) {
             if (mdxDrafts.has(selectedKey) || selectedConflict) {
               if (pendingMdxPreview && mdxDraftKey(pendingMdxPreview.targetId, pendingMdxPreview.instanceId, pendingMdxPreview.prop) === selectedKey) pendingMdxPreview = null;
-              selectedConflict = { selectionKey: selectedKey, message: 'Quelle nicht verfügbar oder nicht mehr unterstützt. Deine Eingabe bleibt erhalten.', unavailable: true };
+              const oldInstance = oldTarget?.instances?.find((entry) => entry.id === mdxInstance.value);
+              const oldValue = oldInstance?.props?.[mdxProp.value];
+              const draftValue = mdxDrafts.has(selectedKey) ? mdxDrafts.get(selectedKey) : oldValue;
+              selectedConflict = { ...selectedConflict, selectionKey: selectedKey, baseValue: selectedConflict?.baseValue ?? oldValue, externalValue: undefined, draftValue, message: 'Quelle nicht verfügbar oder nicht mehr unterstützt. Deine Eingabe bleibt erhalten.', unavailable: true };
               mdxDraftConflicts.set(selectedKey, selectedConflict);
               renderMdx();
             }
@@ -899,13 +916,16 @@
               const oldValue = instance?.props?.[mdxProp.value];
               const draftKey = mdxDraftKey(selectedId);
               const draftValue = mdxDrafts.has(draftKey) ? mdxDrafts.get(draftKey) : oldValue;
+              const latestInstance = newTarget?.instances?.find((entry) => entry.id === mdxInstance.value);
+              const externalValue = latestInstance && Object.hasOwn(latestInstance.props || {}, mdxProp.value) ? latestInstance.props[mdxProp.value] : undefined;
+              const externalValueAvailable = externalValue !== undefined;
               const draftDirty = String(draftValue) !== String(oldValue);
               const existingConflict = mdxDraftConflicts.get(draftKey);
               if (pendingMdxPreview && mdxDraftKey(pendingMdxPreview.targetId, pendingMdxPreview.instanceId, pendingMdxPreview.prop) === draftKey) pendingMdxPreview = null;
               if (draftDirty || existingConflict) {
                 const revisions = (mdxConflictRevisions.get(draftKey) || 0) + (existingConflict ? 1 : 0);
                 mdxConflictRevisions.set(draftKey, revisions);
-                mdxDraftConflicts.set(draftKey, { selectionKey: draftKey, message: revisions > 0 ? 'Die Quelle wurde erneut geändert. Prüfe den neuesten Stand vor einer erneuten Vorschau.' : 'Eine externe Quellrevision wurde erkannt.', unavailable: !newTarget?.supported });
+                mdxDraftConflicts.set(draftKey, { ...existingConflict, selectionKey: draftKey, baseValue: existingConflict?.baseValue ?? oldValue, externalValue, draftValue, message: revisions > 0 ? 'Die Quelle wurde erneut geändert. Prüfe den neuesten Stand vor einer erneuten Vorschau.' : 'Eine externe Quellrevision wurde erkannt.', unavailable: !newTarget?.supported || !externalValueAvailable });
               } else {
                 mdxState = latest;
                 renderMdx();
@@ -918,14 +938,21 @@
           }
           selectedConflict = mdxDraftConflicts.get(selectedKey);
           if (selectedConflict && (!newTarget?.supported || !newTarget?.hash)) {
-            mdxDraftConflicts.set(selectedKey, { ...selectedConflict, unavailable: true, message: 'Die MDX-Quelle ist nicht verfügbar oder nicht mehr unterstützt. Deine Eingabe bleibt erhalten.' });
+            mdxDraftConflicts.set(selectedKey, { ...selectedConflict, externalValue: undefined, unavailable: true, message: 'Die MDX-Quelle ist nicht verfügbar oder nicht mehr unterstützt. Deine Eingabe bleibt erhalten.' });
           }
           if (mdxDraftConflicts.has(selectedKey)) renderMdx();
           else if (!oldTarget && latest.configured) { mdxState = latest; renderMdx(); }
         } catch {
           if (sequence === mdxPollSequence) {
             const key = mdxDraftKey();
-            if (mdxDrafts.has(key) || mdxDraftConflicts.has(key)) mdxDraftConflicts.set(key, { selectionKey: key, unavailable: true, message: 'Quelle derzeit offline; lokale Eingabe bleibt erhalten. Wiederherstellen und neu laden ist erforderlich.' });
+            if (mdxDrafts.has(key) || mdxDraftConflicts.has(key)) {
+              const conflict = mdxDraftConflicts.get(key);
+              const target = mdxState.targets.find((item) => item.id === mdxTarget.value);
+              const instance = target?.instances?.find((item) => item.id === mdxInstance.value);
+              const baseValue = instance?.props?.[mdxProp.value];
+              const draftValue = mdxDrafts.has(key) ? mdxDrafts.get(key) : mdxValue?.type === 'checkbox' ? mdxValue.checked : mdxValue?.value;
+              mdxDraftConflicts.set(key, { ...conflict, selectionKey: key, baseValue: conflict?.baseValue ?? baseValue, externalValue: undefined, draftValue, unavailable: true, message: 'Quelle derzeit offline; lokale Eingabe bleibt erhalten. Wiederherstellen und neu laden ist erforderlich.' });
+            }
             renderMdx();
           }
         }
