@@ -2,3 +2,8 @@
 @plugin "daisyui";
 
 @source "../editor";
+
+.avcms-editor-ui :is(button, input, select) {
+  min-width: 24px;
+  min-height: 24px;
+}

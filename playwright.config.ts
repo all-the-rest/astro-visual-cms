@@ -2,7 +2,7 @@ import { defineConfig } from '@playwright/test'
 
 export default defineConfig({
   testDir: './browser-tests',
-  testMatch: ['gallery.spec.ts', 'in-context-selection.spec.ts'],
+  testMatch: ['accessibility.spec.ts', 'gallery.spec.ts', 'in-context-selection.spec.ts'],
   fullyParallel: false,
   workers: 1,
   retries: 0,

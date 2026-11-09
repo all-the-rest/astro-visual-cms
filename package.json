@@ -57,6 +57,7 @@
     "@astro-visual-cms/image-variants": "workspace:*",
     "@astrojs/mdx": "8.1.3",
     "astro": "7.4.7",
-    "sharp": "0.35.5"
+    "sharp": "0.35.5",
+    "@axe-core/playwright": "4.14.0"
   }
 }
