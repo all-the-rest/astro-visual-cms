@@ -38,6 +38,7 @@
           <h2 class="card-title">Astro Content Collections</h2>
           <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Collections und vorhandene skalare Schemafelder sind bearbeitbar. Konfigurationsänderungen benötigen eine explizite Diff-Bestätigung.</p>
           <p id="collections-reason" class="alert alert-info" role="status" hidden></p>
+          <div id="collection-conflicts" class="grid gap-2"></div>
           <div class="grid gap-5 md:grid-cols-3">
             <section>
               <h3 class="font-semibold">Collections</h3>
@@ -257,6 +258,12 @@
       let saving = false;
       let pendingPreview = null;
       let pendingCollectionPreview = null;
+      const collectionDrafts = new Map();
+      const collectionConflicts = new Map();
+      const collectionDraftKey = (collectionId, entryId, field) => `${collectionId}\u0000${entryId}\u0000${field}`;
+      const collectionSourceConflictCodes = new Set(['STALE_HASH', 'STALE_CONFIG', 'UNSUPPORTED_COLLECTION', 'UNSUPPORTED_FIELD', 'UNSUPPORTED_ENTRY', 'UNSUPPORTED_FIELD_TYPE', 'UNSAFE_COLLECTION_PATH', 'ENTRY_LIMIT', 'UNSUPPORTED_FRONTMATTER']);
+      const collectionUnsupportedSourceCodes = new Set(['UNSUPPORTED_COLLECTION', 'UNSUPPORTED_FIELD', 'UNSUPPORTED_ENTRY', 'UNSUPPORTED_FIELD_TYPE', 'UNSAFE_COLLECTION_PATH', 'ENTRY_LIMIT', 'UNSUPPORTED_FRONTMATTER']);
+      let collectionPollInFlight = false;
       let pendingConfigPreview = null;
       let configOperation = null;
       let draggedSlug = null;
@@ -372,8 +379,23 @@
       }
 
       function renderCollections() {
-        collectionsPanel.hidden = !collectionState.configured;
-        if (!collectionState.configured) return;
+        const focusedField = collectionFields.contains(document.activeElement) ? document.activeElement : null;
+        const focusedDraftKey = focusedField?.dataset.collectionDraftKey || '';
+        const focusedSelection = focusedField instanceof HTMLInputElement && focusedField.type !== 'number'
+          ? { start: focusedField.selectionStart, end: focusedField.selectionEnd, direction: focusedField.selectionDirection }
+          : null;
+        collectionsPanel.hidden = !collectionState.configured && collectionConflicts.size === 0;
+        renderCollectionConflicts();
+        if (!collectionState.configured) {
+          if (collectionConflicts.size) {
+            collectionsReason.hidden = false;
+            collectionsReason.textContent = 'Collections derzeit nicht verfügbar. Konflikte und lokale Entwürfe bleiben erhalten; Vorschau und Übernahme sind gesperrt.';
+          }
+          collectionPicker.replaceChildren(); collectionEntryPicker.replaceChildren(); collectionFields.replaceChildren();
+          document.querySelector('#create-entry-form').hidden = true;
+          document.querySelector('#config-editors').hidden = true;
+          return;
+        }
         const configReason = collectionState.reason || collectionState.configEditing?.reason || '';
         collectionsReason.hidden = !configReason;
         collectionsReason.textContent = configReason;
@@ -476,16 +498,69 @@
             input.placeholder = 'Neuen Wert eingeben';
           }
           input.disabled = busy();
+          const draftKey = collectionDraftKey(collection.id, entry.id, field.name);
+          input.dataset.collectionDraftKey = draftKey;
+          let draft = collectionDrafts.get(draftKey);
+          if (!draft) {
+            draft = { value: '', type: field.type, hash: entry.hash, dirty: false };
+            collectionDrafts.set(draftKey, draft);
+          }
+          if (!draft.dirty) draft.hash = entry.hash;
+          input.value = draft.value;
+          input.addEventListener('input', () => { draft.value = input.value; draft.type = field.type; draft.dirty = true; if (collectionConflicts.has(draftKey)) renderCollectionConflicts(); });
+          input.addEventListener('change', () => { draft.value = input.value; draft.type = field.type; draft.dirty = true; if (collectionConflicts.has(draftKey)) renderCollectionConflicts(); });
           wrapper.append(input);
+          const conflict = collectionConflicts.get(draftKey);
           const submit = document.createElement('button');
           submit.className = 'btn btn-sm btn-outline justify-self-start';
           submit.type = 'button';
           submit.textContent = 'Vorschau';
-          submit.disabled = busy();
+          submit.disabled = busy() || Boolean(conflict);
           submit.addEventListener('click', () => prepareCollectionField(collection, entry, field, input));
           wrapper.append(submit);
           collectionFields.append(wrapper);
         }
+        if (focusedDraftKey) {
+          const input = [...collectionFields.querySelectorAll('[data-collection-draft-key]')].find((item) => item.dataset.collectionDraftKey === focusedDraftKey);
+          input?.focus();
+          if (input instanceof HTMLInputElement && focusedSelection) input.setSelectionRange(focusedSelection.start, focusedSelection.end, focusedSelection.direction);
+        }
+      }
+
+      function renderCollectionConflicts() {
+        const host = document.querySelector('#collection-conflicts');
+        const focus = host.contains(document.activeElement) ? { index: document.activeElement.dataset.conflictIndex, action: document.activeElement.dataset.conflictAction } : null;
+        host.replaceChildren();
+        for (const [index, [key, conflict]] of [...collectionConflicts].entries()) {
+          const [collectionId, entryId, fieldName] = key.split('\u0000');
+          const draft = collectionDrafts.get(key); if (!draft) continue;
+          const box = document.createElement('div'); box.setAttribute('role', 'alert'); box.setAttribute('aria-live', 'assertive');
+          const draftDisplay = typeof draft.value === 'string' ? JSON.stringify(draft.value) : String(draft.value);
+          const statusLabel = conflict.kind === 'write-blocked' ? 'Schreibstatus' : 'Quellkonflikt';
+          const statusValue = conflict.kind === 'write-blocked'
+            ? !conflict.latest ? 'Blockiert; aktuelle Quellrevision nicht verfügbar' : conflict.base === conflict.latest ? 'Blockiert; keine externe Revision erkannt' : 'Blockiert; externe Revision beobachtet'
+            : `${collectionId}/${entryId}/${fieldName}`;
+          for (const [label, value] of [[statusLabel, statusValue], ['Basisrevision', conflict.base], ['Aktuelle Revision', conflict.latest || 'nicht verfügbar'], ['Lokaler Entwurf', draftDisplay]]) {
+            const line = document.createElement('p'); line.textContent = `${label}: ${value}`; box.append(line);
+          }
+          if (conflict.kind === 'write-blocked') {
+            const reason = document.createElement('p');
+            reason.textContent = `Der sichere Schreibmodus blockiert das Ersetzen dieser Quelldatei. Es wurde nichts geschrieben; dein Entwurf bleibt erhalten.${conflict.latest && conflict.base === conflict.latest ? ' Dies ist kein erkannter Quellkonflikt.' : ''}`;
+            box.append(reason);
+          } else if (conflict.latest && conflict.blockedHash === conflict.latest) {
+            const reason = document.createElement('p'); reason.textContent = 'Diese Quellrevision wird vom unterstützten Collection-Editor nicht akzeptiert; erneutes Anwenden ist gesperrt.'; box.append(reason);
+          }
+          const discard = document.createElement('button'); discard.type = 'button'; discard.textContent = 'Verwerfen und neu laden'; discard.disabled = saving; discard.dataset.conflictIndex = String(index); discard.dataset.conflictAction = 'discard'; discard.addEventListener('click', () => { if (saving) return; collectionDrafts.delete(key); collectionConflicts.delete(key); render(); }); box.append(discard);
+          const reapply = document.createElement('button'); reapply.type = 'button'; reapply.textContent = 'Entwurf erneut anwenden und Vorschau erstellen'; reapply.disabled = saving || conflict.kind === 'write-blocked' || !conflict.latest || conflict.blockedHash === conflict.latest; reapply.dataset.conflictIndex = String(index); reapply.dataset.conflictAction = 'reapply';
+          reapply.addEventListener('click', () => {
+            const collection = collectionState.collections?.find((item) => item.id === collectionId);
+            const entry = collection?.entries?.find((item) => item.id === entryId);
+            const field = collection?.fields?.find((item) => item.name === fieldName && item.editable);
+            if (!entry?.editable || !field || entry.hash !== conflict.latest || conflict.kind === 'write-blocked' || conflict.blockedHash === conflict.latest) return;
+            draft.hash = conflict.latest; collectionConflicts.delete(key); prepareCollectionField(collection, entry, field, { value: draft.value }, true);
+          }); box.append(reapply); host.append(box);
+        }
+        if (focus) host.querySelector(`[data-conflict-index="${focus.index}"][data-conflict-action="${focus.action}"]`)?.focus();
       }
 
       function renderEntryCreation(collection) {
@@ -796,6 +871,58 @@
           : 'Fixture geladen. Wähle eine Galerie zum Sortieren.', unavailable.length ? 'warning' : 'success');
       }
 
+      function markCollectionConflict(key, draft, latest = '', blockedHash = '') {
+        const existing = collectionConflicts.get(key);
+        collectionConflicts.set(key, { kind: 'source', base: existing?.base || draft.hash, latest, blockedHash: blockedHash || existing?.blockedHash || '' });
+        const pending = pendingCollectionPreview;
+        if (pending?.field && collectionDraftKey(pending.collectionId, pending.entryId, pending.field) === key) {
+          pendingCollectionPreview = null;
+          renderCollectionConfirmation();
+        }
+      }
+
+      function markCollectionWriteBlocked(key, draft, hash) {
+        collectionConflicts.set(key, { kind: 'write-blocked', base: draft.hash, latest: hash, blockedHash: hash });
+      }
+
+      async function pollCollections() {
+        if (collectionPollInFlight) return;
+        collectionPollInFlight = true;
+        try {
+          const response = await fetch('/api/collections', { cache: 'no-store' });
+          if (!response.ok) throw new Error(String(response.status));
+          const next = await response.json(); collectionState = next;
+          for (const [key, draft] of collectionDrafts) {
+            const [collectionId, entryId, fieldName] = key.split('\u0000');
+            const collection = next.collections?.find((item) => item.id === collectionId);
+            const entry = collection?.entries?.find((item) => item.id === entryId);
+            const field = collection?.fields?.find((item) => item.name === fieldName && item.editable);
+            const valid = Boolean(entry?.editable && field);
+            if (!draft.dirty) {
+              if (valid) draft.hash = entry.hash;
+              else { collectionDrafts.delete(key); collectionConflicts.delete(key); }
+              continue;
+            }
+            const existing = collectionConflicts.get(key);
+            if (existing?.kind === 'write-blocked') collectionConflicts.set(key, { ...existing, latest: valid ? entry.hash : '' });
+            else if (!valid) markCollectionConflict(key, draft);
+            else if (collectionConflicts.has(key) || entry.hash !== draft.hash) markCollectionConflict(key, draft, entry.hash, collectionConflicts.get(key)?.blockedHash || '');
+          }
+        } catch {
+          for (const [key, draft] of collectionDrafts) if (draft.dirty) {
+            const existing = collectionConflicts.get(key);
+            if (existing?.kind === 'write-blocked') collectionConflicts.set(key, { ...existing, latest: '' });
+            else markCollectionConflict(key, draft);
+          }
+        } finally {
+          collectionPollInFlight = false;
+          renderCollectionConfirmation();
+          renderCollections();
+        }
+      }
+      window.setInterval(() => { if (!document.hidden) pollCollections(); }, 2000);
+      window.addEventListener('focus', pollCollections);
+
       async function move(galleryId, index, delta) {
         if (busy()) return;
         const order = [...(galleryById(galleryId)?.order || [])];
@@ -1080,8 +1207,11 @@
         }
       }
 
-      async function prepareCollectionField(collection, entry, field, input) {
-        if (busy()) return;
+      async function prepareCollectionField(collection, entry, field, input, reapply = false) {
+        const draftKey = collectionDraftKey(collection.id, entry.id, field.name);
+        const draft = collectionDrafts.get(draftKey);
+        if (busy() || collectionConflicts.has(draftKey) && !reapply) return;
+        if (draft) { draft.value = input.value; draft.type = field.type; draft.dirty = true; }
         let value;
         if (field.type === 'boolean') {
           if (!['true', 'false'].includes(input.value)) {
@@ -1105,7 +1235,7 @@
           if (input.value.length > 512) return;
           value = input.value;
         }
-        const operation = { collectionId: collection.id, entryId: entry.id, field: field.name, value, hash: entry.hash };
+        const operation = { collectionId: collection.id, entryId: entry.id, field: field.name, value, hash: reapply ? draft.hash : entry.hash };
         saving = true;
         render();
         status(`Änderung für ${collection.name}/${entry.id} wird vorbereitet …`);
@@ -1115,6 +1245,7 @@
           if (!response.ok) {
             const error = new Error(result.error || `Status ${response.status}`);
             error.status = response.status;
+            error.code = result.code;
             throw error;
           }
           if (!result.diff || !result.previewId) {
@@ -1125,9 +1256,14 @@
           render();
           status('Frontmatter-Diff prüfen. Erst nach Bestätigung wird geschrieben.', 'warning');
         } catch (error) {
+          if (collectionSourceConflictCodes.has(error.code)) {
+            pendingCollectionPreview = null;
+            const blockedHash = collectionUnsupportedSourceCodes.has(error.code) ? operation.hash : '';
+            markCollectionConflict(draftKey, draft, blockedHash, blockedHash);
+          }
           status(`Keine Collection-Vorschau erstellt: ${error.message}.`, 'error');
-          if (error.status === 403 || error.status === 409) {
-            try { await load(); } catch (loadError) { status(`Collections konnten nicht neu geladen werden: ${loadError.message}`, 'error'); }
+          if (error.status === 403 || error.status === 409 || collectionSourceConflictCodes.has(error.code)) {
+            try { if (collectionSourceConflictCodes.has(error.code)) await pollCollections(); else await load(); } catch (loadError) { status(`Collections konnten nicht neu geladen werden: ${loadError.message}`, 'error'); }
           }
         } finally {
           saving = false;
@@ -1185,6 +1321,7 @@
       async function confirmCollectionChange() {
         if (saving || !pendingCollectionPreview) return;
         const operation = pendingCollectionPreview;
+        if (operation.field && collectionConflicts.has(collectionDraftKey(operation.collectionId, operation.entryId, operation.field))) return;
         saving = true;
         render();
         const creating = operation.kind === 'create-entry';
@@ -1210,17 +1347,36 @@
           if (!response.ok) {
             const error = new Error(result.error || `Status ${response.status}`);
             error.status = response.status;
+            error.code = result.code;
             throw error;
           }
           pendingCollectionPreview = null;
+          if (!creating) {
+            const key = collectionDraftKey(operation.collectionId, operation.entryId, operation.field);
+            collectionDrafts.delete(key); collectionConflicts.delete(key);
+          }
           await load();
           status(creating
             ? `Neuer Eintrag angelegt: ${result.collectionId}/${result.entryId}. Astro Content Sync sollte die Vorschau aktualisieren.`
             : `Gespeichert. Bei späteren Schemaänderungen Astro Content Sync bzw. Dev-Server-Neustart prüfen. (${result.collectionId}/${result.entryId})`, 'success');
         } catch (error) {
           pendingCollectionPreview = null;
+          if (!creating && error.code === 'SOURCE_REPLACEMENT_DISABLED') {
+            const key = collectionDraftKey(operation.collectionId, operation.entryId, operation.field);
+            const draft = collectionDrafts.get(key);
+            if (draft) markCollectionWriteBlocked(key, draft, operation.hash);
+          }
+          if (!creating && collectionSourceConflictCodes.has(error.code)) {
+            const key = collectionDraftKey(operation.collectionId, operation.entryId, operation.field);
+            const draft = collectionDrafts.get(key);
+            if (draft) {
+              const blockedHash = collectionUnsupportedSourceCodes.has(error.code) ? operation.hash : '';
+              markCollectionConflict(key, draft, blockedHash, blockedHash);
+            }
+          }
           status(`Nicht gespeichert: ${error.message}. Lade den aktuellen Stand …`, 'warning');
-          try { await load(); } catch (loadError) { status(`Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
+          if (!creating && (error.code === 'SOURCE_REPLACEMENT_DISABLED' || collectionSourceConflictCodes.has(error.code))) await pollCollections();
+          else try { await load(); } catch (loadError) { status(`Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
         } finally {
           saving = false;
           render();
