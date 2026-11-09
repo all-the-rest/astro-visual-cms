@@ -14,6 +14,7 @@ export const collections = {
     title: z.string(), published: z.boolean(), category: z.enum(['note', 'news']), tags: z.array(z.string()),
   }) }),
   unsupported: defineCollection({ loader: glob({ base: './src/content/posts', pattern: '**/*.{md,mdx}' }), schema: z.object({ title: z.string() }) }),
+  drafts: defineCollection({ loader: glob({ base: './src/content/drafts', pattern: '*.md' }), schema: z.object({ title: z.string(), order: z.number(), featured: z.boolean().default(false), summary: z.string().optional() }) }),
 }`
 
 const entrySource = `---\ntitle: "Old title" # keep this comment\npublished: false\ncategory: note\ntags: [one, two]\n---\n\nSynthetic body.\n`
@@ -24,6 +25,7 @@ async function makeProject(t) {
   const entryPath = path.join(projectRoot, 'src/content/posts/nested/one.md')
   await mkdir(path.dirname(configPath), { recursive: true })
   await mkdir(path.dirname(entryPath), { recursive: true })
+  await mkdir(path.join(projectRoot, 'src/content/drafts'), { recursive: true })
   await writeFile(configPath, configSource)
   await writeFile(entryPath, entrySource)
   t.after(() => rm(projectRoot, { recursive: true, force: true }))
@@ -78,6 +80,9 @@ test('discovery endpoint exposes a bounded, path-free catalog and explicit unsup
   assert.equal(posts.entries[0].hash, hash(entrySource))
   assert.equal(posts.fields.find((field) => field.name === 'title').editable, true)
   assert.equal(posts.fields.find((field) => field.name === 'tags').editable, false)
+  assert.equal(posts.creationSupported, false, 'required array fields must keep entry creation disabled')
+  assert.equal(posts.fields.find((field) => field.name === 'published').default, undefined)
+  assert.equal(state.collections.find((item) => item.id === 'drafts').fields.find((field) => field.name === 'featured').default, false)
   const unsupported = state.collections.find((item) => item.id === 'unsupported')
   assert.equal(unsupported.mode, 'read-only')
   assert.match(unsupported.reason, /patterns are supported/)
@@ -290,6 +295,58 @@ test('a stale atomic-writer result becomes a safe config conflict', async (t) =>
   assert.equal(result.code, 'STALE_CONFIG')
   assert.doesNotMatch(result.error, /private path detail/)
   assert.equal(await readFile(project.configPath, 'utf8'), source)
+})
+
+test('static glob entry creation previews YAML, validates values and exclusively creates only after confirmation', async (t) => {
+  const project = await makeProject(t)
+  let creations = 0
+  const { origin, headers } = await start(t, {
+    projectRoot: project.projectRoot,
+    contentConfigPath: project.configPath,
+    createSource: async (...args) => { creations += 1; const { createSourceExclusively } = await import('../src/editor/source-write.mjs'); return createSourceExclusively(...args) },
+  })
+  const catalog = await (await fetch(`${origin}/api/collections`)).json()
+  const drafts = catalog.collections.find((item) => item.id === 'drafts')
+  assert.equal(drafts.creationSupported, true)
+  const operation = { collectionId: 'drafts', entryId: 'hello-world.md', values: { title: 'Hello — 東京', order: 4, summary: 'Optional text' }, hash: catalog.configHash }
+  const previewResponse = await fetch(`${origin}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })
+  assert.equal(previewResponse.status, 200)
+  const preview = await previewResponse.json()
+  assert.deepEqual(preview.diff, { start: 0, end: 0, before: '', after: '---\ntitle: Hello — 東京\norder: 4\nfeatured: false\nsummary: Optional text\n---\n' })
+  assert.equal(creations, 0)
+  assert.deepEqual(await readdir(path.join(project.projectRoot, 'src/content/drafts')), [])
+
+  const invalidValue = await fetch(`${origin}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, entryId: 'bad-name.md', values: { ...operation.values, order: 'four' } }) })
+  assert.equal(invalidValue.status, 422)
+  assert.equal((await invalidValue.json()).code, 'INVALID_FIELD_VALUE')
+  const traversal = await fetch(`${origin}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, entryId: '../escape.md' }) })
+  assert.equal(traversal.status, 422)
+  assert.equal(creations, 0)
+
+  const foreignToken = (await (await fetch(`${origin}/api/session`)).json()).token
+  const foreignCommit = await fetch(`${origin}/api/collections/create-entry/commit`, { method: 'POST', headers: { ...headers, 'x-editor-token': foreignToken }, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(foreignCommit.status, 409)
+  assert.equal((await foreignCommit.json()).code, 'PREVIEW_SESSION_MISMATCH')
+  assert.equal(creations, 0)
+
+  const commit = await fetch(`${origin}/api/collections/create-entry/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(commit.status, 201)
+  const createdPath = path.join(project.projectRoot, 'src/content/drafts/hello-world.md')
+  const created = await readFile(createdPath, 'utf8')
+  assert.equal(created, preview.diff.after)
+  assert.equal(hash(created), preview.hash)
+  assert.equal(creations, 1)
+
+  const racedOperation = { ...operation, entryId: 'external-race.md' }
+  const collisionPreview = await (await fetch(`${origin}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(racedOperation) })).json()
+  const racedPath = path.join(project.projectRoot, 'src/content/drafts/external-race.md')
+  await writeFile(racedPath, 'external bytes')
+  const collisionCommit = await fetch(`${origin}/api/collections/create-entry/commit`, { method: 'POST', headers, body: JSON.stringify({ ...racedOperation, previewId: collisionPreview.previewId }) })
+  assert.equal(collisionCommit.status, 409)
+  assert.equal((await collisionCommit.json()).code, 'ENTRY_EXISTS')
+  assert.equal(await readFile(createdPath, 'utf8'), created, 'the first created entry must remain intact')
+  assert.equal(await readFile(racedPath, 'utf8'), 'external bytes', 'a file created after preview must never be overwritten')
+  assert.equal(creations, 1)
 })
 
 test('collection field preview is exact and path-free; cancel/no-confirm never writes, confirmation writes one scalar', async (t) => {

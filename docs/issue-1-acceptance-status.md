@@ -1,0 +1,34 @@
+# Issue #1 acceptance status
+
+Status is evidence-scoped: passing a synthetic fixture does not establish support
+for arbitrary Astro projects or MDX. “Partial” means the criterion is only proven
+for the documented syntax/version/fixture; it is not release acceptance.
+
+| Issue #1 acceptance criterion | Status | Existing evidence / remaining gate |
+| --- | --- | --- |
+| Dev-only install leaves production free of CMS routes/bridge/write API; ordinary build works without CMS processes | **Partial** | `pnpm run verify:build` covers the repo build; `pnpm run verify:external-production` now reproducibly installs the local tarball into a disposable `powerbros.at` copy, scans its production output, starts Astro preview without the editor, verifies `/referenzen/` and confirms `/api/collections` is 404. This is evidence for Astro 7.2.4 only; a broader compatibility matrix and accessibility/license gates remain open. |
+| Discover supported `glob()` schemas; unsupported loaders read-only; create entries/collections and show exact diffs | **Partial** | `npm run pack:smoke` now exercises the shipped tarball end to end: create a static collection by confirmed config diff, create a Unicode entry by confirmed content diff, run Astro production build, and assert the generated route renders the entry; the existing collection field-edit/Content Sync path remains covered too. In tarball-installed Astro 7.2.4 `powerbros.at` copies, the UI extended the existing schema and created a new static collection after exact-diff confirmation. After an Astro restart, UI entry creation produced exact Unicode YAML, synced into a new collection route, and passed a final production build. `file()`/custom loaders intentionally stay read-only. |
+| No-op byte equality and exact supported edits; malformed/ambiguous inputs never write | **Partial** | Range-patch and frontmatter tests cover Unicode, BOM, CRLF, comments, no-op, stale hashes and unsupported syntax. Full no-op open/save behavior across arbitrary MDX is not established. |
+| Imported/nested unknown MDX plus literal gallery reorder; exact unchanged bytes; compile; reject spread; define comment behavior | **Partial** | Synthetic MDX unit/browser and installed-tarball tests cover a narrow literal adapter, unchanged bytes, compilation, spread rejection and fail-closed comment cases. Not tested against the real external project's MDX corpus. |
+| Click/edit a known Markdown node; actual Astro preview updates; ambiguous output disabled; responsive presets/navigation/HMR work | **Partial** | The configured paragraph-marker proof and responsive/route browser tests use synthetic fixtures. No established marker/source mapping for `powerbros.at`; no general DOM-to-source provenance. |
+| External concurrent edit conflicts; traversal/symlink/cross-origin/message attacks fail closed; loopback default | **Partial** | Unit/server tests cover stale edits, traversal, symlinks, origin/session boundaries, trusted-frame nonce/source and loopback binding. Writer tests document a residual cross-process race between final check and rename; no general multi-writer transaction guarantee. |
+| Unit/E2E/fixtures/production/accessibility/license checks on pinned and current Astro; limitations documented | **Partial** | Unit, synthetic E2E, package smoke and version-pinned Astro 7.2.4/7.4.7 probes exist; narrow limitations are documented. Accessibility audit, dependency-license gate, full external compatibility matrix and current/future Astro release coverage remain open. |
+
+The first named target in Issue #1, `reisinger.pictures`, is not present in this
+workspace. `/projects/powerbros.at` is the available real Astro consumer. A fresh
+copy installed the local package tarball via pnpm, passed `pnpm run build` with
+Astro check at 0 errors, and discovered 12 `referenzen` entries from its existing
+static `glob()`/Zod config. The real UI previewed and confirmed the optional
+`cmsSmokeNote` schema extension; a subsequent `event` edit changed only the
+quoted scalar (87-byte source remained 87 bytes) and appeared on the live
+`/referenzen/` route. The original entry remained at SHA-256
+`7f351538b5c55d202a976bc94f933fb8dfc5c68c48e252a5e088225eae63ab2c`; copied
+fixtures/config/content and temporary processes were discarded. A separate copy
+used the UI to create a static `cmsSmokeCollection` with required string field
+`title`, confirmed the schema diff, and restarted Astro as required for the new
+config. It then created `first-note.md` through the UI; preview left the directory
+empty, confirmation created exact YAML (`title: Neue Notiz — 東京`), the new
+`/cms-smoke/` route rendered it through Content Sync, and a second `pnpm run
+build` passed Astro check with 0 errors and included it in `dist`. That copy was
+discarded. These probes do not establish production readiness or general MDX
+support.

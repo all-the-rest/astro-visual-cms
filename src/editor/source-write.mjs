@@ -67,3 +67,32 @@ export async function writeSourceAtomically(filePath, expectedHash, nextSource, 
     }
   }
 }
+
+/** Create a complete source file atomically without ever replacing an existing path. */
+export async function createSourceExclusively(filePath, source, fs = defaultFs) {
+  const directory = path.dirname(filePath)
+  const basename = path.basename(filePath)
+  let tempPath
+  let handle
+  try {
+    while (!handle) {
+      const candidate = path.join(directory, `.${basename}.${randomBytes(16).toString('hex')}.tmp`)
+      try {
+        handle = await fs.open(candidate, 'wx', 0o666)
+        tempPath = candidate
+      } catch (error) {
+        if (error.code === 'EEXIST') continue
+        throw error
+      }
+    }
+    await handle.writeFile(source, 'utf8')
+    await handle.sync()
+    await handle.close()
+    handle = undefined
+    await fs.link(tempPath, filePath)
+  } finally {
+    await handle?.close().catch(() => {})
+    if (tempPath) await fs.unlink(tempPath).catch((error) => { if (error.code !== 'ENOENT') throw error })
+  }
+  return { created: true }
+}

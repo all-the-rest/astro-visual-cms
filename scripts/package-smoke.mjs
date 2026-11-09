@@ -52,6 +52,7 @@ try {
   const consumer = path.join(temp, 'consumer')
   await mkdir(path.join(consumer, 'src/pages'), { recursive: true })
   await mkdir(path.join(consumer, 'src/content/notes'), { recursive: true })
+  await mkdir(path.join(consumer, 'src/content/smoke-notes'), { recursive: true })
   await mkdir(path.join(consumer, 'src/components'), { recursive: true })
   await writeFile(path.join(consumer, 'package.json'), JSON.stringify({ type: 'module', scripts: { build: 'astro build' } }))
   await writeFile(path.join(consumer, 'astro.config.mjs'), `import { defineConfig } from 'astro/config'; import mdx from '@astrojs/mdx'; import { createLoopbackDevIntegration } from '@astro-visual-cms/editor/integration'; export default defineConfig({ integrations: [mdx(), createLoopbackDevIntegration()] })`)
@@ -63,16 +64,77 @@ try {
   const mdxSource = 'import Card from "../components/Card.astro";\n\n<Card id="fixture-gallery" label="Original MDX label" />'
   await writeFile(path.join(consumer, 'src/components/Card.astro'), '---\nconst { id, label = "" } = Astro.props\n---\n<section data-card-id={id}>{label}</section>')
   await writeFile(mdxFile, mdxSource)
-  await writeFile(path.join(consumer, 'src/content.config.ts'), `import { defineCollection, z } from 'astro:content'; export const collections = { notes: defineCollection({ type: 'content', schema: z.object({ title: z.string() }) }) }`)
-  await writeFile(path.join(consumer, 'src/content/notes/one.md'), '---\ntitle: One\n---\nText')
+  await writeFile(path.join(consumer, 'src/pages/notes.astro'), `---
+import { getCollection } from 'astro:content'
+const notes = (await getCollection('notes')).sort((a, b) => a.data.order - b.data.order)
+---
+<ol>{notes.map((note) => <li data-note-id={note.id}>{note.data.title}</li>)}</ol>`)
+  await writeFile(path.join(consumer, 'src/content.config.ts'), `import { defineCollection, z } from 'astro:content'; import { glob } from 'astro/loaders'; export const collections = { notes: defineCollection({ loader: glob({ base: './src/content/notes', pattern: '**/*.md' }), schema: z.object({ title: z.string(), order: z.number() }) }) }`)
+  const noteFile = path.join(consumer, 'src/content/notes/one.md')
+  const noteSource = '---\ntitle: One\norder: 1\n---\nText'
+  await writeFile(noteFile, noteSource)
+  await writeFile(path.join(consumer, 'src/content/notes/two.md'), '---\ntitle: Two\norder: 2\n---\nOther text')
   const install = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--no-save', path.join(temp, packed.filename), 'astro@7.4.7', '@astrojs/mdx@8.1.3'], { cwd: consumer, encoding: 'utf8', timeout: 180000 })
   assert.equal(install.status, 0, install.stderr)
+  const port = 19000 + Math.floor(Math.random() * 1000)
+  const sitePort = port + 1000
+  const config = { port, sitePort, projectRoot: '.', contentConfigPath: 'src/content.config.ts', fixturePath: 'src/pages/fixture.mdx', previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }], mdxComponentTargets: [{ id: 'fixture-gallery', projectRoot: '.', filePath: 'src/pages/mdx-proof.mdx', importSource: '../components/Card.astro', idProp: 'id', editableProps: ['label'] }] }
+  await writeFile(path.join(consumer, 'editor.json'), JSON.stringify(config))
+  child = spawn(path.join(consumer, 'node_modules/.bin/astro-visual-cms-editor'), ['--config', 'editor.json'], { cwd: consumer, stdio: 'ignore', detached: process.platform !== 'win32' })
+  let response
+  for (let n = 0; n < 60; n++) {
+    try { response = await fetch(`http://127.0.0.1:${port}/api/collections`); if (response.ok) break } catch { await new Promise((resolve) => setTimeout(resolve, 100)) }
+  }
+  assert(response?.ok, 'installed editor server did not start')
+  let state = await response.json()
+  assert.equal(state.configured, true)
+  assert(state.collections.some((collection) => collection.id === 'notes'), 'content collection not exposed')
+  const token = (await (await fetch(`http://127.0.0.1:${port}/api/session`)).json()).token
+  const headers = { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-editor-token': token }
+
+  const schemaOperation = {
+    name: 'smokeNotes', base: './src/content/smoke-notes', pattern: '*.md', hash: state.configHash,
+    fields: [{ name: 'title', type: 'string', required: true }],
+  }
+  const contentConfig = path.join(consumer, 'src/content.config.ts')
+  const originalConfig = await readFile(contentConfig, 'utf8')
+  const schemaPreviewResponse = await fetch(`http://127.0.0.1:${port}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify(schemaOperation) })
+  const schemaPreview = await schemaPreviewResponse.json()
+  assert(schemaPreviewResponse.ok && schemaPreview.previewId, `static collection preview failed: ${JSON.stringify(schemaPreview)}`)
+  assert.equal(await readFile(contentConfig, 'utf8'), originalConfig, 'collection preview wrote before confirmation')
+  assert.match(schemaPreview.diff.after, /smokeNotes/)
+  assert.match(schemaPreview.diff.after, /z\.string\(\)/)
+  const schemaCommit = await fetch(`http://127.0.0.1:${port}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...schemaOperation, previewId: schemaPreview.previewId }) })
+  assert.equal(schemaCommit.status, 200, `static collection commit failed: ${await schemaCommit.text()}`)
+  assert.equal(await readFile(contentConfig, 'utf8'), originalConfig.slice(0, schemaPreview.diff.start) + schemaPreview.diff.after + originalConfig.slice(schemaPreview.diff.end), 'collection commit changed bytes outside its confirmed diff')
+  state = await (await fetch(`http://127.0.0.1:${port}/api/collections`)).json()
+  const smokeNotes = state.collections.find((collection) => collection.id === 'smokeNotes')
+  assert(smokeNotes?.supported && smokeNotes.creationSupported, 'created collection was not rediscovered as editable')
+
+  const createdStaticNote = path.join(consumer, 'src/content/smoke-notes/first-note.md')
+  const entryOperation = { collectionId: 'smokeNotes', entryId: 'first-note.md', values: { title: 'Created collection entry — 東京' }, hash: state.configHash }
+  const entryPreviewResponse = await fetch(`http://127.0.0.1:${port}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(entryOperation) })
+  const entryPreview = await entryPreviewResponse.json()
+  assert(entryPreviewResponse.ok && entryPreview.previewId, `new collection entry preview failed: ${JSON.stringify(entryPreview)}`)
+  assert.equal(entryPreview.diff.after, '---\ntitle: Created collection entry — 東京\n---\n')
+  await assert.rejects(readFile(createdStaticNote), 'new collection entry preview wrote before confirmation')
+  const entryCommit = await fetch(`http://127.0.0.1:${port}/api/collections/create-entry/commit`, { method: 'POST', headers, body: JSON.stringify({ ...entryOperation, previewId: entryPreview.previewId }) })
+  assert.equal(entryCommit.status, 201, `new collection entry commit failed: ${await entryCommit.text()}`)
+  assert.equal(await readFile(createdStaticNote, 'utf8'), entryPreview.diff.after, 'entry bytes differ from the confirmed preview')
+
+  await writeFile(path.join(consumer, 'src/pages/created-notes.astro'), `---
+import { getCollection } from 'astro:content'
+const entries = await getCollection('smokeNotes')
+---
+<ul>{entries.map((entry) => <li data-entry-id={entry.id}>{entry.data.title}</li>)}</ul>`)
   const build = spawnSync('npm', ['run', 'build'], { cwd: consumer, encoding: 'utf8', timeout: 180000 })
   assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`)
   assert((await readFile(path.join(consumer, 'dist/referenzen/index.html'), 'utf8')).includes('Referenzen-Beweis'))
   assert((await readFile(path.join(consumer, 'dist/mdx-proof/index.html'), 'utf8')).includes('Original MDX label'), 'Astro did not compile the synthetic MDX target')
-  const port = 19000 + Math.floor(Math.random() * 1000)
-  const sitePort = port + 1000
+  const createdCollectionHtml = await readFile(path.join(consumer, 'dist/created-notes/index.html'), 'utf8')
+  assert.match(createdCollectionHtml, /data-entry-id="first-note"/)
+  assert.match(createdCollectionHtml, /Created collection entry — 東京/)
+
   let astroLogs = ''
   astro = spawn(path.join(consumer, 'node_modules/.bin/astro'), ['dev', '--host', '127.0.0.1', '--port', String(sitePort), '--strictPort'], { cwd: consumer, stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' })
   astro.stdout.on('data', (chunk) => astroLogs += chunk)
@@ -84,19 +146,48 @@ try {
   }
   assert(page?.ok, 'installed Astro dev server did not serve custom preview route')
   assert((await page.text()).includes('Referenzen-Beweis'))
-  const config = { port, sitePort, projectRoot: '.', contentConfigPath: 'src/content.config.ts', fixturePath: 'src/pages/fixture.mdx', previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }], mdxComponentTargets: [{ id: 'fixture-gallery', projectRoot: '.', filePath: 'src/pages/mdx-proof.mdx', importSource: '../components/Card.astro', idProp: 'id', editableProps: ['label'] }] }
-  await writeFile(path.join(consumer, 'editor.json'), JSON.stringify(config))
-  child = spawn(path.join(consumer, 'node_modules/.bin/astro-visual-cms-editor'), ['--config', 'editor.json'], { cwd: consumer, stdio: 'ignore', detached: process.platform !== 'win32' })
-  let response
-  for (let n = 0; n < 60; n++) {
-    try { response = await fetch(`http://127.0.0.1:${port}/api/collections`); break } catch { await new Promise((resolve) => setTimeout(resolve, 100)) }
+  const notes = state.collections.find((collection) => collection.id === 'notes')
+  const note = notes.entries.find((entry) => entry.id === 'one.md')
+  assert(note?.hash, 'glob collection entry was not discovered with a source hash')
+  const collectionOperation = { collectionId: 'notes', entryId: 'one.md', field: 'order', value: 3, hash: note.hash }
+  const collectionPreviewResponse = await fetch(`http://127.0.0.1:${port}/api/collections/preview`, { method: 'POST', headers, body: JSON.stringify(collectionOperation) })
+  const collectionPreview = await collectionPreviewResponse.json()
+  assert(collectionPreviewResponse.ok && collectionPreview.previewId, `numeric collection preview failed: ${JSON.stringify(collectionPreview)}`)
+  assert.equal(await readFile(noteFile, 'utf8'), noteSource, 'numeric collection preview wrote before confirmation')
+  const collectionCommit = await fetch(`http://127.0.0.1:${port}/api/collections/commit`, { method: 'POST', headers, body: JSON.stringify({ ...collectionOperation, previewId: collectionPreview.previewId }) })
+  assert.equal(collectionCommit.status, 200, `numeric collection commit failed: ${await collectionCommit.text()}`)
+  const noteAfter = noteSource.replace('order: 1', 'order: 3')
+  assert.equal(await readFile(noteFile, 'utf8'), noteAfter, 'numeric collection commit changed bytes outside the selected scalar')
+  let notesRendered = false
+  for (let n = 0; n < 100; n++) {
+    const page = await fetch(`http://127.0.0.1:${sitePort}/notes/`)
+    if (page.ok) {
+      const html = await page.text()
+      if (html.indexOf('data-note-id="two"') < html.indexOf('data-note-id="one"')) { notesRendered = true; break }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  assert(response?.ok, 'installed editor server did not start')
-  const state = await response.json()
-  assert.equal(state.configured, true)
-  assert(state.collections.some((collection) => collection.id === 'notes'), 'content collection not exposed')
-  const token = (await (await fetch(`http://127.0.0.1:${port}/api/session`)).json()).token
-  const headers = { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-editor-token': token }
+  assert(notesRendered, 'Astro glob collection did not sync the confirmed numeric edit and rerender the sorted route')
+  const createOperation = { collectionId: 'notes', entryId: 'three.md', values: { title: 'Three', order: 0 }, hash: state.configHash }
+  const createPreviewResponse = await fetch(`http://127.0.0.1:${port}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(createOperation) })
+  const createPreview = await createPreviewResponse.json()
+  assert(createPreviewResponse.ok && createPreview.previewId, `glob entry creation preview failed: ${JSON.stringify(createPreview)}`)
+  const createdNote = path.join(consumer, 'src/content/notes/three.md')
+  await assert.rejects(readFile(createdNote), 'entry preview must not create a file before confirmation')
+  assert.equal(createPreview.diff.after, '---\ntitle: Three\norder: 0\n---\n')
+  const createCommit = await fetch(`http://127.0.0.1:${port}/api/collections/create-entry/commit`, { method: 'POST', headers, body: JSON.stringify({ ...createOperation, previewId: createPreview.previewId }) })
+  assert.equal(createCommit.status, 201, `glob entry creation commit failed: ${await createCommit.text()}`)
+  assert.equal(await readFile(createdNote, 'utf8'), createPreview.diff.after, 'created YAML entry bytes differ from the confirmed preview')
+  let entryRendered = false
+  for (let n = 0; n < 100; n++) {
+    const page = await fetch(`http://127.0.0.1:${sitePort}/notes/`)
+    if (page.ok) {
+      const html = await page.text()
+      if (html.indexOf('data-note-id="three"') < html.indexOf('data-note-id="two"')) { entryRendered = true; break }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  assert(entryRendered, 'Astro glob collection did not sync and render the confirmed new entry')
   const mdxCatalog = await (await fetch(`http://127.0.0.1:${port}/api/mdx-components`)).json()
   const target = mdxCatalog.targets.find((item) => item.id === 'fixture-gallery')
   assert.equal(target?.instances[0]?.props.label, 'Original MDX label', 'installed MDX adapter did not inspect the component')
@@ -121,7 +212,7 @@ try {
   }
   const ui = await (await fetch(`http://127.0.0.1:${port}/`)).text()
   assert(ui.includes('/referenzen/'), 'custom preview route not rendered by editor UI')
-  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro build, installed editor API, MDX preview/commit and HMR`)
+  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro build, installed editor API, confirmed static collection creation and Unicode YAML entry creation/build, numeric glob-collection Content Sync/reorder, confirmed entry Content Sync/render, and MDX preview/commit/HMR`)
 } finally {
   await stop(child)
   if (astro) {

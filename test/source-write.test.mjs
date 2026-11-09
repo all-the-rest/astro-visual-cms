@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
-import { writeSourceAtomically } from '../src/editor/source-write.mjs'
+import { createSourceExclusively, writeSourceAtomically } from '../src/editor/source-write.mjs'
 
 function hash(source) {
   return createHash('sha256').update(source, 'utf8').digest('hex')
@@ -66,6 +66,19 @@ test('happy path atomically writes exact bytes and leaves no temp files', async 
   await writeSourceAtomically(filePath, hash(original), nextSource)
   assert.deepEqual(await fs.readFile(filePath), Buffer.from(nextSource, 'utf8'))
   await assertNoTempFiles(directory)
+})
+
+test('exclusive source creation publishes complete bytes and never replaces an existing entry', async (t) => {
+  const { directory } = await makeFixture(t, 'existing file stays intact\n')
+  const newPath = path.join(directory, 'new-entry.md')
+  const content = '---\ntitle: "Neue Referenz — 東京"\n---\n'
+
+  await createSourceExclusively(newPath, content)
+  assert.deepEqual(await fs.readFile(newPath), Buffer.from(content, 'utf8'))
+  await assert.rejects(createSourceExclusively(newPath, 'must not replace'), { code: 'EEXIST' })
+  assert.equal(await fs.readFile(newPath, 'utf8'), content)
+  assert.equal(await fs.readFile(path.join(directory, 'fixture.mdx'), 'utf8'), 'existing file stays intact\n')
+  assert.deepEqual((await fs.readdir(directory)).sort(), ['fixture.mdx', 'new-entry.md'])
 })
 
 test('atomic replacement preserves restrictive source permission bits', async (t) => {

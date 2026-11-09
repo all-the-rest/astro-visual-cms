@@ -52,6 +52,13 @@
               <div id="collection-fields" class="grid gap-3"></div>
             </section>
           </div>
+          <p id="create-entry-reason" class="text-xs text-warning" role="status" hidden></p>
+          <form id="create-entry-form" class="grid gap-3 rounded-box border border-base-300 p-4" autocomplete="off" hidden>
+            <h3 class="font-semibold">Markdown-Eintrag anlegen</h3>
+            <label id="create-entry-slug-label" class="grid gap-1 text-sm">Dateiname (Slug)<input class="input input-bordered input-sm" name="slug" required maxlength="63" pattern="[a-z0-9]([a-z0-9-]{0,62})?" placeholder="sommerfest-2026"></label>
+            <div id="create-entry-fields" class="grid gap-3 md:grid-cols-2"></div>
+            <button class="btn btn-outline justify-self-start" type="submit">Eintrag-Vorschau</button>
+          </form>
           <div id="config-editors" class="grid gap-5 md:grid-cols-2" hidden>
             <form id="create-collection-form" class="grid gap-2" autocomplete="off">
               <h3 class="font-semibold">Statische Collection anlegen</h3>
@@ -147,6 +154,9 @@
       const collectionPicker = document.querySelector('#collection-picker');
       const collectionEntryPicker = document.querySelector('#collection-entry-picker');
       const collectionFields = document.querySelector('#collection-fields');
+      const createEntryForm = document.querySelector('#create-entry-form');
+      const createEntryFields = document.querySelector('#create-entry-fields');
+      const createEntryReason = document.querySelector('#create-entry-reason');
       const collectionConfirmation = document.querySelector('#collection-diff-confirmation');
       const collectionDiffRange = document.querySelector('#collection-diff-range');
       const collectionDiffBefore = document.querySelector('#collection-diff-before');
@@ -341,6 +351,7 @@
         }
         const collection = selectedCollection();
         if (!collection) return;
+        renderEntryCreation(collection);
         for (const entry of collection.entries || []) {
           const button = document.createElement('button');
           button.className = 'btn btn-sm';
@@ -411,6 +422,61 @@
           wrapper.append(submit);
           collectionFields.append(wrapper);
         }
+      }
+
+      function renderEntryCreation(collection) {
+        createEntryForm.hidden = !collection.creationSupported;
+        createEntryReason.hidden = collection.creationSupported || !collection.creationReason;
+        createEntryReason.textContent = collection.creationReason || '';
+        document.querySelector('#create-entry-slug-label').firstChild.textContent = `Dateiname (Slug${collection.creationExtension || '.md'})`;
+        createEntryFields.replaceChildren();
+        for (const field of collection.fields || []) {
+          if (!field.editable) {
+            if (field.default !== undefined) {
+              const note = document.createElement('p');
+              note.className = 'text-xs opacity-70';
+              note.textContent = `${field.name}: statischer Standardwert wird verwendet.`;
+              createEntryFields.append(note);
+            }
+            continue;
+          }
+          const label = document.createElement('label');
+          label.className = 'grid gap-1 text-sm';
+          const title = document.createElement('span');
+          title.textContent = `${field.name} (${field.type})${field.required ? ' *' : ''}`;
+          label.append(title);
+          let input;
+          if (field.type === 'enum' || field.type === 'boolean') {
+            input = document.createElement('select');
+            input.className = 'select select-bordered select-sm';
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = field.required && field.default === undefined ? 'Wert auswählen' : 'Optional';
+            input.append(placeholder);
+            const options = field.type === 'boolean' ? ['true', 'false'] : field.values;
+            for (const value of options || []) {
+              const option = document.createElement('option');
+              option.value = String(value);
+              option.textContent = String(value);
+              input.append(option);
+            }
+          } else {
+            input = document.createElement('input');
+            input.className = 'input input-bordered input-sm';
+            input.type = field.type === 'number' ? 'number' : 'text';
+            if (field.type === 'number') input.step = 'any';
+            input.maxLength = 512;
+            input.placeholder = field.default === undefined ? (field.required ? 'Erforderlich' : 'Optional') : String(field.default);
+          }
+          input.dataset.fieldName = field.name;
+          input.dataset.fieldType = field.type;
+          input.required = field.required && field.default === undefined;
+          if (field.default !== undefined) input.value = String(field.default);
+          input.disabled = busy();
+          label.append(input);
+          createEntryFields.append(label);
+        }
+        for (const button of createEntryForm.querySelectorAll('button')) button.disabled = busy() || !collection.creationSupported;
       }
 
       function configField(form) {
@@ -790,21 +856,77 @@
         }
       }
 
+      createEntryForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const collection = selectedCollection();
+        if (busy() || !collection?.creationSupported) return;
+        const slug = createEntryForm.elements.slug.value.trim();
+        if (!/^[a-z0-9](?:[a-z0-9-]{0,62})?$/.test(slug)) {
+          status('Dateiname muss ein sicherer kleingeschriebener Slug ohne Pfadtrenner sein.', 'error');
+          return;
+        }
+        const values = Object.create(null);
+        for (const field of collection.fields || []) {
+          if (!field.editable) continue;
+          const input = [...createEntryFields.querySelectorAll('[data-field-name]')].find((item) => item.dataset.fieldName === field.name);
+          if (!input) continue;
+          if (field.type === 'string') {
+            if (input.value.length > 512) { status(`Feld ${field.name} ist zu lang.`, 'error'); return; }
+            if (input.value !== '' || field.required) values[field.name] = input.value;
+          } else if (field.type === 'number') {
+            if (input.value === '' && !field.required) continue;
+            if (input.value.trim() === '' || !Number.isFinite(input.valueAsNumber)) { status(`Feld ${field.name} benötigt eine endliche Zahl.`, 'error'); return; }
+            values[field.name] = input.valueAsNumber;
+          } else if (field.type === 'boolean') {
+            if (!['true', 'false'].includes(input.value)) { if (field.required) { status(`Feld ${field.name} benötigt einen Boolean-Wert.`, 'error'); return; } continue; }
+            values[field.name] = input.value === 'true';
+          } else if (field.type === 'enum') {
+            if (!field.values?.includes(input.value)) { if (field.required) { status(`Feld ${field.name} benötigt einen Enum-Wert.`, 'error'); return; } continue; }
+            values[field.name] = input.value;
+          }
+        }
+        const operation = { collectionId: collection.id, entryId: `${slug}${collection.creationExtension || '.md'}`, values, hash: collectionState.configHash };
+        saving = true;
+        render();
+        status(`Neuer Eintrag ${collection.name}/${operation.entryId} wird vorbereitet …`);
+        try {
+          const response = await postOperation('/api/collections/create-entry/preview', operation);
+          const result = await response.json();
+          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status });
+          if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau für den neuen Eintrag erhalten.');
+          pendingCollectionPreview = { ...operation, kind: 'create-entry', previewId: result.previewId, diff: result.diff };
+          render();
+          status('Vollständigen Frontmatter-Diff prüfen. Erst nach Bestätigung wird die neue Datei angelegt.', 'warning');
+        } catch (error) {
+          status(`Eintragsvorschau fehlgeschlagen: ${error.message}`, 'error');
+          if (error.status === 403 || error.status === 409) await load();
+        } finally { saving = false; render(); }
+      });
+
       async function confirmCollectionChange() {
         if (saving || !pendingCollectionPreview) return;
         const operation = pendingCollectionPreview;
         saving = true;
         render();
-        status('Bestätigte Frontmatter-Änderung wird atomar gespeichert …');
+        const creating = operation.kind === 'create-entry';
+        status(creating ? 'Bestätigter neuer Eintrag wird exklusiv angelegt …' : 'Bestätigte Frontmatter-Änderung wird atomar gespeichert …');
         try {
-          const response = await postOperation('/api/collections/commit', {
-            previewId: operation.previewId,
-            collectionId: operation.collectionId,
-            entryId: operation.entryId,
-            field: operation.field,
-            value: operation.value,
-            hash: operation.hash,
-          });
+          const response = creating
+            ? await postOperation('/api/collections/create-entry/commit', {
+              previewId: operation.previewId,
+              collectionId: operation.collectionId,
+              entryId: operation.entryId,
+              values: operation.values,
+              hash: operation.hash,
+            })
+            : await postOperation('/api/collections/commit', {
+              previewId: operation.previewId,
+              collectionId: operation.collectionId,
+              entryId: operation.entryId,
+              field: operation.field,
+              value: operation.value,
+              hash: operation.hash,
+            });
           const result = await response.json();
           if (!response.ok) {
             const error = new Error(result.error || `Status ${response.status}`);
@@ -813,7 +935,9 @@
           }
           pendingCollectionPreview = null;
           await load();
-          status(`Gespeichert. Bei späteren Schemaänderungen Astro Content Sync bzw. Dev-Server-Neustart prüfen. (${result.collectionId}/${result.entryId})`, 'success');
+          status(creating
+            ? `Neuer Eintrag angelegt: ${result.collectionId}/${result.entryId}. Astro Content Sync sollte die Vorschau aktualisieren.`
+            : `Gespeichert. Bei späteren Schemaänderungen Astro Content Sync bzw. Dev-Server-Neustart prüfen. (${result.collectionId}/${result.entryId})`, 'success');
         } catch (error) {
           pendingCollectionPreview = null;
           status(`Nicht gespeichert: ${error.message}. Lade den aktuellen Stand …`, 'warning');
@@ -881,11 +1005,22 @@
       });
 
       confirmCollectionButton.addEventListener('click', confirmCollectionChange);
-      cancelCollectionButton.addEventListener('click', () => {
+      cancelCollectionButton.addEventListener('click', async () => {
         if (saving || !pendingCollectionPreview) return;
+        const operation = pendingCollectionPreview;
+        if (operation.kind === 'create-entry') {
+          saving = true; render();
+          try {
+            const response = await postOperation('/api/collections/create-entry/cancel', { previewId: operation.previewId });
+            if (!response.ok) throw new Error((await response.json()).error || `Status ${response.status}`);
+          } catch (error) {
+            status(`Vorschau-Abbruch konnte nicht bestätigt werden: ${error.message}`, 'warning');
+            return;
+          } finally { saving = false; }
+        }
         pendingCollectionPreview = null;
         render();
-        status('Collection-Änderung abgebrochen; die Datei blieb unverändert.', 'info');
+        status('Eintragsänderung abgebrochen; es wurde keine Datei angelegt.', 'info');
       });
 
       async function loadWithRetry() {

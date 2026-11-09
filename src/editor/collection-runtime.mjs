@@ -6,6 +6,7 @@ import {
   realpathSync,
 } from 'node:fs'
 import path from 'node:path'
+import { stringify as stringifyYaml } from 'yaml'
 import { discoverContentCollections, planCollectionCreation, planCollectionFieldExtension } from './collection-discovery.mjs'
 
 export const MAX_COLLECTION_ENTRIES = 250
@@ -78,6 +79,7 @@ function publicField(field) {
     type: field.type,
     required: field.required,
     optional: field.optional,
+    ...(field.default !== undefined ? { default: field.default } : {}),
     ...(field.values ? { values: field.values } : {}),
     editable,
     ...(!editable ? { reason: field.type === 'date' || field.type.startsWith('array<')
@@ -216,6 +218,7 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
           name: collection.name,
           supported: Boolean(collection.supported),
           mode: 'read-only',
+          creationSupported: false,
           fields: (collection.fields || []).map(publicField),
           entries: [],
         }
@@ -265,6 +268,13 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
             }
           }
           result.mode = 'editable'
+          const patterns = config.discovery.collections.find((item) => item.name === collection.name)?.patterns || []
+          result.creationExtension = patterns.some((pattern) => pattern.endsWith('.md')) ? '.md' : '.mdx'
+          result.creationSupported = patterns.some((pattern) => pattern.endsWith('.md') || pattern.endsWith('.mdx')) &&
+            result.fields.every((field) => field.editable || !field.required || field.default !== undefined)
+          if (!result.creationSupported) result.creationReason = patterns.some((pattern) => pattern.endsWith('.md'))
+            ? 'Entry creation requires every required field to use the supported scalar subset or have a static default.'
+            : 'Entry creation requires a supported .md or .mdx glob and supported required scalar fields.'
         } catch (error) {
           result.supported = false
           result.reason = error.code === 'COLLECTION_LIMIT'
@@ -363,6 +373,79 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
     }
   }
 
+  function planEntryCreation({ collectionId, entryId, values, hash }) {
+    const state = inspect()
+    if (state._configHash !== hash) throw safeFailure('STALE_CONFIG', 'Content config changed; prepare the entry again.')
+    const collection = state.collections.find((item) => item.id === collectionId)
+    if (!state.supported || collection?.mode !== 'editable') {
+      throw safeFailure('UNSUPPORTED_COLLECTION', collection?.reason || state.reason || 'Collection is not supported for entry creation.')
+    }
+    if (typeof entryId !== 'string' || !/^[a-z0-9](?:[a-z0-9-]{0,62})?\.(?:md|mdx)$/.test(entryId) || entryId.length > 68) {
+      throw safeFailure('INVALID_ENTRY_ID', 'Entry filename must be a simple lowercase slug ending in .md or .mdx.')
+    }
+    if (!matchesPatterns(entryId, state._collectionPatterns.get(collectionId))) {
+      throw safeFailure('UNSUPPORTED_ENTRY', 'Filename does not match the configured collection glob.')
+    }
+    if (!values || typeof values !== 'object' || Array.isArray(values) || Object.keys(values).length > 32) {
+      throw safeFailure('INVALID_FIELD_VALUE', 'Entry values must be a bounded object of supported schema fields.')
+    }
+    const valuesByName = Object.create(null)
+    for (const key of Object.keys(values)) valuesByName[key] = values[key]
+    const data = Object.create(null)
+    for (const field of collection.fields) {
+      const supplied = Object.hasOwn(valuesByName, field.name)
+      if (!field.editable) {
+        if (supplied) throw safeFailure('UNSUPPORTED_FIELD', `Entry creation cannot set unsupported field ${field.name}.`)
+        if (field.required && field.default === undefined) throw safeFailure('UNSUPPORTED_FIELD', `Required field ${field.name} is outside the supported scalar subset.`)
+        if (field.default !== undefined) data[field.name] = field.default
+        continue
+      }
+      if (supplied) {
+        const value = valuesByName[field.name]
+        const matches = field.type === 'string' ? typeof value === 'string' && value.length <= 512
+          : field.type === 'number' ? typeof value === 'number' && Number.isFinite(value)
+            : field.type === 'boolean' ? typeof value === 'boolean'
+              : field.type === 'enum' ? typeof value === 'string' && field.values.includes(value)
+                : false
+        if (!matches) throw safeFailure('INVALID_FIELD_VALUE', `Value does not match supported schema field ${field.name}.`)
+        data[field.name] = value
+      } else if (field.default !== undefined) {
+        data[field.name] = field.default
+      } else if (field.required) {
+        throw safeFailure('INVALID_FIELD_VALUE', `Required field ${field.name} is missing.`)
+      }
+    }
+    const knownNames = new Set(collection.fields.map((field) => field.name))
+    if (Object.keys(valuesByName).some((key) => !knownNames.has(key))) {
+      throw safeFailure('UNSUPPORTED_FIELD', 'Entry values contain a field outside the current collection schema.')
+    }
+    const source = `---\n${stringifyYaml(data, { lineWidth: 0 })}---\n`
+    if (Buffer.byteLength(source) > MAX_ENTRY_BYTES) throw safeFailure('ENTRY_LIMIT', 'Generated entry exceeds the safe source-size limit.')
+    const base = path.resolve(root, state._collectionBases.get(collectionId))
+    assertSafePath(root, base, 'directory')
+    const target = path.resolve(base, entryId)
+    if (!inside(base, target) || path.dirname(target) !== base) throw safeFailure('UNSAFE_COLLECTION_PATH', 'New entry must be directly inside the trusted collection base.')
+    try {
+      lstatSync(target)
+      throw safeFailure('ENTRY_EXISTS', 'An entry already exists at this filename.')
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+    const updatedState = inspect()
+    if (updatedState._configHash !== hash || updatedState.collections.find((item) => item.id === collectionId)?.mode !== 'editable') {
+      throw safeFailure('STALE_CONFIG', 'Collection configuration changed; prepare the entry again.')
+    }
+    return {
+      collectionId,
+      entryId,
+      path: target,
+      source,
+      hash: sha256(source),
+      configHash: hash,
+      diff: { start: 0, end: 0, before: '', after: source },
+    }
+  }
+
   function planFieldExtension(operation) {
     const config = readConfig()
     if (config.hash !== operation.hash) throw safeFailure('STALE_CONFIG', 'Content config changed; prepare the edit again.')
@@ -385,6 +468,7 @@ export function createCollectionRuntime({ projectRoot, contentConfigPath }) {
   return {
     inspect,
     getEntryForEdit,
+    planEntryCreation,
     planFieldExtension,
     planCreation,
     configPath: configFile,

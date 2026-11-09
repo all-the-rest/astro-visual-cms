@@ -8,7 +8,7 @@ import { FIXTURE_IMAGE_SLUGS } from '../lib/demo-image-manifest.mjs'
 import { normalizeAstroBasePath } from './base-path.mjs'
 import { patchFrontmatterField } from './collection-discovery.mjs'
 import { createCollectionRuntime, publicCollectionState } from './collection-runtime.mjs'
-import { writeSourceAtomically } from './source-write.mjs'
+import { createSourceExclusively, writeSourceAtomically } from './source-write.mjs'
 import { createMdxPropsAdapter } from '../lib/mdx-props-patch.mjs'
 import { createMarkdownParagraphAdapter } from '../lib/markdown-paragraph-map.mjs'
 import { lstatSync, realpathSync } from 'node:fs'
@@ -203,6 +203,29 @@ function sameCollectionOperation(left, right) {
     left.field === right.field && left.hash === right.hash && left.value === right.value
 }
 
+function validEntryCreationOperation(payload, includePreviewId = false) {
+  const keys = includePreviewId
+    ? ['previewId', 'collectionId', 'entryId', 'values', 'hash']
+    : ['collectionId', 'entryId', 'values', 'hash']
+  const allowed = new Set(keys)
+  return payload !== null && typeof payload === 'object' && !Array.isArray(payload) &&
+    Object.keys(payload).length === keys.length && Object.keys(payload).every((key) => allowed.has(key)) &&
+    (!includePreviewId || typeof payload.previewId === 'string' && /^[a-f0-9]{64}$/.test(payload.previewId)) &&
+    typeof payload.collectionId === 'string' && /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(payload.collectionId) &&
+    typeof payload.entryId === 'string' && /^[a-z0-9](?:[a-z0-9-]{0,62})?\.(?:md|mdx)$/.test(payload.entryId) && payload.entryId.length <= 68 &&
+    payload.values !== null && typeof payload.values === 'object' && !Array.isArray(payload.values) && Object.keys(payload.values).length <= 32 &&
+    Object.entries(payload.values).every(([name, value]) => /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(name) &&
+      (typeof value === 'string' && value.length <= 512 || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value))) &&
+    typeof payload.hash === 'string' && /^[a-f0-9]{64}$/.test(payload.hash)
+}
+
+function sameEntryCreationOperation(left, right) {
+  if (left.collectionId !== right.collectionId || left.entryId !== right.entryId || left.hash !== right.hash) return false
+  const leftKeys = Object.keys(left.values).sort()
+  const rightKeys = Object.keys(right.values).sort()
+  return leftKeys.length === rightKeys.length && leftKeys.every((key, index) => key === rightKeys[index] && left.values[key] === right.values[key])
+}
+
 function previewId() {
   return randomBytes(32).toString('hex')
 }
@@ -213,6 +236,7 @@ export function createEditorServer({
   fixturePath = FIXTURE_PATH,
   basePath = normalizeAstroBasePath(process.env.ASTRO_BASE_PATH || '/'),
   writeSource = writeSourceAtomically,
+  createSource = createSourceExclusively,
   projectRoot,
   contentConfigPath,
   mdxComponentTargets,
@@ -638,6 +662,58 @@ export function createEditorServer({
         return json(response, result.statusCode, result.payload)
       } catch (error) {
         return json(response, 422, { code: error.code || 'UNSUPPORTED_FIXTURE', error: error.message })
+      }
+    }
+
+    if (request.method === 'POST' && (request.url === '/api/collections/create-entry/preview' || request.url === '/api/collections/create-entry/commit' || request.url === '/api/collections/create-entry/cancel')) {
+      if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      if (!collectionRuntime) return json(response, 404, { error: 'Collection editing is not configured.' })
+      try {
+        const payload = await readJson(request)
+        const route = request.url.split('/').at(-1)
+        const sessionToken = request.headers['x-editor-token']
+        if (route === 'cancel') {
+          if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== 1 || !/^[a-f0-9]{64}$/.test(payload.previewId || '')) return json(response, 422, { code: 'INVALID_REQUEST', error: 'A previewId is required.' })
+          const pending = pendingPreviews.get(payload.previewId)
+          if (pending && pending.sessionToken !== sessionToken) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
+          if (pending?.kind === 'collection-create-entry') pendingPreviews.delete(payload.previewId)
+          return json(response, 200, { cancelled: true })
+        }
+        const previewing = route === 'preview'
+        if (!validEntryCreationOperation(payload, !previewing)) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Only a supported collection ID, new relative Markdown filename, scalar schema values, and config hash are accepted.' })
+        const operation = { collectionId: payload.collectionId, entryId: payload.entryId, values: payload.values, hash: payload.hash }
+        const prepare = () => collectionRuntime.planEntryCreation(operation)
+        if (previewing) {
+          const result = prepare()
+          prunePreviews()
+          const id = previewId()
+          pendingPreviews.set(id, { kind: 'collection-create-entry', operation, diff: result.diff, hash: result.hash, configHash: result.configHash, sessionToken, expiresAt: Date.now() + PREVIEW_TTL_MS })
+          return json(response, 200, { previewId: id, hash: result.hash, diff: result.diff, entryId: result.entryId })
+        }
+        prunePreviews()
+        const pending = pendingPreviews.get(payload.previewId)
+        if (!pending || pending.expiresAt <= Date.now() || pending.kind !== 'collection-create-entry') {
+          pendingPreviews.delete(payload.previewId)
+          return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Entry preview expired; prepare it again.' })
+        }
+        if (pending.sessionToken !== sessionToken) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to a different editor session.' })
+        pendingPreviews.delete(payload.previewId)
+        if (!sameEntryCreationOperation(pending.operation, operation)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Entry commit differs from preview.' })
+        const result = prepare()
+        if (result.hash !== pending.hash || result.configHash !== pending.configHash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Entry no longer matches the confirmed preview.' })
+        const finalPlan = prepare()
+        if (finalPlan.hash !== pending.hash || finalPlan.configHash !== pending.configHash || JSON.stringify(finalPlan.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Collection changed immediately before entry creation.' })
+        await createSource(finalPlan.path, finalPlan.source)
+        return json(response, 201, { collectionId: operation.collectionId, entryId: operation.entryId, hash: finalPlan.hash })
+      } catch (error) {
+        const safeCodes = new Set(['STALE_CONFIG', 'UNSUPPORTED_COLLECTION', 'UNSUPPORTED_ENTRY', 'UNSAFE_COLLECTION_PATH', 'INVALID_ENTRY_ID', 'ENTRY_EXISTS', 'INVALID_FIELD_VALUE', 'UNSUPPORTED_FIELD', 'ENTRY_LIMIT'])
+        const code = safeCodes.has(error.code) ? error.code : error.code === 'EEXIST' ? 'ENTRY_EXISTS' : 'COLLECTION_CREATE_FAILED'
+        const message = code === 'COLLECTION_CREATE_FAILED'
+          ? 'Collection entry could not be created safely.'
+          : code === 'ENTRY_EXISTS'
+            ? 'An entry already exists at this filename.'
+            : error.message
+        return json(response, code === 'STALE_CONFIG' || code === 'ENTRY_EXISTS' ? 409 : code === 'COLLECTION_CREATE_FAILED' ? 500 : 422, { code, error: message })
       }
     }
 
