@@ -1,0 +1,14 @@
+{
+  "fixturePath": "src/pages/fixture.mdx",
+  "safeSourceReplacementMode": false,
+  "mdxComponentTargets": [
+    {
+      "id": "fixture",
+      "projectRoot": ".",
+      "filePath": "src/pages/fixture.mdx",
+      "importSource": "../components/EditorUnknownChip.astro",
+      "idProp": "id",
+      "editableProps": ["label"]
+    }
+  ]
+}

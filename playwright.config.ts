@@ -17,12 +17,12 @@ export default defineConfig({
   },
   webServer: {
     command: 'pnpm dev',
-    url: 'http://127.0.0.1:15322/',
+    url: 'http://127.0.0.1:15321/browser-synthetic/fixture/',
     env: {
       ASTRO_PORT: '15321',
       EDITOR_PORT: '15322',
       ASTRO_BASE_PATH: '/browser-synthetic/',
-      AVCMS_BROWSER_SYNTHETIC: '1',
+      AVCMS_CONFIG: 'playwright.editor.config.json',
     },
     reuseExistingServer: false,
     timeout: 120_000,

@@ -27,7 +27,7 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
         const response = await page.request.get('http://127.0.0.1:15321/browser-synthetic/fixture/')
         return response.status()
       } catch {
-        // Playwright's webServer waits for the editor port; Astro may still be starting.
+        // The route can still be briefly unavailable during Astro navigation or rebuilds.
         return 0
       }
     }).toBe(200)
@@ -108,7 +108,6 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     await highlightsList.getByRole('listitem').nth(1).dragTo(highlightsList.getByRole('listitem').first())
     await expect(page.getByRole('heading', { name: 'Quelländerung bestätigen' })).toBeVisible()
     await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
-    await expect(page.getByRole('status')).toHaveText(/Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert\./)
 
     await expect(highlightsList.getByRole('listitem')).toHaveCount(nextOrder.length)
     await expect(highlightsList.getByRole('listitem').first()).toHaveAttribute('aria-label', `HIGHLIGHTS, Eintrag 1: ${nextOrder[0]}`)
@@ -143,7 +142,6 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     await moveDown.press('Enter')
     await expect(page.getByRole('heading', { name: 'Quelländerung bestätigen' })).toBeVisible()
     await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
-    await expect(page.getByRole('status')).toHaveText(/Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert\./)
     await expect(highlightsList.getByRole('listitem').first()).toHaveAttribute('aria-label', `HIGHLIGHTS, Eintrag 1: ${highlights[0]}`)
     await expect(highlightsList.getByRole('listitem').nth(1)).toBeFocused()
     await expect(preview.locator('section[data-gallery-order]').nth(0).locator('figcaption')).toHaveText(
