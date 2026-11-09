@@ -123,6 +123,7 @@ try {
   astroStarted = true
   editor = createEditorServer({
     port: editorPort, sitePort, fixturePath: fixture, basePath: '/browser-synthetic/',
+    ...(mode === 'gallery' ? { safeSourceReplacementMode: false } : {}),
     ...(mode === 'collection' ? { previewRoutes: [
       { id: 'home', label: 'Startseite', path: '/' },
       { id: 'fixture', label: 'Fixture', path: '/fixture/', cacheBustOnRevision: true },
