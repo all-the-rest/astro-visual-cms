@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { summarizeRuntimeLicenses } from '../scripts/verify-runtime-licenses.mjs'
+import { runtimeLicenseCommand, summarizeRuntimeLicenses } from '../scripts/verify-runtime-licenses.mjs'
+
+test('license report is scoped to the editor package and its production dependencies', () => {
+  assert.deepEqual(runtimeLicenseCommand, [
+    '--filter', '@astro-visual-cms/editor', 'licenses', 'list', '--prod', '--json',
+  ])
+})
 
 test('runtime license report accepts only declared, approved production licenses', () => {
   const result = summarizeRuntimeLicenses({

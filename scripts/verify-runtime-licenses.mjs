@@ -3,6 +3,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const approvedLicenses = new Set(['MIT', 'ISC', 'BSD-3-Clause'])
+export const runtimeLicenseCommand = Object.freeze([
+  '--filter', '@astro-visual-cms/editor', 'licenses', 'list', '--prod', '--json',
+])
 
 export function summarizeRuntimeLicenses(report) {
   if (!report || typeof report !== 'object' || Array.isArray(report)) {
@@ -45,7 +48,7 @@ export function summarizeRuntimeLicenses(report) {
 }
 
 function run() {
-  const result = spawnSync('pnpm', ['licenses', 'list', '-P', '--json'], {
+  const result = spawnSync('pnpm', runtimeLicenseCommand, {
     encoding: 'utf8',
     shell: process.platform === 'win32',
   })
