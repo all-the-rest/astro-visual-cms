@@ -21,6 +21,7 @@ const root = await mkdtemp(path.join(tmpdir(), 'avcms-readonly-'))
 const receipt = path.join(repo, 'test-results', 'readonly-copy-path')
 const collectionReceipt = path.join(repo, 'test-results', 'readonly-collection-copy-path')
 const markdownReceipt = path.join(repo, 'test-results', 'readonly-markdown-copy-path')
+const mdxConflictReceipt = path.join(repo, 'test-results', 'readonly-mdx-conflict-copy-path')
 const children = []
 let editor
 let astroStarted = false
@@ -51,6 +52,7 @@ function cleanup() {
       await rm(receipt, { force: true })
       await rm(collectionReceipt, { force: true })
       await rm(markdownReceipt, { force: true })
+      await rm(mdxConflictReceipt, { force: true })
     })()
   }
   return cleanupPromise
@@ -66,7 +68,7 @@ try {
   await run(process.execPath, [path.join(root, 'scripts/generate-noise.mjs')], { cwd: root })
   const fixture = path.join(root, 'src/pages/fixture.mdx')
   const mode = process.env.AVCMS_READONLY_MODE || 'duplicate'
-  if (!['duplicate', 'unmapped', 'gallery', 'collection', 'markdown'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate, unmapped, gallery, collection, or markdown.')
+  if (!['duplicate', 'unmapped', 'gallery', 'collection', 'markdown', 'mdx-conflict'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate, unmapped, gallery, collection, markdown, or mdx-conflict.')
   if (mode === 'duplicate') {
     const original = await readFile(fixture, 'utf8')
     if (!original.includes('id="marker-two"')) throw new Error('Synthetic duplicate-ID fixture anchor was not found.')
@@ -94,6 +96,11 @@ try {
     await writeFile(pageFile, `---\nimport { getCollection, render } from 'astro:content';\nconst [entry] = await getCollection('notes');\nif (!entry) throw new Error('Synthetic MDX collection entry was not loaded.');\nconst { Content } = await render(entry);\n---\n<html><body><h1 data-entry-title>{entry.data.title}</h1><p data-entry-rank={String(entry.data.rank)}>{entry.data.rank}</p><Content /></body></html>\n`)
     await mkdir(path.dirname(collectionReceipt), { recursive: true })
     await writeFile(collectionReceipt, JSON.stringify({ contentFile, configFile, pageFile }))
+  } else if (mode === 'mdx-conflict') {
+    const files = ['mdx-conflict-one.mdx', 'mdx-conflict-two.mdx'].map((name) => path.join(root, 'src/pages', name))
+    for (const [index, file] of files.entries()) await writeFile(file, `import EditorUnknownChip from '../components/EditorUnknownChip.astro'\n\n<EditorUnknownChip id="conflict-${index + 1}" label="Initial ${index + 1}" title="Title ${index + 1}" />\n`)
+    await mkdir(path.dirname(mdxConflictReceipt), { recursive: true })
+    await writeFile(mdxConflictReceipt, JSON.stringify(files))
   } else {
     const markdownFile = path.join(root, 'src/pages/markdown-proof.mdx')
     await writeFile(markdownFile, 'Synthetic mapped Markdown paragraph.\n')
@@ -123,7 +130,8 @@ try {
     ] } : {}),
     ...(mode === 'collection' ? { projectRoot: root, contentConfigPath: 'src/content.config.ts' } : {}),
     ...(mode === 'markdown' ? { mdxParagraphTargets: [{ id: 'markdown-note', instanceId: 'paragraph-one', projectRoot: root, filePath: path.join(root, 'src/pages/markdown-proof.mdx') }] } : {}),
-    ...(['collection', 'markdown'].includes(mode) ? {} : { mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] }),
+    ...(mode === 'mdx-conflict' ? { mdxComponentTargets: ['one', 'two'].map((id) => ({ id, projectRoot: root, filePath: path.join(root, `src/pages/mdx-conflict-${id}.mdx`), importSource: '../components/EditorUnknownChip.astro', idProp: 'id', fields: [{ name: 'label', type: 'string' }, { name: 'title', type: 'string' }] })) } : {}),
+    ...(['collection', 'markdown', 'mdx-conflict'].includes(mode) ? {} : { mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] }),
   })
   const deadline = Date.now() + 110_000
   while (Date.now() < deadline) {

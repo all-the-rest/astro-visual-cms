@@ -123,6 +123,12 @@
           <label>Eigenschaft<select id="mdx-prop" class="select select-bordered"></select></label>
           <label id="mdx-value-label">Neuer Wert<div id="mdx-value-control"></div></label>
           <button id="mdx-preview-button" class="btn" type="button">Vorschau</button>
+          <section id="mdx-conflict" class="alert alert-warning" role="alert" aria-live="assertive" hidden>
+            <p id="mdx-conflict-message"></p>
+            <p>Die Quelle hat sich geändert. Deine Eingabe bleibt erhalten. Wähle ausdrücklich, wie du fortfahren möchtest.</p>
+            <button id="mdx-conflict-discard" class="btn" type="button">Verwerfen und neu laden</button>
+            <button id="mdx-conflict-reapply" class="btn btn-warning" type="button">Eingabe erneut anwenden und Diff erstellen</button>
+          </section>
           <section id="mdx-confirmation" hidden><h3>Änderung bestätigen</h3><p id="mdx-diff-range"></p>
             <div class="grid gap-4 md:grid-cols-2"><div><h4>Vorher</h4><pre><code id="mdx-diff-before"></code></pre></div><div><h4>Nachher</h4><pre><code id="mdx-diff-after"></code></pre></div></div>
             <button id="mdx-confirm-button" class="btn btn-primary" type="button">Änderung bestätigen und speichern</button>
@@ -220,12 +226,21 @@
         status(`MDX-Ziel ${target.id} / Instanz ${data.instanceId} ausgewählt. Vorschau und Bestätigung bleiben erforderlich.`, 'success');
       });
       let pendingMdxPreview = null;
+      const mdxDraftConflicts = new Map();
+      const mdxConflictRevisions = new Map();
+      let mdxLastHashes = new Map();
+      let mdxPollSequence = 0;
+      const mdxDrafts = new Map();
+      let mdxSelectionEpoch = 0;
       const mdxPanel = document.querySelector('#mdx-components-panel');
       const mdxTarget = document.querySelector('#mdx-target');
       const mdxReason = document.querySelector('#mdx-reason');
       const mdxInstance = document.querySelector('#mdx-instance');
       const mdxProp = document.querySelector('#mdx-prop');
+      const mdxValueControl = document.querySelector('#mdx-value-control');
       let mdxValue = null;
+      const mdxDraftKey = (targetId = mdxTarget.value, instanceId = mdxInstance.value, prop = mdxProp.value) => `${targetId}\u0000${instanceId}\u0000${prop}`;
+      const selectedMdxDraftConflict = () => mdxDraftConflicts.get(mdxDraftKey()) || null;
       const mdxConfirmation = document.querySelector('#mdx-confirmation');
       let selectedGalleryId = '';
       let selectedCollectionId = '';
@@ -280,11 +295,24 @@
         controlHost.replaceChildren(control); mdxValue = control;
         document.querySelector('#mdx-value-label').firstChild.textContent = `${descriptor?.label || descriptor?.name || 'Neuer Wert'} `;
         if (instance && Object.hasOwn(instance.props, mdxProp.value)) {
-          if (descriptor?.type === 'boolean') mdxValue.checked = instance.props[mdxProp.value];
-          else mdxValue.value = instance.props[mdxProp.value];
+          const key = `${target.id}\u0000${instance.id}\u0000${mdxProp.value}`;
+          const draft = mdxDrafts.has(key) ? mdxDrafts.get(key) : instance.props[mdxProp.value];
+          mdxValue.dataset.mdxTargetId = target.id;
+          mdxValue.dataset.mdxInstanceId = instance.id;
+          mdxValue.dataset.mdxProp = mdxProp.value;
+          if (descriptor?.type === 'boolean') mdxValue.checked = draft;
+          else mdxValue.value = draft;
         }
-        for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue, document.querySelector('#mdx-preview-button')]) control.disabled = busy() || !supported.length || !selectedPropEditable || mdxSelectionReadOnly;
+        for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue]) control.disabled = busy() || Boolean(pendingMdxPreview) || !supported.length || !selectedPropEditable || mdxSelectionReadOnly;
+        const conflictKey = mdxDraftKey();
+        const draftConflict = mdxDraftConflicts.get(conflictKey);
+        document.querySelector('#mdx-preview-button').disabled = busy() || Boolean(pendingMdxPreview) || Boolean(draftConflict) || !supported.length || !selectedPropEditable || mdxSelectionReadOnly;
         mdxConfirmation.hidden = !pendingMdxPreview;
+        const conflictBox = document.querySelector('#mdx-conflict');
+        conflictBox.hidden = !draftConflict;
+        document.querySelector('#mdx-conflict-message').textContent = draftConflict?.message || '';
+        document.querySelector('#mdx-conflict-discard').disabled = saving || !draftConflict;
+        document.querySelector('#mdx-conflict-reapply').disabled = saving || !draftConflict || draftConflict.unavailable;
         document.querySelector('#mdx-confirm-button').disabled = saving || !pendingMdxPreview;
         document.querySelector('#mdx-cancel-button').disabled = saving || !pendingMdxPreview;
         if (pendingMdxPreview) {
@@ -703,7 +731,8 @@
         editorToken = session.token;
       }
 
-      async function load() {
+      async function load({ preserveMdxDraft = false } = {}) {
+        const previousSelection = preserveMdxDraft ? { targetId: mdxTarget.value, instanceId: mdxInstance.value, prop: mdxProp.value, value: mdxValue ? (mdxValue.type === 'checkbox' ? mdxValue.checked : mdxValue.value) : undefined } : null;
         await refreshSession();
         const unavailable = [];
         const loadPanelState = async (endpoint, label, fallback) => {
@@ -721,6 +750,19 @@
         current.galleries = [...(current.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astroGalleryState.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
         collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
         mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
+        for (const target of mdxState.targets || []) if (target.hash) mdxLastHashes.set(target.id, target.hash);
+        if (previousSelection) {
+          if (mdxState.targets.some((item) => item.id === previousSelection.targetId)) mdxTarget.value = previousSelection.targetId;
+          renderMdx();
+          mdxInstance.value = previousSelection.instanceId;
+          renderMdx();
+          mdxProp.value = previousSelection.prop;
+          renderMdx();
+          if (mdxValue && previousSelection.value !== undefined) {
+            if (mdxValue.type === 'checkbox') mdxValue.checked = previousSelection.value;
+            else mdxValue.value = previousSelection.value;
+          }
+        }
         if (!collectionState.configured) collectionState.collections = [];
         if (!selectedCollection()) {
           selectedCollectionId = collectionState.collections?.[0]?.id || '';
@@ -754,7 +796,7 @@
       }
 
       async function prepareMdxChange() {
-        if (busy()) return;
+        if (busy() || pendingMdxPreview || selectedMdxDraftConflict()) return;
         const target = mdxState.targets.find((item) => item.id === mdxTarget.value);
         const instance = target?.instances?.find((item) => item.id === mdxInstance.value);
         const prop = mdxProp.value;
@@ -763,11 +805,13 @@
         const value = descriptor?.type === 'boolean' ? mdxValue.checked : descriptor?.type === 'number' ? (mdxValue.value === '' ? Number.NaN : Number(mdxValue.value)) : mdxValue.value;
         if (descriptor?.type === 'number' && !Number.isFinite(value)) { status('Bitte einen gültigen Zahlenwert eingeben.', 'warning'); return; }
         const operation = { targetId: target.id, instanceId: instance.id, prop, value, hash: target.hash };
+        const selectionKey = `${operation.targetId}\u0000${operation.instanceId}\u0000${operation.prop}`;
         saving = true; renderMdx(); status('MDX-Änderung wird vorbereitet …');
         try {
           const response = await postOperation('/api/mdx-components/preview', operation);
           const result = await response.json();
           if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
+          if (mdxDraftConflicts.has(selectionKey) || selectionKey !== mdxDraftKey() || mdxState.targets.find((item) => item.id === operation.targetId)?.hash !== operation.hash) return;
           if (!result.diff || !result.previewId) { status('Der MDX-Wert ist unverändert; es wurde nichts geschrieben.'); return; }
           pendingMdxPreview = { ...operation, previewId: result.previewId, diff: result.diff, hash: result.hash };
           renderMdx(); status('Diff prüfen. Erst nach Bestätigung wird geschrieben.', 'warning');
@@ -783,17 +827,135 @@
           const response = await postOperation('/api/mdx-components/commit', operation);
           const result = await response.json();
           if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
-          pendingMdxPreview = null; await load(); status('MDX-Änderung gespeichert.', 'success');
-        } catch (error) { pendingMdxPreview = null; status(`Nicht gespeichert: ${error.message}`, 'warning'); await load(); }
+          pendingMdxPreview = null;
+          const key = mdxDraftKey(targetId, instanceId, prop);
+          mdxDrafts.delete(key);
+          mdxDraftConflicts.delete(key);
+          mdxConflictRevisions.delete(key);
+          await load(); status('MDX-Änderung gespeichert.', 'success');
+        } catch (error) {
+          pendingMdxPreview = null;
+          const key = mdxDraftKey(targetId, instanceId, prop);
+          mdxDraftConflicts.set(key, { selectionKey: key, message: `Commit abgelehnt oder Quelle nicht erreichbar (${error.message}). Deine Eingabe bleibt erhalten; prüfe die Revision und wähle eine Konfliktaktion.`, unavailable: false });
+          mdxConflictRevisions.set(key, Math.max(1, mdxConflictRevisions.get(key) || 0));
+          status(`Nicht gespeichert: ${error.message}. Deine Eingabe bleibt erhalten.`, 'warning');
+        }
         finally { saving = false; renderMdx(); }
       }
+      async function pollMdxRevision() {
+        const sequence = ++mdxPollSequence;
+        try {
+          const response = await fetch('/api/mdx-components', { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const latest = await response.json();
+          if (sequence !== mdxPollSequence) return;
+          const selectedId = mdxTarget.value;
+          const oldTarget = mdxState.targets.find((item) => item.id === selectedId);
+          const newTarget = latest.targets?.find((item) => item.id === selectedId);
+          const selectedKey = mdxDraftKey(selectedId);
+          let selectedConflict = mdxDraftConflicts.get(selectedKey);
+          if (selectedConflict && newTarget?.supported && newTarget.hash) {
+            selectedConflict = { ...selectedConflict, unavailable: false };
+            mdxDraftConflicts.set(selectedKey, selectedConflict);
+          }
+          if (!newTarget?.supported || !newTarget?.hash) {
+            if (mdxDrafts.has(selectedKey) || selectedConflict) {
+              if (pendingMdxPreview && mdxDraftKey(pendingMdxPreview.targetId, pendingMdxPreview.instanceId, pendingMdxPreview.prop) === selectedKey) pendingMdxPreview = null;
+              selectedConflict = { selectionKey: selectedKey, message: 'Quelle nicht verfügbar oder nicht mehr unterstützt. Deine Eingabe bleibt erhalten.', unavailable: true };
+              mdxDraftConflicts.set(selectedKey, selectedConflict);
+              renderMdx();
+            }
+          }
+          for (const item of latest.targets || []) {
+            const oldHash = mdxLastHashes.get(item.id);
+            if (item.id === selectedId && item.hash && oldHash !== item.hash) {
+              const instance = oldTarget?.instances?.find((entry) => entry.id === mdxInstance.value);
+              const oldValue = instance?.props?.[mdxProp.value];
+              const draftKey = mdxDraftKey(selectedId);
+              const draftValue = mdxDrafts.has(draftKey) ? mdxDrafts.get(draftKey) : oldValue;
+              const draftDirty = String(draftValue) !== String(oldValue);
+              const existingConflict = mdxDraftConflicts.get(draftKey);
+              if (pendingMdxPreview && mdxDraftKey(pendingMdxPreview.targetId, pendingMdxPreview.instanceId, pendingMdxPreview.prop) === draftKey) pendingMdxPreview = null;
+              if (draftDirty || existingConflict) {
+                const revisions = (mdxConflictRevisions.get(draftKey) || 0) + (existingConflict ? 1 : 0);
+                mdxConflictRevisions.set(draftKey, revisions);
+                mdxDraftConflicts.set(draftKey, { selectionKey: draftKey, message: revisions > 0 ? 'Die Quelle wurde erneut geändert. Prüfe den neuesten Stand vor einer erneuten Vorschau.' : 'Eine externe Quellrevision wurde erkannt.', unavailable: !newTarget?.supported });
+              } else {
+                mdxState = latest;
+                renderMdx();
+                status('MDX-Quelle extern geändert; sauberer Entwurf wurde aktualisiert.', 'info');
+              }
+            }
+            if (item.id === selectedId) {
+              if (item.hash) mdxLastHashes.set(item.id, item.hash); else mdxLastHashes.delete(item.id);
+            }
+          }
+          selectedConflict = mdxDraftConflicts.get(selectedKey);
+          if (selectedConflict && (!newTarget?.supported || !newTarget?.hash)) {
+            mdxDraftConflicts.set(selectedKey, { ...selectedConflict, unavailable: true, message: 'Die MDX-Quelle ist nicht verfügbar oder nicht mehr unterstützt. Deine Eingabe bleibt erhalten.' });
+          }
+          if (mdxDraftConflicts.has(selectedKey)) renderMdx();
+          else if (!oldTarget && latest.configured) { mdxState = latest; renderMdx(); }
+        } catch {
+          if (sequence === mdxPollSequence) {
+            const key = mdxDraftKey();
+            if (mdxDrafts.has(key) || mdxDraftConflicts.has(key)) mdxDraftConflicts.set(key, { selectionKey: key, unavailable: true, message: 'Quelle derzeit offline; lokale Eingabe bleibt erhalten. Wiederherstellen und neu laden ist erforderlich.' });
+            renderMdx();
+          }
+        }
+      }
+      window.setInterval(pollMdxRevision, 2000);
+      window.addEventListener('focus', pollMdxRevision);
       document.querySelector('#mdx-preview-button').addEventListener('click', prepareMdxChange);
       document.querySelector('#mdx-confirm-button').addEventListener('click', commitMdxChange);
       document.querySelector('#mdx-cancel-button').addEventListener('click', () => { if (saving || !pendingMdxPreview) return; pendingMdxPreview = null; renderMdx(); status('MDX-Änderung abgebrochen; die Datei blieb unverändert.'); });
-      const resetMdxSelectionReadOnly = () => { mdxSelectionReadOnly = false; renderMdx(); };
-      mdxTarget.addEventListener('change', resetMdxSelectionReadOnly);
-      mdxInstance.addEventListener('change', resetMdxSelectionReadOnly);
-      mdxProp.addEventListener('change', renderMdx);
+      const resetMdxSelectionReadOnly = () => { mdxSelectionReadOnly = false; pendingMdxPreview = null; renderMdx(); };
+      const changeMdxSelection = () => { mdxSelectionEpoch += 1; resetMdxSelectionReadOnly(); pollMdxRevision(); };
+      mdxTarget.addEventListener('change', changeMdxSelection);
+      mdxInstance.addEventListener('change', changeMdxSelection);
+      mdxProp.addEventListener('change', changeMdxSelection);
+      const rememberMdxDraft = (event) => {
+        const control = event.target;
+        if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement) || control.id !== 'mdx-value') return;
+        const { mdxTargetId, mdxInstanceId, mdxProp: prop } = control.dataset;
+        if (!mdxTargetId || !mdxInstanceId || !prop) return;
+        const key = `${mdxTargetId}\u0000${mdxInstanceId}\u0000${prop}`;
+        const draft = control instanceof HTMLInputElement && control.type === 'checkbox' ? control.checked : control.value;
+        const target = mdxState.targets.find((item) => item.id === mdxTargetId);
+        const instance = target?.instances?.find((item) => item.id === mdxInstanceId);
+        if (!mdxDraftConflicts.has(key) && instance && String(draft) === String(instance.props[prop])) mdxDrafts.delete(key);
+        else mdxDrafts.set(key, draft);
+      };
+      mdxValueControl.addEventListener('input', rememberMdxDraft);
+      mdxValueControl.addEventListener('change', rememberMdxDraft);
+      document.querySelector('#mdx-conflict-discard').addEventListener('click', async () => {
+        const key = mdxDraftKey();
+        if (saving || !mdxDraftConflicts.has(key)) return;
+        mdxDrafts.delete(key); mdxDraftConflicts.delete(key); mdxConflictRevisions.delete(key);
+        if (pendingMdxPreview && mdxDraftKey(pendingMdxPreview.targetId, pendingMdxPreview.instanceId, pendingMdxPreview.prop) === key) pendingMdxPreview = null;
+        await load(); status('Externe MDX-Änderung geladen; lokale Eingabe verworfen.', 'info');
+      });
+      document.querySelector('#mdx-conflict-reapply').addEventListener('click', async () => {
+        const key = mdxDraftKey();
+        const conflict = mdxDraftConflicts.get(key);
+        if (saving || !conflict || conflict.unavailable) return;
+        const epoch = mdxSelectionEpoch;
+        const retained = { targetId: mdxTarget.value, instanceId: mdxInstance.value, prop: mdxProp.value, value: mdxValue.type === 'checkbox' ? mdxValue.checked : mdxValue.value };
+        saving = true; renderMdx();
+        try { await load({ preserveMdxDraft: true }); }
+        catch (error) { mdxDraftConflicts.set(key, { ...conflict, unavailable: true, message: `Aktueller Quellstand konnte nicht geladen werden: ${error.message}. Eingabe bleibt erhalten.` }); saving = false; renderMdx(); return; }
+        if (epoch !== mdxSelectionEpoch) { saving = false; renderMdx(); return; }
+        const latestTarget = mdxState.targets.find((item) => item.id === retained.targetId);
+        const latestInstance = latestTarget?.instances?.find((item) => item.id === retained.instanceId);
+        if (!latestTarget?.supported || !latestInstance || !Object.hasOwn(latestInstance.props, retained.prop)) { saving = false; mdxDraftConflicts.set(key, { ...conflict, unavailable: true, message: 'Ziel oder Eigenschaft ist nicht mehr verfügbar; Eingabe bleibt erhalten.' }); renderMdx(); return; }
+        mdxTarget.value = retained.targetId; mdxInstance.value = retained.instanceId; mdxProp.value = retained.prop; renderMdx();
+        if (mdxValue.type === 'checkbox') mdxValue.checked = retained.value; else mdxValue.value = retained.value;
+        mdxDrafts.set(conflict.selectionKey, retained.value);
+        mdxDraftConflicts.delete(key);
+        mdxConflictRevisions.delete(key);
+        saving = false; renderMdx();
+        await prepareMdxChange();
+      });
 
       async function prepareOrder(galleryId, order) {
         const gallery = galleryById(galleryId);

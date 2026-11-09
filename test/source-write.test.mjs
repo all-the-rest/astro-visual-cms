@@ -59,6 +59,29 @@ test('an external change between reads aborts without rename and cleans the temp
   await assertNoTempFiles(directory)
 })
 
+test('a non-cooperating writer after the final hash read can be overwritten by rename', async (t) => {
+  const original = 'synthetic fixture source\n'
+  const external = 'external writer revision\n'
+  const replacement = 'CMS replacement\n'
+  const { directory, filePath } = await makeFixture(t, original)
+  let injected = false
+  const injectedFs = {
+    ...fs,
+    async rename(from, to) {
+      assert.equal(to, filePath)
+      await fs.writeFile(filePath, external, 'utf8')
+      injected = true
+      return fs.rename(from, to)
+    },
+  }
+
+  // This records the known standard-mode limitation; it is not desired behavior.
+  await writeSourceAtomically(filePath, hash(original), replacement, injectedFs)
+  assert.equal(injected, true)
+  assert.equal(await fs.readFile(filePath, 'utf8'), replacement)
+  await assertNoTempFiles(directory)
+})
+
 test('happy path atomically writes exact bytes and leaves no temp files', async (t) => {
   const original = 'synthetic fixture source\n'
   const nextSource = 'synthetic reordered fixture — exact UTF-8 bytes\n'
