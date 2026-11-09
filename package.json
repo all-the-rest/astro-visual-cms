@@ -39,6 +39,7 @@
     "verify:sharp-build": "node scripts/verify-sharp-build.mjs",
     "verify:image-variants-astro": "node scripts/verify-image-variants-astro.mjs",
     "verify:collection-astro": "node scripts/verify-collection-astro.mjs",
+    "verify:astro-compat": "node scripts/verify-astro-compat.mjs",
     "verify": "pnpm test && pnpm run verify:licenses && pnpm run verify:sharp-build && pnpm run verify:image-variants-astro && pnpm run verify:collection-astro && pnpm run verify:build"
   },
   "dependencies": {

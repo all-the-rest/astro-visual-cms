@@ -1,44 +1,39 @@
-# Astro-Kompatibilitätsmatrix
+# Astro compatibility checkpoints
 
-Diese Demo pinnt `astro` auf die zum Zeitpunkt der Phase-0-Entscheidung aktuelle
-Version. Ein Build gegen weitere Versionen ist ein optionaler, netzwerkabhängiger
-Lokal-Gate und gehört nicht zu `pnpm verify` oder zur CI: Er lädt fremde
-Paketversionen und ist deshalb kein deterministischer Repository-Gate.
+The configured CI compatibility matrix targets Node 24 / pnpm 11.23.0 at fixed
+Astro checkpoints `7.2.4`, `7.2.10`, `7.3.8`, and `7.4.7`. These representative
+versions do not establish generic compatibility with every Astro 7 release or
+future minor. Issue #1 remains **Partial**.
 
-## Geprüfter Stand
+Run one checkpoint with `npm run verify:astro-compat -- 7.2.4` (or another listed
+version). Each invocation creates a fresh temporary consumer, runs `npm pack`,
+installs that actual tarball alongside the exact Astro version, and removes the
+temporary project and dev process in `finally`. It exercises an imported Astro
+component with explicit target/instance markers and an Astro-optimized image,
+`base: '/compat/'`, a trusted preview route, production build assertions, and a
+real `astro dev` request to the prefixed route and optimized image endpoint.
+Development HTML and the generated page-script module must expose the injected
+bridge. Production HTML is checked for the expected rendered markers and optimized
+asset; every file under `dist/` is scanned for bridge or toolbar markers.
 
-| Datum | Astro | `@astrojs/mdx` | Ergebnis |
-| --- | --- | --- | --- |
-| 2026-11-07 | 7.4.7 (Repo-Pin, CI) | 8.1.3 | `pnpm verify` grün, drei Produktionsbuilds |
-| 2026-11-08 | 7.3.8 | 8.1.3 | `astro build` grün, Fixture-Reihenfolge und optimierte Bildreferenzen korrekt |
-| 2026-11-08 | 7.2.10 (Peer-Untergrenze) | 8.1.3 | `astro build` grün, Fixture-Reihenfolge und optimierte Bildreferenzen korrekt |
-| 2026-11-08 | 7.4.7 (Repo-Pin) | — | `pnpm run verify:collection-astro`: planner-generated static collection accepted by real Astro Content Sync; synthetic fixture only |
+Astro 7.2.4 exercises the component from an `.astro` page and deliberately does
+not install MDX. For 7.2.10, 7.3.8, and 7.4.7, the same component is additionally
+imported from an MDX route with `@astrojs/mdx@8.1.3`. MDX coverage starts at
+7.2.10 because that MDX release declares peer dependency `astro: ^7.2.10`.
+These registry-installed exact versions are isolated to the temporary fixture;
+the production dependency graph is unchanged.
 
-`@astrojs/mdx` 8.1.3 deklariert `astro: ^7.2.10`; 7.2.10 ist damit die geprüfte
-Untergrenze des Peer-Bereichs. Neuere Versionen als 7.4.7 waren am 2026-11-08
-nicht verfügbar. Die Matrix ist eine Stichprobe, keine Zusage für alle künftigen
-Minors.
+Compatibility coverage is intentionally bounded to this fixture and these
+checkpoints. It does not resolve unknown syntax, alter the local `astro dev`
+workflow, or address races with non-cooperating writers. Only explicit trusted
+markers and adapter mappings establish source mapping.
 
-## Verfahren
+The separate `pnpm run verify:collection-astro` gate remains pinned to Astro
+7.4.7 and checks planner-generated static collection Content Sync, inferred field
+types, and rendering. That collection-specific path is not covered by the version
+matrix and has no cross-version compatibility claim.
 
-In einer Wegwerf-Kopie außerhalb des Arbeitsbaums, nie im Repository:
-
-1. Repository ohne `.git`, `node_modules`, `dist`, `.astro`, `test-results` und
-   `public/images` kopieren.
-2. In der Kopie `dependencies.astro` auf die Zielversion setzen und
-   `pnpm-lock.yaml` entfernen.
-3. `pnpm install --no-frozen-lockfile`, `node scripts/generate-noise.mjs`,
-   `pnpm exec astro build`.
-4. In `dist/fixture/index.html` prüfen: beide `data-gallery-order`-Marker
-   (`noise-fixture-01,noise-fixture-03` und `noise-fixture-02`) und je eine
-   optimierte Bildreferenz pro Slug.
-
-Der Editor selbst hängt nicht von der Astro-Version ab: Parser und Patch arbeiten
-auf `@mdx-js/mdx` und `@babel/parser`. Für 7.3.8 und 7.2.10 wurde ausschließlich
-der Fixture-Build mit den oben genannten HTML- und Bildreferenz-Prüfungen
-ausgeführt. Vorschau-Readiness sowie der Editor-HTTP-Ablauf wurden nur gegen den
-Repo-Pin 7.4.7 durch `pnpm verify` geprüft.
-
-Die Loopback-Integration wird im `astro:config:setup` ausschließlich für `command === 'dev'` aktiviert und fügt keine Routen oder Client-Bundles hinzu. Ihre Build-/Preview-Inaktivität wird durch Lifecycle-Tests und die Produktionsisolation in `scripts/verify-build.mjs` geprüft. Ein isoliertes synthetisches Dev-Projekt prüft außerdem einen echten Routenaufruf unter `base: '/isolated-preview'`. Diese Base-Pfad-Prüfung ist ein Integrationstest auf dem Repo-Pin und keine zusätzliche Version-Kompatibilitätszusage.
-
-`scripts/verify-collection-astro.mjs` writes only a temporary synthetic Astro project, applies `planCollectionCreation` output, then runs the repo-pinned Astro 7.4.7 `astro sync`, TypeScript 6.0.3 checks, and static build against valid Markdown frontmatter. Compile-time assertions cover inferred string, enum-literal union, and boolean field types (including negative `@ts-expect-error` cases); rendered output checks the enum and applied optional-field default. The gate separately asserts that the planner rejects an incompatible type default. This is a narrow Content Sync acceptance gate, not a production-config or production-content test and not a production-readiness claim.
+The integration lifecycle hook is still restricted to `command === 'dev'`;
+existing lifecycle and production-isolation tests cover that contract. The matrix
+adds actual packed-tarball build/dev checks at its listed Astro checkpoints, but
+does not replace the dedicated Content Sync or external production-consumer gates.

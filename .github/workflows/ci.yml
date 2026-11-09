@@ -8,6 +8,25 @@ permissions:
   contents: read
 
 jobs:
+  astro-compat:
+    name: Astro compatibility (${{ matrix.astro }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        astro: ['7.2.4', '7.2.10', '7.3.8', '7.4.7']
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Set up Node.js 24 and pnpm 11.23.0
+        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        with:
+          runtime: node@24
+          version: 11.23.0
+          install: false
+      - name: Verify packed package compatibility
+        run: npm run verify:astro-compat -- ${{ matrix.astro }}
+
   verify:
     name: Verify
     runs-on: ubuntu-24.04
