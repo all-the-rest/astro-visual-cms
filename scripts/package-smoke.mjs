@@ -285,6 +285,17 @@ const entries = await getCollection('smokeNotes')
     const uiExpectedSource = mdxAfter.replace('rank={4}', 'rank={5}')
     assert.equal(await readFile(mdxFile, 'utf8'), uiExpectedSource, 'UI commit changed bytes outside the selected custom component scalar')
     mdxAfter = uiExpectedSource
+    const noOpSource = await readFile(mdxFile, 'utf8')
+    let noOpCommitRequests = 0
+    uiPage.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().endsWith('/api/mdx-components/commit')) noOpCommitRequests += 1
+    })
+    await uiPage.locator('#mdx-value-control input[type="number"]').fill('5')
+    await uiPage.locator('#mdx-preview-button').click()
+    await uiPage.waitForFunction(() => document.querySelector('#status')?.textContent === 'Der MDX-Wert ist unverändert; es wurde nichts geschrieben.')
+    assert.equal(await uiPage.locator('#mdx-confirmation').isHidden(), true, 'no-op must not show a confirmation diff')
+    assert.equal(await readFile(mdxFile, 'utf8'), noOpSource, 'no-op UI preview changed source bytes')
+    assert.equal(noOpCommitRequests, 0, 'no-op UI preview must not send a commit request')
     const galleryPage = await uiContext.newPage()
     await galleryPage.goto(`http://127.0.0.1:${port}/?route=references`)
     await galleryPage.locator('#gallery-picker button[data-gallery-id="internal-gallery"]').waitFor()

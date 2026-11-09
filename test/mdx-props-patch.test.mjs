@@ -26,6 +26,20 @@ test('parser ranges preserve CRLF and Unicode outside the quoted literal', () =>
   assert.equal(result.source, sourceWithFormatting.replace('title="Old"', 'title="New"'))
 })
 
+test('BOM and complex MDX no-op preserve exact source and supported edits target only the quoted literal', () => {
+  const sourceWithBom = `\uFEFF---\r\n# retain frontmatter comment\r\ntitle: "Keep — 東京"\r\n---\r\n\r\nimport Card from "../components/Card.astro";\r\nimport Unknown from "../components/Unknown.astro"; // keep import note\r\n\r\n{/* retain MDX comment */}\r\n<Card id="hero" title="Old" className="keep" enabled={isReady} />\r\n\r\n<Unknown value={compute()}>\r\n  Opaque child — 保持\r\n</Unknown>\r\n`
+  const configured = createMdxPropsAdapter({ importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] })
+  const state = configured.inspect(sourceWithBom)
+  assert.equal(state.instances[0].props.title, 'Old')
+  const noOp = configured.patch(sourceWithBom, 'hero', 'title', 'Old', state.hash)
+  assert.equal(noOp.diff, null)
+  assert.equal(noOp.source, sourceWithBom)
+  const edited = configured.patch(sourceWithBom, 'hero', 'title', 'New', state.hash)
+  assert.equal(edited.source, sourceWithBom.replace('title="Old"', 'title="New"'))
+  assert.equal(edited.diff.before, '"Old"')
+  assert.equal(edited.diff.after, '"New"')
+})
+
 test('trusted import identity and static safety failures fail closed', () => {
   assert.throws(() => adapter.inspect(source.replace('../components/Card.astro', '../evil/Card.astro')))
   for (const mdx of [

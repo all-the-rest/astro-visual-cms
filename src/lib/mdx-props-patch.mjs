@@ -26,8 +26,9 @@ function normalizeFields(editableProps, fields) {
 }
 
 function literal(source, attr, descriptor) {
-  const start = attr.position?.start?.offset, end = attr.position?.end?.offset
-  if (!Number.isInteger(start) || !Number.isInteger(end)) reject('Parser did not provide an exact attribute source range.')
+  const bomCorrection = source.charCodeAt(0) === 0xfeff ? 1 : 0
+  const start = attr.position?.start?.offset + bomCorrection, end = attr.position?.end?.offset + bomCorrection
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) reject('Parser did not provide an exact attribute source range.')
   const raw = source.slice(start, end), name = String(attr.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   let expression, value, encoded
   if (descriptor.type === 'string' || descriptor.type === 'enum') {
