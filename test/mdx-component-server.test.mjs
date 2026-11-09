@@ -34,7 +34,7 @@ test('configured MDX target exposes path-free state and requires a matching expl
   await writeFile(file, source)
   t.after(() => rm(root, { recursive: true, force: true }))
   let writeCalls = 0
-  const server = createEditorServer({ port: 0, mdxComponentTargets: [{ id: 'page', projectRoot: root, filePath: file, importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] }], writeSource: async (...args) => { writeCalls += 1; return writeSourceAtomically(...args) } })
+  const server = createEditorServer({ port: 0, safeSourceReplacementMode: false, mdxComponentTargets: [{ id: 'page', projectRoot: root, filePath: file, importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] }], writeSource: async (...args) => { writeCalls += 1; return writeSourceAtomically(...args) } })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise((resolve) => server.close(resolve)))
   const origin = `http://127.0.0.1:${server.address().port}`
@@ -61,13 +61,13 @@ test('configured MDX target exposes path-free state and requires a matching expl
   assert.equal(writeCalls, 1)
 })
 
-test('safe replacement mode refuses MDX component commit without invoking injected writer', async (t) => {
+test('default replacement policy refuses MDX component commit without invoking injected writer', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'mdx-safe-mode-'))
   const file = path.join(root, 'page.mdx')
   const source = `import Card from '../components/Card.astro'\n\n<Card id="hero" title="Old" />\n`
   await writeFile(file, source)
   let writes = 0
-  const server = createEditorServer({ port: 0, safeSourceReplacementMode: true, mdxComponentTargets: [{ id: 'page', projectRoot: root, filePath: file, importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] }], writeSource: async () => { writes++ } })
+  const server = createEditorServer({ port: 0, mdxComponentTargets: [{ id: 'page', projectRoot: root, filePath: file, importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] }], writeSource: async () => { writes++ } })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }) })
   const origin = `http://127.0.0.1:${server.address().port}`
@@ -90,7 +90,7 @@ test('Astro internal gallery endpoint enforces preview session, exact replay, st
   await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, source)
   t.after(() => rm(root, { recursive: true, force: true }))
   let writes = 0
-  const server = createEditorServer({ port: 0, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async (...args) => { writes++; return writeSourceAtomically(...args) } })
+  const server = createEditorServer({ port: 0, safeSourceReplacementMode: false, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async (...args) => { writes++; return writeSourceAtomically(...args) } })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise((resolve) => server.close(resolve)))
   const origin = `http://127.0.0.1:${server.address().port}`
   const token = async () => (await (await fetch(`${origin}/api/session`)).json()).token
@@ -119,13 +119,13 @@ test('Astro internal gallery endpoint enforces preview session, exact replay, st
   assert.equal(replay.status, 409); assert.equal(await readFile(file, 'utf8'), committedBytes); assert.equal(writes, 1)
 })
 
-test('safe replacement mode refuses Astro gallery commit and preserves source bytes', async (t) => {
+test('default replacement policy refuses Astro gallery commit and preserves source bytes', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'astro-gallery-safe-mode-'))
   const file = path.join(root, 'Galerie.astro')
   const source = `---\nconst imageNames = [{ name: "a", alt: "A" }, { name: "b", alt: "B" }]\n---\n`
   await writeFile(file, source)
   let writes = 0
-  const server = createEditorServer({ port: 0, safeSourceReplacementMode: true, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async () => { writes++ } })
+  const server = createEditorServer({ port: 0, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async () => { writes++ } })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }) })
   const origin = `http://127.0.0.1:${server.address().port}`

@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { appendFile, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import test from 'node:test'
 import sharp from 'sharp'
 import { inspectFixture } from '../src/lib/gallery-patch.mjs'
@@ -34,6 +36,15 @@ function renderedGalleries(html) {
 
 test('separate editor and Astro ports render multiple galleries and persist one safe reorder', { timeout: 75_000 }, async () => {
   const original = await readFile(FIXTURE_PATH)
+  const configDirectory = await mkdtemp(path.join(tmpdir(), 'astro-editor-e2e-config-'))
+  const configPath = path.join(configDirectory, 'editor.json')
+  await writeFile(configPath, JSON.stringify({
+    port: EDITOR_PORT,
+    sitePort: SITE_PORT,
+    basePath: '/e2e-synthetic/',
+    fixturePath: FIXTURE_PATH.pathname,
+    safeSourceReplacementMode: false,
+  }))
   const child = spawn(process.execPath, ['scripts/dev.mjs'], {
     cwd: new URL('../', import.meta.url),
     env: {
@@ -41,6 +52,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       ASTRO_PORT: String(SITE_PORT),
       EDITOR_PORT: String(EDITOR_PORT),
       ASTRO_BASE_PATH: '/e2e-synthetic/',
+      AVCMS_CONFIG: configPath,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -199,6 +211,7 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5_000))])
     }
     if (child.exitCode === null) child.kill('SIGKILL')
+    await rm(configDirectory, { recursive: true, force: true })
   }
   assert.doesNotMatch(logs, /Error:|failed/i)
 })

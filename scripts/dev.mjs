@@ -13,7 +13,7 @@ const processes = [
     stdio: 'inherit',
     env: { ...process.env, ASTRO_DEV_BACKGROUND: '1', EDITOR_PORT: String(editorPort) },
   }),
-  spawn(process.execPath, ['src/editor/server.mjs'], {
+  spawn(process.execPath, process.env.AVCMS_CONFIG ? ['src/editor/cli.mjs'] : ['src/editor/server.mjs'], {
     cwd: ROOT,
     stdio: 'inherit',
     env: { ...process.env, ASTRO_PORT: String(sitePort), EDITOR_PORT: String(editorPort) },

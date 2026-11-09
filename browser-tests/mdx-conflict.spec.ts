@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
@@ -91,13 +92,44 @@ test('configured MDX drafts survive revisions, switching, outages and stale comm
   await expect(page.locator('#mdx-confirmation')).toBeVisible()
   await expect(page.locator('#mdx-diff-before')).toHaveText('"External revision two"')
   await expect(page.locator('#mdx-diff-after')).toHaveText('"Preserved dirty draft"')
-  await updateOne('External revision three')
   await page.locator('#mdx-confirm-button').click()
   await expect(page.locator('#mdx-conflict')).toBeVisible()
+  await expect(page.locator('#mdx-conflict-message')).toContainText('standardmäßig blockiert')
+  await expect(page.locator('#mdx-proposal-export')).toBeVisible()
   await expect(value).toHaveValue('Preserved dirty draft')
-  expect(await readFile(fileOne, 'utf8')).toContain('External revision three')
+  const sourceAtExport = await readFile(fileOne, 'utf8')
+  expect(sourceAtExport).toContain('External revision two')
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#mdx-proposal-export').click(),
+  ])
+  const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+  expect(proposal).toEqual({
+    schemaVersion: 1,
+    type: 'astro-visual-cms-mdx-proposal',
+    targetId: 'one',
+    instanceId: 'conflict-1',
+    prop: 'label',
+    baseHash: createHash('sha256').update(sourceAtExport).digest('hex'),
+    proposedHash: createHash('sha256').update(sourceAtExport.replace('label="External revision two"', 'label="Preserved dirty draft"')).digest('hex'),
+    diff: {
+      start: sourceAtExport.indexOf('"External revision two"'),
+      end: sourceAtExport.indexOf('"External revision two"') + '"External revision two"'.length,
+      before: '"External revision two"',
+      after: '"Preserved dirty draft"',
+    },
+  })
+  expect(JSON.stringify(proposal)).not.toContain(fileOne)
+  expect(JSON.stringify(proposal)).not.toContain(sourceAtExport)
+
+  await updateOne('External revision three')
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+  await expect(page.locator('#mdx-conflict')).toBeVisible()
+  await expect(page.locator('#mdx-proposal-export')).toBeHidden()
+  await expect(value).toHaveValue('Preserved dirty draft')
 
   await page.locator('#mdx-conflict-reapply').click()
+  await expect(page.locator('#mdx-confirmation')).toBeVisible()
   await expect(page.locator('#mdx-diff-before')).toHaveText('"External revision three"')
   await page.locator('#mdx-cancel-button').click()
   await updateOne('External revision four')

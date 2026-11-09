@@ -45,8 +45,8 @@ async function close(server) {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
 }
 
-async function start(t, options) {
-  const server = createEditorServer({ port: 0, ...options })
+async function start(t, options, unsafeReplacementOptOut = true) {
+  const server = createEditorServer({ port: 0, ...(unsafeReplacementOptOut ? { safeSourceReplacementMode: false } : {}), ...options })
   const origin = await listen(server)
   t.after(() => close(server))
   const token = (await (await fetch(`${origin}/api/session`)).json()).token
@@ -413,10 +413,10 @@ test('collection field preview is exact and path-free; cancel/no-confirm never w
   assert.equal(await readFile(project.entryPath, 'utf8'), untouched.replace('"Old title"', '"New title"'))
 })
 
-test('safe replacement mode blocks collection-field and schema commits with actionable 409 and no writer call', async (t) => {
+test('default replacement policy blocks collection-field and schema commits with actionable 409 and no writer call', async (t) => {
   const project = await makeProject(t)
   let writes = 0
-  const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, safeSourceReplacementMode: true, writeSource: async () => { writes++ } })
+  const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, writeSource: async () => { writes++ } }, false)
   const originalEntry = await readFile(project.entryPath, 'utf8')
   const originalConfig = await readFile(project.configPath, 'utf8')
   const state = await (await fetch(`${origin}/api/collections`)).json()
@@ -439,10 +439,10 @@ test('safe replacement mode blocks collection-field and schema commits with acti
   assert.equal(await readFile(project.configPath, 'utf8'), originalConfig)
 })
 
-test('safe replacement mode permits only exclusive new entry creation and preserves a colliding path', async (t) => {
+test('default replacement policy permits only exclusive new entry creation and preserves a colliding path', async (t) => {
   const project = await makeProject(t)
   let replacements = 0
-  const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, safeSourceReplacementMode: true, writeSource: async () => { replacements++ } })
+  const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, writeSource: async () => { replacements++ } }, false)
   const catalog = await (await fetch(`${origin}/api/collections`)).json()
   const operation = { collectionId: 'drafts', entryId: 'safe-new.md', values: { title: 'New', order: 1 }, hash: catalog.configHash }
   const preview = await (await fetch(`${origin}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()

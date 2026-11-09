@@ -244,7 +244,7 @@ export function createEditorServer({
   mdxParagraphTargets,
   astroGalleryTargets = [],
   previewRoutes = DEFAULT_PREVIEW_ROUTES,
-  safeSourceReplacementMode = false,
+  safeSourceReplacementMode = true,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
@@ -252,8 +252,8 @@ export function createEditorServer({
   const siteOrigin = `http://127.0.0.1:${sitePort}`
   const safeBasePath = normalizeAstroBasePath(basePath)
   if (typeof safeSourceReplacementMode !== 'boolean') throw new TypeError('safeSourceReplacementMode must be a trusted boolean.')
-  // Central guard covers all endpoints and injected writers. Hash+rename is not
-  // an atomic compare-and-swap against uncooperative writers.
+  // Central guard covers all replacement endpoints and injected writers.
+  // Explicit opt-out uses hash-check+rename and is unsafe against arbitrary writers.
   const commitSource = safeSourceReplacementMode
     ? async () => { const error = new Error('Safe source replacement mode blocks replacing existing source files; no changes were written. Disable it only after reviewing the concurrent-writer risk.'); error.code = 'SOURCE_REPLACEMENT_DISABLED'; throw error }
     : writeSource

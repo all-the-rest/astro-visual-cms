@@ -128,6 +128,8 @@
             <p>Die Quelle hat sich geändert. Deine Eingabe bleibt erhalten. Wähle ausdrücklich, wie du fortfahren möchtest.</p>
             <button id="mdx-conflict-discard" class="btn" type="button">Verwerfen und neu laden</button>
             <button id="mdx-conflict-reapply" class="btn btn-warning" type="button">Eingabe erneut anwenden und Diff erstellen</button>
+            <button id="mdx-proposal-export" class="btn" type="button" hidden>Änderungsvorschlag herunterladen</button>
+            <p id="mdx-proposal-note" hidden>Manuelle Übergabe für genau diesen Quellhash; nicht automatisch übernommen oder zusammengeführt.</p>
           </section>
           <section id="mdx-confirmation" hidden><h3>Änderung bestätigen</h3><p id="mdx-diff-range"></p>
             <div class="grid gap-4 md:grid-cols-2"><div><h4>Vorher</h4><pre><code id="mdx-diff-before"></code></pre></div><div><h4>Nachher</h4><pre><code id="mdx-diff-after"></code></pre></div></div>
@@ -228,6 +230,7 @@
       let pendingMdxPreview = null;
       const mdxDraftConflicts = new Map();
       const mdxConflictRevisions = new Map();
+      const mdxProposals = new Map();
       let mdxLastHashes = new Map();
       let mdxPollSequence = 0;
       const mdxDrafts = new Map();
@@ -313,6 +316,11 @@
         document.querySelector('#mdx-conflict-message').textContent = draftConflict?.message || '';
         document.querySelector('#mdx-conflict-discard').disabled = saving || !draftConflict;
         document.querySelector('#mdx-conflict-reapply').disabled = saving || !draftConflict || draftConflict.unavailable;
+        const proposal = mdxProposals.get(conflictKey);
+        const proposalButton = document.querySelector('#mdx-proposal-export');
+        proposalButton.hidden = !draftConflict || !proposal;
+        proposalButton.disabled = saving || !proposal;
+        document.querySelector('#mdx-proposal-note').hidden = proposalButton.hidden;
         document.querySelector('#mdx-confirm-button').disabled = saving || !pendingMdxPreview;
         document.querySelector('#mdx-cancel-button').disabled = saving || !pendingMdxPreview;
         if (pendingMdxPreview) {
@@ -806,6 +814,7 @@
         if (descriptor?.type === 'number' && !Number.isFinite(value)) { status('Bitte einen gültigen Zahlenwert eingeben.', 'warning'); return; }
         const operation = { targetId: target.id, instanceId: instance.id, prop, value, hash: target.hash };
         const selectionKey = `${operation.targetId}\u0000${operation.instanceId}\u0000${operation.prop}`;
+        mdxProposals.delete(selectionKey);
         saving = true; renderMdx(); status('MDX-Änderung wird vorbereitet …');
         try {
           const response = await postOperation('/api/mdx-components/preview', operation);
@@ -813,30 +822,46 @@
           if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
           if (mdxDraftConflicts.has(selectionKey) || selectionKey !== mdxDraftKey() || mdxState.targets.find((item) => item.id === operation.targetId)?.hash !== operation.hash) return;
           if (!result.diff || !result.previewId) { status('Der MDX-Wert ist unverändert; es wurde nichts geschrieben.'); return; }
-          pendingMdxPreview = { ...operation, previewId: result.previewId, diff: result.diff, hash: result.hash };
+          pendingMdxPreview = { ...operation, previewId: result.previewId, diff: result.diff, hash: result.hash, nextHash: result.nextHash };
           renderMdx(); status('Diff prüfen. Erst nach Bestätigung wird geschrieben.', 'warning');
         } catch (error) { status(`Keine MDX-Vorschau erstellt: ${error.message}`, 'error'); if (error.status === 409 || error.status === 403) await load(); }
         finally { saving = false; renderMdx(); }
       }
       async function commitMdxChange() {
         if (saving || !pendingMdxPreview) return;
-        const { previewId, targetId, instanceId, prop, value, hash } = pendingMdxPreview;
+        const confirmedPreview = pendingMdxPreview;
+        const { previewId, targetId, instanceId, prop, value, hash } = confirmedPreview;
         const operation = { previewId, targetId, instanceId, prop, value, hash };
+        const key = mdxDraftKey(targetId, instanceId, prop);
+        mdxProposals.delete(key);
         saving = true; renderMdx();
         try {
           const response = await postOperation('/api/mdx-components/commit', operation);
           const result = await response.json();
-          if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
+          if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; error.code = result.code; throw error; }
           pendingMdxPreview = null;
-          const key = mdxDraftKey(targetId, instanceId, prop);
           mdxDrafts.delete(key);
           mdxDraftConflicts.delete(key);
           mdxConflictRevisions.delete(key);
           await load(); status('MDX-Änderung gespeichert.', 'success');
         } catch (error) {
           pendingMdxPreview = null;
-          const key = mdxDraftKey(targetId, instanceId, prop);
-          mdxDraftConflicts.set(key, { selectionKey: key, message: `Commit abgelehnt oder Quelle nicht erreichbar (${error.message}). Deine Eingabe bleibt erhalten; prüfe die Revision und wähle eine Konfliktaktion.`, unavailable: false });
+          if (error.code === 'SOURCE_REPLACEMENT_DISABLED' && confirmedPreview.diff && /^[a-f0-9]{64}$/.test(confirmedPreview.nextHash || '')) {
+            mdxProposals.set(key, {
+              schemaVersion: 1,
+              type: 'astro-visual-cms-mdx-proposal',
+              targetId,
+              instanceId,
+              prop,
+              baseHash: hash,
+              proposedHash: confirmedPreview.nextHash,
+              diff: { start: confirmedPreview.diff.start, end: confirmedPreview.diff.end, before: confirmedPreview.diff.before, after: confirmedPreview.diff.after },
+            });
+          }
+          const replacementDisabled = error.code === 'SOURCE_REPLACEMENT_DISABLED';
+          mdxDraftConflicts.set(key, { selectionKey: key, message: replacementDisabled
+            ? 'Speichern ist standardmäßig blockiert. Deine Eingabe bleibt erhalten; du kannst den basisgebundenen Vorschlag manuell herunterladen.'
+            : `Commit abgelehnt oder Quelle nicht erreichbar (${error.message}). Deine Eingabe bleibt erhalten; prüfe die Revision und wähle eine Konfliktaktion.`, unavailable: false });
           mdxConflictRevisions.set(key, Math.max(1, mdxConflictRevisions.get(key) || 0));
           status(`Nicht gespeichert: ${error.message}. Deine Eingabe bleibt erhalten.`, 'warning');
         }
@@ -869,6 +894,7 @@
           for (const item of latest.targets || []) {
             const oldHash = mdxLastHashes.get(item.id);
             if (item.id === selectedId && item.hash && oldHash !== item.hash) {
+              for (const proposalKey of mdxProposals.keys()) if (proposalKey.startsWith(`${item.id}\u0000`)) mdxProposals.delete(proposalKey);
               const instance = oldTarget?.instances?.find((entry) => entry.id === mdxInstance.value);
               const oldValue = instance?.props?.[mdxProp.value];
               const draftKey = mdxDraftKey(selectedId);
@@ -931,7 +957,7 @@
       document.querySelector('#mdx-conflict-discard').addEventListener('click', async () => {
         const key = mdxDraftKey();
         if (saving || !mdxDraftConflicts.has(key)) return;
-        mdxDrafts.delete(key); mdxDraftConflicts.delete(key); mdxConflictRevisions.delete(key);
+        mdxDrafts.delete(key); mdxDraftConflicts.delete(key); mdxConflictRevisions.delete(key); mdxProposals.delete(key);
         if (pendingMdxPreview && mdxDraftKey(pendingMdxPreview.targetId, pendingMdxPreview.instanceId, pendingMdxPreview.prop) === key) pendingMdxPreview = null;
         await load(); status('Externe MDX-Änderung geladen; lokale Eingabe verworfen.', 'info');
       });
@@ -939,6 +965,7 @@
         const key = mdxDraftKey();
         const conflict = mdxDraftConflicts.get(key);
         if (saving || !conflict || conflict.unavailable) return;
+        mdxProposals.delete(key);
         const epoch = mdxSelectionEpoch;
         const retained = { targetId: mdxTarget.value, instanceId: mdxInstance.value, prop: mdxProp.value, value: mdxValue.type === 'checkbox' ? mdxValue.checked : mdxValue.value };
         saving = true; renderMdx();
@@ -955,6 +982,34 @@
         mdxConflictRevisions.delete(key);
         saving = false; renderMdx();
         await prepareMdxChange();
+      });
+      document.querySelector('#mdx-proposal-export').addEventListener('click', async () => {
+        const key = mdxDraftKey();
+        const proposal = mdxProposals.get(key);
+        if (saving || !proposal) return;
+        try {
+          const response = await fetch('/api/mdx-components', { cache: 'no-store' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          const latest = await response.json();
+          const target = latest.targets?.find((item) => item.id === proposal.targetId);
+          if (!target?.supported || target.hash !== proposal.baseHash) {
+            mdxProposals.delete(key);
+            renderMdx();
+            await pollMdxRevision();
+            status('Der Vorschlag war an eine ältere Quellrevision gebunden und wurde verworfen. Prüfe den neuen Stand und erstelle bei Bedarf eine neue Vorschau.', 'warning');
+            return;
+          }
+          const blob = new Blob([JSON.stringify(proposal, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url; link.download = 'astro-visual-cms-mdx-proposal.json';
+          document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+        } catch (error) {
+          mdxProposals.delete(key);
+          mdxDraftConflicts.set(key, { selectionKey: key, unavailable: true, message: `Quellrevision konnte vor dem Export nicht geprüft werden (${error.message}); Vorschlag verworfen. Deine Eingabe bleibt erhalten.` });
+          renderMdx();
+          status('Quellrevision nicht prüfbar; es wurde kein Änderungsvorschlag exportiert.', 'warning');
+        }
       });
 
       async function prepareOrder(galleryId, order) {

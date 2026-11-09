@@ -173,7 +173,7 @@ test('preview and commit require the token, show only the exact diff, and write 
 
   assert.throws(() => createEditorServer({ fixturePath, basePath: '/unsafe/../path/' }), TypeError)
   const sitePort = 4321
-  const editor = createEditorServer({ port: 0, sitePort, fixturePath, basePath: '/synthetic-preview/' })
+  const editor = createEditorServer({ port: 0, sitePort, fixturePath, basePath: '/synthetic-preview/', safeSourceReplacementMode: false })
   const port = await listen(editor)
   const origin = `http://127.0.0.1:${port}`
 
@@ -268,14 +268,14 @@ test('preview and commit require the token, show only the exact diff, and write 
   }
 })
 
-test('trusted safe replacement mode keeps preview/read available but refuses commit before injected writer', async (t) => {
+test('default replacement policy keeps preview/read available but refuses commit before injected writer', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-safe-mode-'))
   const fixturePath = path.join(directory, 'fixture.mdx')
   const external = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-03", "noise-fixture-01"];\n\n<Gallery sorted={FIRST} />\n`
   const source = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-01", "noise-fixture-03"];\n\n<Gallery sorted={FIRST} />\n`
   await writeFile(fixturePath, source)
   let writes = 0
-  const editor = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: true, writeSource: async () => { writes++ } })
+  const editor = createEditorServer({ port: 0, fixturePath, writeSource: async () => { writes++ } })
   const origin = `http://127.0.0.1:${await listen(editor)}`
   t.after(async () => { await close(editor); await rm(directory, { recursive: true, force: true }) })
   const token = (await (await fetch(`${origin}/api/session`)).json()).token
@@ -283,15 +283,17 @@ test('trusted safe replacement mode keeps preview/read available but refuses com
   const order = [...state.galleries[0].order].reverse()
   const headers = { origin, 'content-type': 'application/json', 'x-editor-token': token }
   const preview = await (await fetch(`${origin}/api/preview`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash }) })).json()
-  // A stale revision remains an allowed fail-closed result and never writes.
+  // A deterministic external edit immediately before commit remains intact;
+  // the default policy refuses before calling any writer, regardless of request data.
   await writeFile(fixturePath, external)
-  const response = await fetch(`${origin}/api/commit`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash, previewId: preview.previewId }) })
-  assert.ok([409, 422].includes(response.status))
+  const response = await fetch(`${origin}/api/commit`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash, previewId: preview.previewId, safeSourceReplacementMode: false }) })
+  assert.equal(response.status, 409)
   const staleFailure = await response.json()
-  assert.ok(staleFailure.code)
+  assert.equal(staleFailure.code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.match(staleFailure.error, /no changes were written/i)
   assert.equal(writes, 0)
   assert.equal(await (await import('node:fs/promises')).readFile(fixturePath, 'utf8'), external)
-  // With a current revision, safe mode returns its actionable refusal.
+  // With a current revision, the default returns the same actionable refusal.
   await writeFile(fixturePath, source)
   const currentState = await (await fetch(`${origin}/api/state`)).json()
   const currentPreview = await (await fetch(`${origin}/api/preview`, { method: 'POST', headers, body: JSON.stringify({ galleryId: currentState.galleries[0].id, order, hash: currentState.hash }) })).json()
@@ -311,12 +313,12 @@ test('a restarted editor rotates its token and rejects the previous session toke
   await writeFile(fixturePath, source, 'utf8')
   t.after(() => rm(directory, { recursive: true, force: true }))
 
-  const first = createEditorServer({ port: 0, fixturePath })
+  const first = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: false })
   const firstOrigin = `http://127.0.0.1:${await listen(first)}`
   const firstToken = (await (await fetch(`${firstOrigin}/api/session`)).json()).token
   await close(first)
 
-  const second = createEditorServer({ port: 0, fixturePath })
+  const second = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: false })
   const secondOrigin = `http://127.0.0.1:${await listen(second)}`
   try {
     const secondToken = (await (await fetch(`${secondOrigin}/api/session`)).json()).token
@@ -353,7 +355,7 @@ test('a source change after preview returns 409 and preserves the external edit'
   await writeFile(fixturePath, source, 'utf8')
   t.after(() => rm(directory, { recursive: true, force: true }))
 
-  const editor = createEditorServer({ port: 0, fixturePath })
+  const editor = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: false })
   const port = await listen(editor)
   const origin = `http://127.0.0.1:${port}`
   const token = (await (await fetch(`${origin}/api/session`)).json()).token
@@ -427,7 +429,7 @@ test('preview readiness waits for galleries in fixture order instead of acceptin
     response.end(renderedHtml)
   })
   const sitePort = await listen(site)
-  const editor = createEditorServer({ port: 0, sitePort, basePath: '/synthetic-preview/' })
+  const editor = createEditorServer({ port: 0, sitePort, basePath: '/synthetic-preview/', safeSourceReplacementMode: false })
   const editorPort = await listen(editor)
   let switchToCorrectOrder
 

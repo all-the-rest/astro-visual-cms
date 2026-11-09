@@ -38,7 +38,7 @@ For an imported MDX component, trusted editor JSON can declare scalar fields:
 
 `editableProps: ["heading"]` remains shorthand for string fields. Only the documented static literal forms are editable; unconfigured props are preserved but never exposed for editing. Spreads and dynamic expressions in configured fields remain read-only, and component code is never evaluated. See [gallery-editor.md](gallery-editor.md) for the exact boundary.
 
-The configured MDX component panel checks its selected target revision on a bounded two-second poll and when the editor regains focus. A clean value refreshes automatically; a dirty value is retained and gets explicit discard/reload or reapply choices. Reapply only requests a new preview against the then-current supported state; the resulting diff still requires explicit confirmation. An unavailable/unsupported source disables reapply while retaining the draft. Polling is best-effort (not a filesystem watch), and can only detect revisions observed by a successful poll. It does not make normal-mode hash-then-write atomic, guarantee against concurrent writers, or bypass `safeSourceReplacementMode`, which continues to reject all replacement commits. This slice applies only to configured MDX component drafts; it is not a generic editor or a merge workflow.
+The configured MDX component panel checks its selected target revision on a bounded two-second poll and when the editor regains focus. A clean value refreshes automatically; a dirty value is retained and gets explicit discard/reload or reapply choices. Reapply only requests a new preview against the then-current supported state; the resulting diff still requires explicit confirmation. An unavailable/unsupported source disables reapply while retaining the draft. Polling is best-effort (not a filesystem watch), and can only detect revisions observed by a successful poll. Source replacement is blocked by default; `safeSourceReplacementMode: false` is a trusted-only opt-out to legacy hash-check+rename and is unsafe against arbitrary/uncooperative writers. This slice applies only to configured MDX component drafts; it is not a generic editor or a merge workflow.
 
 The editor's gallery API remains the original bounded demo fixture adapter; custom preview route selection and static content collection discovery do not make it a general-purpose content editor. Use an actual fixture file conforming to the existing supported demo shape if the gallery UI/API is enabled. MDX paragraph and component adapters support only their explicitly configured syntaxes; this package does not claim general MDX compatibility.
 
@@ -94,21 +94,33 @@ array's separator/whitespace slots. Reads reject symlinked paths, files over
 1 MiB, and invalid UTF-8. Preview tokens are same-session, short-lived, and
 one-shot; commits recheck the source hash and parser before the atomic write.
 This is not general Astro DOM/source provenance.
-# Safe source replacement mode
+# Source replacement policy
+
+Source replacement is blocked by default. The editor keeps reads and previews
+available, but returns HTTP 409 (`SOURCE_REPLACEMENT_DISABLED`) before invoking
+any replacement writer. This central guard covers fixture/gallery, configured
+MDX, Astro gallery, collection-field, and collection schema/config replacement
+endpoints, including injected writers. Exclusive creation of a new collection
+entry remains permitted and cannot replace an existing path. Request bodies
+cannot change this trusted server policy.
 
 The trusted JSON file passed to `astro-visual-cms-editor --config <path>` may
-set `safeSourceReplacementMode: true` (the CLI passes this server-side option
-through; request bodies cannot set it).
-This is an explicit opt-in mitigation: it keeps source reads and previews
-available, but rejects every attempt to replace an existing source file with
-HTTP 409 (`SOURCE_REPLACEMENT_DISABLED`) before invoking the configured writer.
-This central guard covers gallery, MDX, collection, schema/config and fixture
-replacement endpoints, including an injected writer. Exclusive creation of a
-new collection entry remains permitted and cannot replace an existing path.
-Clients cannot enable or disable the mode in request data.
+explicitly set `safeSourceReplacementMode: false` to opt out and allow the
+legacy hash-check-plus-rename writer. This opt-out is unsafe against arbitrary
+or uncooperative writers: a deterministic test demonstrates an external edit
+after the final hash read being overwritten by rename. Keep the default unless
+the project accepts that risk.
 
-This mode does not automatically apply edits, merge competing changes, or
-provide optimistic-locking compare-and-swap. Hash checking followed by rename
-in normal mode is not atomic against uncooperative writers. The default remains
-normal mode for compatibility; this mitigation must be explicitly enabled and
-does not resolve issue #14, which remains open.
+When a configured MDX component commit is refused specifically by the default
+policy, the editor retains the confirmed field draft and can download a
+path-free JSON proposal containing target/instance/field IDs, the expected base
+hash, proposed hash, and exact changed source range. It does not include the
+source path or full source. The proposal is a manual handoff only; it is not
+merged, applied, or an atomic write, and is invalidated when the observed base
+revision changes. Stale-hash failures do not produce an exportable proposal.
+
+Node's ordinary hash-check-plus-rename writer cannot provide portable
+compare-and-swap against uncooperative filesystem writers. The default policy
+therefore fails closed rather than claiming atomic revision-bound writes. This
+limits replacement editing until a stronger write primitive is available; it
+does not resolve issue #14 or prove integration in every consumer project.
