@@ -35,10 +35,11 @@
     "browser-tests:markdown-copy": "playwright test --config=playwright.markdown-copy.config.ts",
     "verify:build": "node scripts/verify-build.mjs",
     "verify:external-production": "node scripts/verify-external-production.mjs",
+    "verify:licenses": "node scripts/verify-runtime-licenses.mjs",
     "verify:sharp-build": "node scripts/verify-sharp-build.mjs",
     "verify:image-variants-astro": "node scripts/verify-image-variants-astro.mjs",
     "verify:collection-astro": "node scripts/verify-collection-astro.mjs",
-    "verify": "pnpm test && pnpm run verify:sharp-build && pnpm run verify:image-variants-astro && pnpm run verify:collection-astro && pnpm run verify:build"
+    "verify": "pnpm test && pnpm run verify:licenses && pnpm run verify:sharp-build && pnpm run verify:image-variants-astro && pnpm run verify:collection-astro && pnpm run verify:build"
   },
   "dependencies": {
     "@babel/parser": "7.29.13",
