@@ -265,7 +265,90 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
   await expect(createTitle).toHaveValue('')
   await page.unroute('**/api/collections')
 
-  expect(await readFile(receipt.configFile)).toEqual(Buffer.from(configRevisionTwo))
+  // Config operations exercise the same stale-config protections without mocking writes.
+  const configConflict = page.locator('#config-conflict')
+  const configCommit = page.locator('#config-commit')
+  const configComment = '// external config revision for config operation\n'
+  const appendConfigComment = async () => {
+    const before = await readFile(receipt.configFile, 'utf8')
+    await writeFile(receipt.configFile, `${before}\n${configComment}`)
+    return `${before}\n${configComment}`
+  }
+  const pollConfigRevision = async () => {
+    const poll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')))
+    await poll
+  }
+  const verifyConfigOperation = async (formSelector: string, values: Record<string, string>, expectedLocalText: string) => {
+    const form = page.locator(formSelector)
+    await expect(form).toBeVisible()
+    for (const [name, value] of Object.entries(values)) {
+      const control = form.locator(`[name="${name}"]`)
+      if (await control.evaluate(element => element.tagName === 'SELECT')) await control.selectOption(value)
+      else await control.fill(value)
+    }
+    await form.locator('[name="required"]').uncheck()
+    const externalBeforePreview = await appendConfigComment()
+    await pollConfigRevision()
+    await expect(configConflict.getByRole('alert')).toBeVisible()
+    await expect(configConflict).toContainText(expectedLocalText)
+    await expect(configConflict).toContainText('aktuelle Revision:')
+    if (formSelector === '#create-collection-form') await expect(configConflict).not.toContainText('./src/content/acceptance-notes')
+    await expect(form.locator('button[type="submit"]')).toBeDisabled()
+    await expect(configCommit).toBeDisabled()
+    await expect(form.locator('[name="enumValues"]')).toHaveValue('')
+    await expect(form.locator('[name="required"]')).not.toBeChecked()
+    expect(await readFile(receipt.configFile, 'utf8')).toBe(externalBeforePreview)
+    await configConflict.getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' }).click()
+    await expect(page.locator('#config-confirmation')).toBeVisible()
+    await expect(page.locator('#config-diff')).toContainText(expectedLocalText)
+    await expect(configCommit).toBeEnabled()
+    const externalAfterPreview = await appendConfigComment()
+    await configCommit.click()
+    await expect(configConflict.getByRole('alert')).toBeVisible()
+    await expect(configConflict).toContainText(expectedLocalText)
+    const latest = (await (await request.get('/api/collections')).json()).configHash as string
+    await expect.poll(() => configConflict.textContent()).toContain(latest)
+    expect(await readFile(receipt.configFile, 'utf8')).toBe(externalAfterPreview)
+    await configConflict.getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' }).click()
+    await expect(page.locator('#config-confirmation')).toBeVisible()
+    await expect(page.locator('#config-diff')).toContainText(expectedLocalText)
+    await configCommit.click()
+    await expect(page.locator('#status')).toContainText('Konfiguration gespeichert.')
+    expect(await readFile(receipt.configFile, 'utf8')).toContain(configComment.trim())
+    return await readFile(receipt.configFile)
+  }
+
+  const configAfterCreation = await verifyConfigOperation('#create-collection-form', {
+    name: 'browser_copy_notes', base: './src/content/acceptance-notes', pattern: '*.md',
+    fieldName: 'label', fieldType: 'string', enumValues: '',
+  }, 'browser_copy_notes')
+  const configAfterExtension = await verifyConfigOperation('#extend-field-form', {
+    fieldName: 'browser_copy_flag', fieldType: 'boolean', enumValues: '',
+  }, 'browser_copy_flag')
+
+  const policyField = page.locator('#extend-field-form')
+  await policyField.locator('[name="fieldName"]').fill('browser_copy_policy')
+  await policyField.locator('[name="fieldType"]').selectOption('string')
+  await policyField.locator('button[type="submit"]').click()
+  await expect(page.locator('#config-diff')).toContainText('browser_copy_policy')
+  await page.route('**/api/collections/config/commit', route => route.fulfill({
+    status: 409,
+    contentType: 'application/json',
+    body: JSON.stringify({ code: 'SOURCE_REPLACEMENT_DISABLED', error: 'Safe source replacement mode blocks replacing existing source files; no changes were written.' }),
+  }))
+  await configCommit.click()
+  await expect(page.locator('#status')).toContainText('Schreibstatus blockiert')
+  await expect(configConflict).toBeHidden()
+  await expect(policyField.locator('[name="fieldName"]')).toHaveValue('browser_copy_policy')
+  expect(await readFile(receipt.configFile)).toEqual(configAfterExtension)
+  await page.unroute('**/api/collections/config/commit')
+
+  expect(configAfterExtension).not.toEqual(config)
+  expect(configAfterExtension.toString()).toContain('browser_copy_notes')
+  expect(configAfterExtension.toString()).toContain('browser_copy_flag')
+  expect(configAfterCreation.toString()).toContain('browser_copy_notes')
+  expect(await readFile(receipt.configFile)).toEqual(configAfterExtension)
   expect(await readFile(receipt.pageFile)).toEqual(pageSource)
   expect(await readFile(rootFixture)).toEqual(rootFixtureBytes)
   expect(await readFile(rootComponent)).toEqual(rootComponentBytes)

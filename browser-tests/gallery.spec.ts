@@ -102,10 +102,12 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     await expect(page.getByRole('button', { name: 'Änderung bestätigen und speichern' })).toBeVisible()
     await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(originalSource)
     await page.getByRole('button', { name: 'Abbrechen' }).click()
-    await expect(page.getByRole('status')).toHaveText('Änderung abgebrochen; die Datei blieb unverändert.')
+    await expect(page.locator('#status')).toHaveText('Änderung abgebrochen; die Datei blieb unverändert.')
     await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(originalSource)
 
-    await highlightsList.getByRole('listitem').nth(1).dragTo(highlightsList.getByRole('listitem').first())
+    await expect(page.locator('#gallery-draft-actions')).toBeVisible()
+    await expect(page.locator('#gallery-draft-actions')).toContainText('Lokaler Galerieentwurf')
+    await page.locator('#gallery-draft-actions').getByRole('button', { name: 'Vorschau für lokale Reihenfolge erstellen' }).click()
     await expect(page.getByRole('heading', { name: 'Quelländerung bestätigen' })).toBeVisible()
     await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
 

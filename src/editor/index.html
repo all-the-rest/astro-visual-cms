@@ -13,6 +13,8 @@
           <h1 class="card-title">MDX-Galerien</h1>
           <p class="text-sm">Wähle eine Galerie, ziehe Einträge zum Sortieren oder nutze die ↑/↓-Buttons als Tastatur-Alternative. Vor dem Speichern zeigt der Editor exakt den geänderten Arraybereich.</p>
           <div id="status" class="alert alert-info" role="status">Fixture wird geladen …</div>
+          <div id="gallery-conflict" class="grid gap-2" hidden></div>
+          <div id="gallery-draft-actions" class="grid gap-2" hidden></div>
           <div id="gallery-picker" class="flex flex-wrap gap-2" role="group" aria-label="Galerie auswählen"></div>
           <ul id="images" class="list" aria-label="Galerie-Reihenfolge"></ul>
           <p class="text-xs opacity-70">Dev-only · localhost · feste Demo-Fixture · keine Produktions-Schreibschnittstelle</p>
@@ -77,7 +79,7 @@
               <button class="btn" type="submit">Vorschau</button>
             </form>
           </div>
-          <section id="config-confirmation" class="grid gap-3" hidden><h3 class="font-semibold">Exakte Konfigurationsänderung bestätigen</h3><pre class="overflow-auto rounded-box bg-base-200 p-3"><code id="config-diff"></code></pre><button id="config-commit" class="btn btn-primary" type="button">Bestätigen und speichern</button><button id="config-cancel" class="btn" type="button">Abbrechen</button></section>
+          <div id="config-conflict" class="grid gap-2" hidden></div><section id="config-confirmation" class="grid gap-3" hidden><h3 class="font-semibold">Exakte Konfigurationsänderung bestätigen</h3><pre class="overflow-auto rounded-box bg-base-200 p-3"><code id="config-diff"></code></pre><button id="config-commit" class="btn btn-primary" type="button">Bestätigen und speichern</button><button id="config-cancel" class="btn" type="button">Abbrechen</button></section>
           <p class="text-xs opacity-70">Nach einer künftigen bestätigten Schema-/Collection-Konfigurationsänderung Content Sync bzw. einen Astro-Dev-Server-Neustart prüfen.</p>
         </div>
       </section>
@@ -262,6 +264,8 @@
       let selectedEntryId = '';
       let saving = false;
       let pendingPreview = null;
+      const galleryDrafts = new Map();
+      const galleryConflicts = new Map();
       let pendingCollectionPreview = null;
       const collectionDrafts = new Map();
       const collectionConflicts = new Map();
@@ -271,6 +275,9 @@
       let collectionPollInFlight = false;
       let pendingConfigPreview = null;
       let configOperation = null;
+      let configConflict = null;
+      let configBaseHash = '';
+      let configDraft = null;
       let draggedSlug = null;
       let focusImageSlugAfterRender = '';
 
@@ -354,6 +361,7 @@
       function galleryById(id) {
         return current.galleries.find((gallery) => gallery.id === id);
       }
+      function galleryRevision(gallery) { return gallery?.kind === 'astro-internal-gallery' ? gallery.hash : current.hash; }
 
       function renderConfirmation() {
         confirmation.hidden = pendingPreview === null;
@@ -363,6 +371,39 @@
         diffRange.textContent = `Quelloffset ${pendingPreview.diff.start}–${pendingPreview.diff.end} (JavaScript-Codeeinheiten)`;
         diffBefore.textContent = pendingPreview.diff.before;
         diffAfter.textContent = pendingPreview.diff.after;
+      }
+
+      function renderGalleryConflict() {
+        const host = document.querySelector('#gallery-conflict');
+        if (!host) return;
+        host.replaceChildren();
+        const conflict = galleryConflicts.get(selectedGalleryId);
+        host.hidden = !conflict;
+        if (!conflict) return;
+        const alert = document.createElement('div'); alert.setAttribute('role', 'alert'); alert.className = 'alert alert-warning';
+        alert.textContent = `Galerie-Konflikt · Basis: ${conflict.base || 'Nicht verfügbar'} · aktuell: ${conflict.latest || 'Nicht verfügbar'} · lokale Reihenfolge: ${JSON.stringify(conflict.order)}`;
+        host.append(alert);
+        const discard = document.createElement('button'); discard.type = 'button'; discard.className = 'btn'; discard.textContent = 'Verwerfen und neu laden';
+        discard.addEventListener('click', async () => { galleryDrafts.delete(selectedGalleryId); galleryConflicts.delete(selectedGalleryId); pendingPreview = null; await load(); }); host.append(discard);
+        const apply = document.createElement('button'); apply.type = 'button'; apply.className = 'btn'; apply.textContent = 'Entwurf erneut anwenden und Vorschau erstellen';
+        const latest = galleryById(selectedGalleryId); const order = conflict.order;
+        apply.disabled = !latest || !latest.hash && latest.kind === 'astro-internal-gallery' || !Array.isArray(latest.order) || latest.order.length !== order.length || new Set(order).size !== order.length || !order.every((id) => latest.order.includes(id));
+        apply.addEventListener('click', () => { if (apply.disabled) return; const latestRevision = galleryRevision(latest); if (order.every((id, index) => id === latest.order[index])) { galleryDrafts.delete(selectedGalleryId); galleryConflicts.delete(selectedGalleryId); render(); return; } galleryConflicts.delete(selectedGalleryId); galleryDrafts.set(selectedGalleryId, { base: latestRevision, baseOrder: [...latest.order], order: [...order] }); prepareOrder(selectedGalleryId, order, true); }); host.append(apply);
+      }
+
+      function renderGalleryDraftActions() {
+        const host = document.querySelector('#gallery-draft-actions');
+        host.replaceChildren();
+        const galleryId = selectedGalleryId;
+        const draft = galleryDrafts.get(galleryId);
+        host.hidden = !draft || galleryConflicts.has(galleryId) || pendingPreview !== null;
+        if (host.hidden) return;
+        const note = document.createElement('p'); note.textContent = `Lokaler Galerieentwurf: ${JSON.stringify(draft.order)}. Er wurde noch nicht gespeichert.`; host.append(note);
+        const preview = document.createElement('button'); preview.type = 'button'; preview.className = 'btn'; preview.textContent = 'Vorschau für lokale Reihenfolge erstellen';
+        preview.disabled = busy() || !galleryById(galleryId);
+        preview.addEventListener('click', () => { if (!preview.disabled) prepareOrder(galleryId, [...draft.order]); }); host.append(preview);
+        const discard = document.createElement('button'); discard.type = 'button'; discard.className = 'btn'; discard.textContent = 'Entwurf verwerfen und neu laden';
+        discard.addEventListener('click', async () => { galleryDrafts.delete(galleryId); galleryConflicts.delete(galleryId); pendingPreview = null; await load(); }); host.append(discard);
       }
 
       function selectedCollection() {
@@ -389,10 +430,13 @@
         const focusedSelection = focusedField instanceof HTMLInputElement && focusedField.type !== 'number'
           ? { start: focusedField.selectionStart, end: focusedField.selectionEnd, direction: focusedField.selectionDirection }
           : null;
-        collectionsPanel.hidden = !collectionState.configured && collectionConflicts.size === 0 && createEntryConflicts.size === 0;
+        collectionsPanel.hidden = !collectionState.configured && collectionConflicts.size === 0 && createEntryConflicts.size === 0 && !configConflict;
         renderCollectionConflicts();
+        renderConfigConflict();
         renderCreateEntryConflicts();
         if (!collectionState.configured) {
+          document.querySelector('#config-editors').hidden = true;
+          for (const button of document.querySelectorAll('#config-editors button')) button.disabled = true;
           if (collectionConflicts.size || createEntryConflicts.size) {
             collectionsReason.hidden = false;
             collectionsReason.textContent = 'Collections derzeit nicht verfügbar. Konflikte und lokale Entwürfe bleiben erhalten; Vorschau und Übernahme sind gesperrt.';
@@ -410,7 +454,7 @@
         editors.hidden = !(capabilities.supported && (capabilities.creationSupported || capabilities.fieldExtensionSupported));
         document.querySelector('#create-collection-form').hidden = !capabilities.creationSupported;
         document.querySelector('#extend-field-form').hidden = !capabilities.fieldExtensionSupported || !selectedCollection()?.supported || selectedCollection()?.mode !== 'editable';
-        for (const button of editors.querySelectorAll('button')) button.disabled = busy();
+        for (const form of editors.querySelectorAll('form')) for (const control of form.elements) control.disabled = busy() || Boolean(configConflict) || Boolean(pendingConfigPreview);
         document.querySelector('#config-confirmation').hidden = !pendingConfigPreview;
         document.querySelector('#config-diff').textContent = pendingConfigPreview?.diff?.before + (pendingConfigPreview ? '\n→\n' + pendingConfigPreview.diff.after : '');
         document.querySelector('#config-commit').disabled = saving || !pendingConfigPreview;
@@ -427,6 +471,7 @@
           button.disabled = busy();
           button.addEventListener('click', () => {
             selectedCollectionId = collection.id;
+            if (configDraft?.kind === 'extend') configDraft.collection = collection.id;
             selectedEntryId = collection.entries?.[0]?.id || '';
             render();
           });
@@ -750,15 +795,85 @@
         if (!name || (type === 'enum' && (!values.length || new Set(values).size !== values.length))) throw new Error('Feldname und gültige, eindeutige Enum-Werte sind erforderlich.');
         return { name, type, required: form.elements.required.checked, ...(type === 'enum' ? { values } : {}) };
       }
+      function readConfigDraft(kind) {
+        const form = document.querySelector(kind === 'create' ? '#create-collection-form' : '#extend-field-form');
+        return { kind, collection: selectedCollectionId, values: Object.fromEntries([...form.elements].filter((element) => element.name).map((element) => [element.name, element.type === 'checkbox' ? element.checked : element.value])) };
+      }
+      function configOperationFromDraft(draft) {
+        const values = draft.values;
+        const form = { elements: { fieldName: { value: values.fieldName || '' }, fieldType: { value: values.fieldType || '' }, enumValues: { value: values.enumValues || '' }, required: { checked: Boolean(values.required) } } };
+        const field = configField(form);
+        if (draft.kind === 'create') {
+          const name = String(values.name || '').trim(); const base = String(values.base || '').trim();
+          if (!name || !base) throw new Error('Collectionname und Content-Basisordner sind erforderlich.');
+          return { name, base, pattern: values.pattern || '*.md', fields: [field], hash: collectionState.configHash };
+        }
+        if (!draft.collection) throw new Error('Eine Collection muss ausgewählt sein.');
+        return { collection: draft.collection, field, hash: collectionState.configHash };
+      }
+      for (const [formId, kind] of [['#create-collection-form', 'create'], ['#extend-field-form', 'extend']]) {
+        const form = document.querySelector(formId);
+        const capture = () => {
+          if (configConflict || pendingConfigPreview) return;
+          const draft = readConfigDraft(kind);
+          const previous = configDraft?.kind === kind ? configDraft : null;
+          configDraft = { ...draft, base: previous?.base || collectionState.configHash || configBaseHash, operation: previous?.operation || null };
+        };
+        form.addEventListener('input', capture); form.addEventListener('change', capture);
+      }
+      function restoreConfigDraft() {
+        if (!configDraft) return;
+        const form = document.querySelector(configDraft.kind === 'create' ? '#create-collection-form' : '#extend-field-form');
+        for (const element of [...form.elements]) if (element.name && Object.hasOwn(configDraft.values, element.name)) {
+          if (element.type === 'checkbox') element.checked = configDraft.values[element.name]; else element.value = configDraft.values[element.name];
+        }
+        selectedCollectionId = configDraft.collection || selectedCollectionId;
+      }
+      function validConfigLabel(value) {
+        const label = String(value || '').trim();
+        return /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(label) ? label : '(ungültig oder leer)';
+      }
+      function renderConfigConflict() {
+        const host = document.querySelector('#config-conflict'); host.replaceChildren();
+        host.hidden = !configConflict;
+        if (!configConflict) return;
+        const alert = document.createElement('div'); alert.className = 'alert alert-warning'; alert.setAttribute('role', 'alert');
+        const safeNames = configDraft?.kind === 'create'
+          ? `Collection ${validConfigLabel(configDraft.values.name)}, Feld ${validConfigLabel(configDraft.values.fieldName)} (${validConfigLabel(configDraft.values.fieldType)})`
+          : `Collection ${validConfigLabel(configDraft?.collection)}, Feld ${validConfigLabel(configDraft?.values.fieldName)} (${validConfigLabel(configDraft?.values.fieldType)})`;
+        alert.textContent = `Konfigurationskonflikt · Basisrevision: ${configConflict.base || 'nicht verfügbar'} · aktuelle Revision: ${configConflict.latest || 'nicht verfügbar'} · Entwurf: ${safeNames}`; host.append(alert);
+        const discard = document.createElement('button'); discard.type = 'button'; discard.className = 'btn'; discard.textContent = 'Verwerfen und neu laden'; discard.onclick = () => { configDraft = null; configConflict = null; configOperation = null; pendingConfigPreview = null; document.querySelector('#create-collection-form').reset(); document.querySelector('#extend-field-form').reset(); render(); }; host.append(discard);
+        const reapply = document.createElement('button'); reapply.type = 'button'; reapply.className = 'btn'; reapply.textContent = 'Entwurf erneut anwenden und Vorschau erstellen';
+        const caps = collectionState.configEditing || {}; let op = configDraft?.operation; const col = collectionState.collections?.find((item) => item.id === configDraft?.collection);
+        try { op = configDraft ? configOperationFromDraft(configDraft) : null; } catch { op = null; }
+        const duplicateCollection = op?.name && collectionState.collections?.some((item) => item.name === op.name);
+        const duplicateField = !op?.name && col?.fields?.some((item) => item.name === op?.field?.name);
+        const validIdentifier = (value) => typeof value === 'string' && /^[A-Za-z_$][A-Za-z0-9_$-]{0,63}$/.test(value);
+        const validField = (field) => validIdentifier(field?.name) && ['string', 'number', 'boolean', 'enum'].includes(field?.type) && (field.type !== 'enum' || Array.isArray(field.values) && field.values.length > 0 && new Set(field.values).size === field.values.length);
+        const validOperation = op?.name
+          ? validIdentifier(op.name) && typeof op.base === 'string' && op.base.length > 0 && op.base.length <= 256 && ['*.md', '*.mdx', '**/*.md', '**/*.mdx'].includes(op.pattern) && op.fields?.length === 1 && validField(op.fields[0])
+          : validIdentifier(op?.collection) && validField(op?.field);
+        reapply.disabled = !configConflict.latest || !collectionState.configured || !validOperation || Boolean(duplicateCollection || duplicateField) || !(op?.name ? caps.creationSupported : caps.fieldExtensionSupported && col?.supported && col?.mode === 'editable');
+        reapply.onclick = () => { if (reapply.disabled) return; const latestHash = configConflict.latest; const operation = { ...op, hash: latestHash }; if (!operation.name) operation.collection = configDraft.collection; configDraft.base = latestHash; configDraft.operation = operation; configBaseHash = latestHash; configConflict = null; prepareConfig(operation.name ? '/api/collections/config/create/preview' : '/api/collections/config/preview', operation); }; host.append(reapply);
+      }
       async function prepareConfig(endpoint, operation) {
         if (busy() || !collectionState.configHash) return;
+        if (configConflict) return;
+        const kind = operation.name ? 'create' : 'extend';
+        const previous = configDraft?.kind === kind ? configDraft : null;
+        configDraft = { ...readConfigDraft(kind), base: previous?.base || collectionState.configHash, operation: { ...operation } };
         saving = true; render();
         try {
           const response = await postOperation(endpoint, operation); const result = await response.json();
-          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status });
+          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
           if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau erhalten.');
           configOperation = operation; pendingConfigPreview = { previewId: result.previewId, diff: result.diff }; render(); status('Quell-Diff prüfen; erst nach Bestätigung wird gespeichert.', 'warning');
-        } catch (error) { status(`Konfigurationsvorschau fehlgeschlagen: ${error.message}`, 'error'); if (error.status === 403 || error.status === 409) await load(); }
+        } catch (error) {
+          const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
+          if (stale) { configConflict = { base: configDraft.base, latest: '' }; pendingConfigPreview = null; await pollCollections(); }
+          status(error.code === 'SOURCE_REPLACEMENT_DISABLED' ? `Schreibstatus blockiert: ${error.message}; der Entwurf bleibt erhalten.` : `Konfigurationsvorschau fehlgeschlagen: ${error.message}`, 'error');
+          if (error.status === 403) await load();
+        }
         finally { saving = false; render(); }
       }
       document.querySelector('#create-collection-form').addEventListener('submit', (event) => {
@@ -777,9 +892,15 @@
         saving = true; render();
         try {
           const response = await postOperation(endpoint, { ...configOperation, previewId: pendingConfigPreview.previewId }); const result = await response.json();
-          if (!response.ok) throw new Error(result.error || `Status ${response.status}`);
-          pendingConfigPreview = null; configOperation = null; await load(); status('Konfiguration gespeichert. Content Sync bzw. Astro-Neustart prüfen.', 'success');
-        } catch (error) { pendingConfigPreview = null; configOperation = null; status(`Konfiguration nicht gespeichert: ${error.message}`, 'error'); await load(); }
+          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
+          pendingConfigPreview = null; configOperation = null; configDraft = null; configConflict = null; await load(); status('Konfiguration gespeichert. Content Sync bzw. Astro-Neustart prüfen.', 'success');
+        } catch (error) {
+          pendingConfigPreview = null; configOperation = null;
+          const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
+          if (stale) configConflict = { base: configDraft?.base || configBaseHash, latest: '' };
+          status(error.code === 'SOURCE_REPLACEMENT_DISABLED' ? `Schreibstatus blockiert: ${error.message}; der Entwurf bleibt erhalten.` : `Konfiguration nicht gespeichert: ${error.message}`, error.code === 'SOURCE_REPLACEMENT_DISABLED' ? 'warning' : 'error');
+          await pollCollections();
+        }
         finally { saving = false; render(); }
       });
       document.querySelector('#config-cancel').addEventListener('click', async () => {
@@ -799,6 +920,8 @@
 
       function render() {
         renderConfirmation();
+        renderGalleryConflict();
+        renderGalleryDraftActions();
         renderCollectionConfirmation();
         renderCollections();
         const focusedGalleryId = galleryPicker.contains(document.activeElement)
@@ -838,12 +961,12 @@
           const galleryId = selected.id;
           const row = document.createElement('li');
           row.className = 'list-row';
-          row.draggable = !busy();
+          row.draggable = !busy() && !galleryConflicts.has(selected.id);
           row.tabIndex = -1;
           row.dataset.galleryImageSlug = slug;
           row.setAttribute('aria-label', `${galleryId}, Eintrag ${index + 1}: ${slug}`);
           row.addEventListener('dragstart', (event) => {
-            if (busy()) {
+            if (busy() || galleryConflicts.has(galleryId)) {
               event.preventDefault();
               return;
             }
@@ -855,7 +978,7 @@
             }
           });
           row.addEventListener('dragover', (event) => {
-            if (busy() || !draggedSlug || draggedSlug === slug) return;
+            if (busy() || galleryConflicts.has(galleryId) || !draggedSlug || draggedSlug === slug) return;
             event.preventDefault();
             if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
             row.classList.add('bg-base-200');
@@ -898,7 +1021,7 @@
             button.type = 'button';
             button.textContent = label;
             button.setAttribute('aria-label', `${delta < 0 ? 'Nach oben' : 'Nach unten'}: ${slug} in ${galleryId}`);
-            button.disabled = busy() || index + delta < 0 || index + delta >= selected.order.length;
+            button.disabled = busy() || galleryConflicts.has(galleryId) || index + delta < 0 || index + delta >= selected.order.length;
             button.addEventListener('click', () => move(galleryId, index, delta));
             actions.append(button);
           }
@@ -965,6 +1088,12 @@
         current = await loadPanelState('/api/state', 'Galerie-Fixture', { galleries: [], hash: '' });
         astroGalleryState = await loadPanelState('/api/astro-galleries', 'Astro-interne Galerien', { configured: false, targets: [] });
         current.galleries = [...(current.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astroGalleryState.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
+        for (const [id, draft] of galleryDrafts) {
+          const latest = current.galleries.find((gallery) => gallery.id === id);
+          if (!latest) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: '' }); }
+          else if (galleryConflicts.has(id) || galleryRevision(latest) !== draft.base) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: galleryRevision(latest) }); }
+          else latest.order = [...draft.order];
+        }
         collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
         reconcileCreateEntryDrafts(collectionState, unavailable.some((item) => item.startsWith('Collections (')));
         mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
@@ -988,7 +1117,7 @@
         } else if (!selectedCollectionEntry()) {
           selectedEntryId = selectedCollection()?.entries?.[0]?.id || '';
         }
-        if (!galleryById(selectedGalleryId)) selectedGalleryId = current.galleries[0]?.id || '';
+        if (!galleryById(selectedGalleryId) && !galleryConflicts.has(selectedGalleryId)) selectedGalleryId = current.galleries[0]?.id || '';
         render();
         renderMdx();
         navigatePreview(selectedPreviewRouteId);
@@ -1018,6 +1147,13 @@
           const response = await fetch('/api/collections', { cache: 'no-store' });
           if (!response.ok) throw new Error(String(response.status));
           const next = await response.json(); collectionState = next;
+          configBaseHash ||= next.configHash || '';
+          if (configDraft) {
+            if (!next.configured || !next.configHash || configConflict || next.configHash !== configDraft.base) {
+              configConflict = { base: configConflict?.base || configDraft.base, latest: next.configured ? (next.configHash || '') : '' };
+              pendingConfigPreview = null;
+            } else configBaseHash = next.configHash;
+          }
           reconcileCreateEntryDrafts(next);
           for (const [key, draft] of collectionDrafts) {
             const [collectionId, entryId, fieldName] = key.split('\u0000');
@@ -1036,6 +1172,7 @@
             else if (collectionConflicts.has(key) || entry.hash !== draft.hash) markCollectionConflict(key, draft, entry.hash, collectionConflicts.get(key)?.blockedHash || '');
           }
         } catch {
+          if (configDraft) { configConflict = { base: configConflict?.base || configDraft.base, latest: '' }; pendingConfigPreview = null; }
           reconcileCreateEntryDrafts(collectionState, true);
           for (const [key, draft] of collectionDrafts) if (draft.dirty) {
             const existing = collectionConflicts.get(key);
@@ -1046,10 +1183,33 @@
           collectionPollInFlight = false;
           renderCollectionConfirmation();
           renderCollections();
+          if (configDraft && !configConflict) restoreConfigDraft();
         }
       }
       window.setInterval(() => { if (!document.hidden) pollCollections(); }, 2000);
       window.addEventListener('focus', pollCollections);
+      async function pollGalleries() {
+        try {
+          const [fixtureResponse, astroResponse] = await Promise.all([fetch('/api/state', { cache: 'no-store' }), fetch('/api/astro-galleries', { cache: 'no-store' })]);
+          if (!fixtureResponse.ok || !astroResponse.ok) throw new Error('Galerie nicht verfügbar');
+          const fixture = await fixtureResponse.json(); const astro = await astroResponse.json();
+          const next = [...(fixture.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astro.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
+          current = { ...current, ...fixture, galleries: next }; astroGalleryState = astro;
+          for (const [id, draft] of galleryDrafts) {
+            const latest = next.find((gallery) => gallery.id === id);
+            if (!latest || galleryConflicts.has(id) || galleryRevision(latest) !== draft.base) {
+              pendingPreview = null;
+              galleryConflicts.set(id, { ...draft, latest: latest ? galleryRevision(latest) : '' });
+            } else latest.order = [...draft.order];
+          }
+          render();
+        } catch {
+          for (const [id, draft] of galleryDrafts) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: '' }); }
+          render();
+        }
+      }
+      window.setInterval(() => { if (!document.hidden) pollGalleries(); }, 2000);
+      window.addEventListener('focus', pollGalleries);
 
       async function move(galleryId, index, delta) {
         if (busy()) return;
@@ -1294,9 +1454,18 @@
         }
       });
 
-      async function prepareOrder(galleryId, order) {
+      async function prepareOrder(galleryId, order, reapply = false) {
         const gallery = galleryById(galleryId);
-        if (busy() || !gallery || order.every((slug, index) => slug === gallery.order[index])) return;
+        if (busy() || !gallery || (!reapply && galleryConflicts.has(galleryId))) return;
+        const existing = galleryDrafts.get(galleryId);
+        const baseline = existing || { base: galleryRevision(gallery), baseOrder: [...gallery.order], order: [...gallery.order] };
+        if (!galleryConflicts.has(galleryId) && galleryRevision(gallery) === baseline.base && order.every((slug, index) => slug === baseline.baseOrder[index]) && order.length === baseline.baseOrder.length) {
+          pendingPreview = null; galleryDrafts.delete(galleryId); galleryConflicts.delete(galleryId); gallery.order = [...order]; render(); status('Die Reihenfolge entspricht wieder dem aktuellen Stand; es wurde nichts geschrieben.', 'info'); return;
+        }
+        if (!existing && order.every((slug, index) => slug === gallery.order[index]) && order.length === gallery.order.length) return;
+        galleryDrafts.set(galleryId, { ...baseline, order: [...order] });
+        gallery.order = [...order];
+        pendingPreview = null;
         const focusSlug = imageList.contains(document.activeElement)
           ? document.activeElement.closest('li')?.dataset.galleryImageSlug || ''
           : '';
@@ -1314,9 +1483,11 @@
           if (!response.ok) {
             const error = new Error(result.error || `Status ${response.status}`);
             error.status = response.status;
+            error.code = result.code;
             throw error;
           }
           if (!result.diff || !result.previewId) {
+            galleryDrafts.delete(galleryId); galleryConflicts.delete(galleryId);
             status('Die Reihenfolge ist unverändert; es wurde nichts geschrieben.', 'info');
             return;
           }
@@ -1324,11 +1495,14 @@
           render();
           status('Quelländerung prüfen. Es wird erst nach Bestätigung gespeichert.', 'warning');
         } catch (error) {
+          const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
+          if (stale) {
+            pendingPreview = null; galleryConflicts.set(galleryId, { ...galleryDrafts.get(galleryId), latest: '' });
+          }
+          if (stale || error.status === 403) try { await load(); } catch (loadError) { status(`Fixture konnte nicht neu geladen werden: ${loadError.message}`, 'error'); }
           const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : error.message;
           status(`Keine Vorschau erstellt: ${reason}.`, 'error');
-          if (error.status === 403 || error.status === 409) {
-            try { await load(); } catch (loadError) { status(`Fixture konnte nicht neu geladen werden: ${loadError.message}`, 'error'); }
-          }
+          if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${error.message}; der Galerieentwurf bleibt erhalten.`, 'warning');
         } finally {
           saving = false;
           render();
@@ -1468,7 +1642,7 @@
         saving = true;
         render();
         const creating = operation.kind === 'create-entry';
-        status(creating ? 'Bestätigter neuer Eintrag wird exklusiv angelegt …' : 'Bestätigte Frontmatter-Änderung wird atomar gespeichert …');
+        status(creating ? 'Bestätigter neuer Eintrag wird angelegt …' : 'Bestätigte Frontmatter-Änderung wird geschrieben …');
         try {
           const response = creating
             ? await postOperation('/api/collections/create-entry/commit', {
@@ -1538,7 +1712,7 @@
         const operation = pendingPreview;
         saving = true;
         render();
-        status('Bestätigte Änderung wird atomar gespeichert …');
+        status('Bestätigte Änderung wird geschrieben …');
         let saved = false;
         try {
           const response = operation.kind === 'astro-internal-gallery'
@@ -1548,9 +1722,12 @@
           if (!response.ok) {
             const error = new Error(result.error || `Status ${response.status}`);
             error.status = response.status;
+            error.code = result.code;
             throw error;
           }
           pendingPreview = null;
+          galleryDrafts.delete(operation.kind === 'astro-internal-gallery' ? operation.targetId : operation.galleryId);
+          galleryConflicts.delete(operation.kind === 'astro-internal-gallery' ? operation.targetId : operation.galleryId);
           if (operation.kind !== 'astro-internal-gallery') current = result;
           focusImageSlugAfterRender = operation.focusSlug;
           saved = true;
@@ -1570,12 +1747,21 @@
           status('Gespeichert; Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert.', 'success');
         } catch (error) {
           pendingPreview = null;
+          let stale = false;
           if (saved) {
             status(`Gespeichert, aber Vorschau nicht bestätigt: ${error.message}`, 'warning');
           } else {
+            stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
+            if (stale) {
+              const id = operation.kind === 'astro-internal-gallery' ? operation.targetId : operation.galleryId;
+              const draft = galleryDrafts.get(id);
+              if (draft) galleryConflicts.set(id, { ...draft, latest: '' });
+            }
             const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : error.message;
-            status(`Nicht gespeichert: ${reason}. Lade den aktuellen Stand …`, 'warning');
             try { await load(); } catch (loadError) { status(`Nicht gespeichert: ${reason}. Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
+            if (stale) status(`Nicht gespeichert: Die Quellrevision hat sich geändert; der Galerieentwurf bleibt im Konflikt erhalten.`, 'warning');
+            if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${error.message}; der Galerieentwurf bleibt erhalten.`, 'warning');
+            else if (!stale) status(`Nicht gespeichert: ${reason}.`, 'warning');
           }
         } finally {
           saving = false;
