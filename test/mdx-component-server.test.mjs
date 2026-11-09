@@ -61,6 +61,28 @@ test('configured MDX target exposes path-free state and requires a matching expl
   assert.equal(writeCalls, 1)
 })
 
+test('safe replacement mode refuses MDX component commit without invoking injected writer', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'mdx-safe-mode-'))
+  const file = path.join(root, 'page.mdx')
+  const source = `import Card from '../components/Card.astro'\n\n<Card id="hero" title="Old" />\n`
+  await writeFile(file, source)
+  let writes = 0
+  const server = createEditorServer({ port: 0, safeSourceReplacementMode: true, mdxComponentTargets: [{ id: 'page', projectRoot: root, filePath: file, importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] }], writeSource: async () => { writes++ } })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }) })
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const headers = { origin, 'content-type': 'application/json', 'x-editor-token': (await (await fetch(`${origin}/api/session`)).json()).token }
+  const state = await (await fetch(`${origin}/api/mdx-components`)).json()
+  const op = { targetId: 'page', instanceId: 'hero', prop: 'title', value: 'New', hash: state.targets[0].hash }
+  const preview = await (await fetch(`${origin}/api/mdx-components/preview`, { method: 'POST', headers, body: JSON.stringify(op) })).json()
+  const commit = await fetch(`${origin}/api/mdx-components/commit`, { method: 'POST', headers, body: JSON.stringify({ ...op, previewId: preview.previewId }) })
+  const refusal = await commit.json()
+  assert.equal(commit.status, 409, JSON.stringify(refusal))
+  assert.equal(refusal.code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(writes, 0)
+  assert.equal(await readFile(file, 'utf8'), source)
+})
+
 test('Astro internal gallery endpoint enforces preview session, exact replay, stale hash, and writes only on confirmation', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'astro-gallery-target-'))
   const file = path.join(root, 'src/Galerie.astro')
@@ -95,6 +117,27 @@ test('Astro internal gallery endpoint enforces preview session, exact replay, st
   const committedBytes = await readFile(file, 'utf8')
   const replay = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...freshOp, previewId: fresh.previewId }) })
   assert.equal(replay.status, 409); assert.equal(await readFile(file, 'utf8'), committedBytes); assert.equal(writes, 1)
+})
+
+test('safe replacement mode refuses Astro gallery commit and preserves source bytes', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'astro-gallery-safe-mode-'))
+  const file = path.join(root, 'Galerie.astro')
+  const source = `---\nconst imageNames = [{ name: "a", alt: "A" }, { name: "b", alt: "B" }]\n---\n`
+  await writeFile(file, source)
+  let writes = 0
+  const server = createEditorServer({ port: 0, safeSourceReplacementMode: true, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async () => { writes++ } })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }) })
+  const origin = `http://127.0.0.1:${server.address().port}`
+  const headers = { origin, 'content-type': 'application/json', 'x-editor-token': (await (await fetch(`${origin}/api/session`)).json()).token }
+  const state = await (await fetch(`${origin}/api/astro-galleries`)).json()
+  const op = { targetId: 'gal', order: ['b', 'a'], hash: state.targets[0].hash }
+  const preview = await (await fetch(`${origin}/api/astro-galleries/preview`, { method: 'POST', headers, body: JSON.stringify(op) })).json()
+  const commit = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers, body: JSON.stringify({ ...op, previewId: preview.previewId }) })
+  assert.equal(commit.status, 409)
+  assert.equal((await commit.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(writes, 0)
+  assert.equal(await readFile(file, 'utf8'), source)
 })
 
 test('Astro target configuration and source safety fail closed', async (t) => {

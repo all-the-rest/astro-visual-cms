@@ -268,6 +268,42 @@ test('preview and commit require the token, show only the exact diff, and write 
   }
 })
 
+test('trusted safe replacement mode keeps preview/read available but refuses commit before injected writer', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-safe-mode-'))
+  const fixturePath = path.join(directory, 'fixture.mdx')
+  const external = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-03", "noise-fixture-01"];\n\n<Gallery sorted={FIRST} />\n`
+  const source = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-01", "noise-fixture-03"];\n\n<Gallery sorted={FIRST} />\n`
+  await writeFile(fixturePath, source)
+  let writes = 0
+  const editor = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: true, writeSource: async () => { writes++ } })
+  const origin = `http://127.0.0.1:${await listen(editor)}`
+  t.after(async () => { await close(editor); await rm(directory, { recursive: true, force: true }) })
+  const token = (await (await fetch(`${origin}/api/session`)).json()).token
+  const state = await (await fetch(`${origin}/api/state`)).json()
+  const order = [...state.galleries[0].order].reverse()
+  const headers = { origin, 'content-type': 'application/json', 'x-editor-token': token }
+  const preview = await (await fetch(`${origin}/api/preview`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash }) })).json()
+  // A stale revision remains an allowed fail-closed result and never writes.
+  await writeFile(fixturePath, external)
+  const response = await fetch(`${origin}/api/commit`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash, previewId: preview.previewId }) })
+  assert.ok([409, 422].includes(response.status))
+  const staleFailure = await response.json()
+  assert.ok(staleFailure.code)
+  assert.equal(writes, 0)
+  assert.equal(await (await import('node:fs/promises')).readFile(fixturePath, 'utf8'), external)
+  // With a current revision, safe mode returns its actionable refusal.
+  await writeFile(fixturePath, source)
+  const currentState = await (await fetch(`${origin}/api/state`)).json()
+  const currentPreview = await (await fetch(`${origin}/api/preview`, { method: 'POST', headers, body: JSON.stringify({ galleryId: currentState.galleries[0].id, order, hash: currentState.hash }) })).json()
+  const unchangedRevision = await fetch(`${origin}/api/commit`, { method: 'POST', headers, body: JSON.stringify({ galleryId: currentState.galleries[0].id, order, hash: currentState.hash, previewId: currentPreview.previewId }) })
+  assert.equal(unchangedRevision.status, 409)
+  const refusal = await unchangedRevision.json()
+  assert.equal(refusal.code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.match(refusal.error, /no changes were written/i)
+  assert.equal(writes, 0)
+  assert.equal(await (await import('node:fs/promises')).readFile(fixturePath, 'utf8'), source)
+})
+
 test('a restarted editor rotates its token and rejects the previous session token', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-restart-'))
   const fixturePath = path.join(directory, 'fixture.mdx')

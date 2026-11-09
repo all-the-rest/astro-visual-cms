@@ -413,6 +413,53 @@ test('collection field preview is exact and path-free; cancel/no-confirm never w
   assert.equal(await readFile(project.entryPath, 'utf8'), untouched.replace('"Old title"', '"New title"'))
 })
 
+test('safe replacement mode blocks collection-field and schema commits with actionable 409 and no writer call', async (t) => {
+  const project = await makeProject(t)
+  let writes = 0
+  const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, safeSourceReplacementMode: true, writeSource: async () => { writes++ } })
+  const originalEntry = await readFile(project.entryPath, 'utf8')
+  const originalConfig = await readFile(project.configPath, 'utf8')
+  const state = await (await fetch(`${origin}/api/collections`)).json()
+  const edit = operation(state)
+  const fieldPreview = await (await fetch(`${origin}/api/collections/preview`, { method: 'POST', headers, body: JSON.stringify(edit) })).json()
+  const fieldCommit = await fetch(`${origin}/api/collections/commit`, { method: 'POST', headers, body: JSON.stringify({ ...edit, previewId: fieldPreview.previewId }) })
+  assert.equal(fieldCommit.status, 409)
+  assert.equal((await fieldCommit.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(await readFile(project.entryPath, 'utf8'), originalEntry)
+
+  const configHash = hash(originalConfig)
+  const configOp = { collection: 'posts', field: { name: 'summary', type: 'string', required: false }, hash: configHash }
+  const configPreview = await (await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify(configOp) })).json()
+  const configCommit = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers, body: JSON.stringify({ ...configOp, previewId: configPreview.previewId }) })
+  assert.equal(configCommit.status, 409)
+  const refusal = await configCommit.json()
+  assert.equal(refusal.code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.match(refusal.error, /no changes were written/i)
+  assert.equal(writes, 0)
+  assert.equal(await readFile(project.configPath, 'utf8'), originalConfig)
+})
+
+test('safe replacement mode permits only exclusive new entry creation and preserves a colliding path', async (t) => {
+  const project = await makeProject(t)
+  let replacements = 0
+  const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, safeSourceReplacementMode: true, writeSource: async () => { replacements++ } })
+  const catalog = await (await fetch(`${origin}/api/collections`)).json()
+  const operation = { collectionId: 'drafts', entryId: 'safe-new.md', values: { title: 'New', order: 1 }, hash: catalog.configHash }
+  const preview = await (await fetch(`${origin}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
+  const commit = await fetch(`${origin}/api/collections/create-entry/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
+  assert.equal(commit.status, 201)
+  const created = path.join(project.projectRoot, 'src/content/drafts/safe-new.md')
+  assert.equal(await readFile(created, 'utf8'), preview.diff.after)
+  const collision = { ...operation, entryId: 'occupied.md' }
+  const collisionPreview = await (await fetch(`${origin}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(collision) })).json()
+  const occupied = path.join(project.projectRoot, 'src/content/drafts/occupied.md')
+  await writeFile(occupied, 'external bytes')
+  const result = await fetch(`${origin}/api/collections/create-entry/commit`, { method: 'POST', headers, body: JSON.stringify({ ...collision, previewId: collisionPreview.previewId }) })
+  assert.equal(result.status, 409)
+  assert.equal(await readFile(occupied, 'utf8'), 'external bytes')
+  assert.equal(replacements, 0)
+})
+
 test('stale external collection edit returns 409 and preserves external bytes', async (t) => {
   const project = await makeProject(t)
   const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath })

@@ -92,3 +92,21 @@ array's separator/whitespace slots. Reads reject symlinked paths, files over
 1 MiB, and invalid UTF-8. Preview tokens are same-session, short-lived, and
 one-shot; commits recheck the source hash and parser before the atomic write.
 This is not general Astro DOM/source provenance.
+# Safe source replacement mode
+
+The trusted JSON file passed to `astro-visual-cms-editor --config <path>` may
+set `safeSourceReplacementMode: true` (the CLI passes this server-side option
+through; request bodies cannot set it).
+This is an explicit opt-in mitigation: it keeps source reads and previews
+available, but rejects every attempt to replace an existing source file with
+HTTP 409 (`SOURCE_REPLACEMENT_DISABLED`) before invoking the configured writer.
+This central guard covers gallery, MDX, collection, schema/config and fixture
+replacement endpoints, including an injected writer. Exclusive creation of a
+new collection entry remains permitted and cannot replace an existing path.
+Clients cannot enable or disable the mode in request data.
+
+This mode does not automatically apply edits, merge competing changes, or
+provide optimistic-locking compare-and-swap. Hash checking followed by rename
+in normal mode is not atomic against uncooperative writers. The default remains
+normal mode for compatibility; this mitigation must be explicitly enabled and
+does not resolve issue #14, which remains open.

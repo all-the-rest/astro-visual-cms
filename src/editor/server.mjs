@@ -244,12 +244,19 @@ export function createEditorServer({
   mdxParagraphTargets,
   astroGalleryTargets = [],
   previewRoutes = DEFAULT_PREVIEW_ROUTES,
+  safeSourceReplacementMode = false,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
   }
   const siteOrigin = `http://127.0.0.1:${sitePort}`
   const safeBasePath = normalizeAstroBasePath(basePath)
+  if (typeof safeSourceReplacementMode !== 'boolean') throw new TypeError('safeSourceReplacementMode must be a trusted boolean.')
+  // Central guard covers all endpoints and injected writers. Hash+rename is not
+  // an atomic compare-and-swap against uncooperative writers.
+  const commitSource = safeSourceReplacementMode
+    ? async () => { const error = new Error('Safe source replacement mode blocks replacing existing source files; no changes were written. Disable it only after reviewing the concurrent-writer risk.'); error.code = 'SOURCE_REPLACEMENT_DISABLED'; throw error }
+    : writeSource
   const trustedPreviewRoutes = validatePreviewRoutes(previewRoutes)
   const embeddedPreviewRoutes = JSON.stringify(trustedPreviewRoutes).replaceAll('<', '\\u003c').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029')
   const editorSessions = new Map()
@@ -352,7 +359,7 @@ export function createEditorServer({
     return source
   }
   function safeAstroGalleryFailure(error) {
-    const allowedCodes = ['STALE_HASH', 'UNSAFE_MDX_PATH', 'UNSUPPORTED_COMMENT', 'UNSUPPORTED_DYNAMIC_VALUE', 'UNSUPPORTED_SYNTAX', 'UNSUPPORTED_TARGET', 'UNSUPPORTED_VALUE', 'UNSUPPORTED_OUTPUT']
+    const allowedCodes = ['STALE_HASH', 'SOURCE_REPLACEMENT_DISABLED', 'UNSAFE_MDX_PATH', 'UNSUPPORTED_COMMENT', 'UNSUPPORTED_DYNAMIC_VALUE', 'UNSUPPORTED_SYNTAX', 'UNSUPPORTED_TARGET', 'UNSUPPORTED_VALUE', 'UNSUPPORTED_OUTPUT']
     const code = allowedCodes.includes(error?.code)
       ? error.code
         : error?.code === 'MDX_SOURCE_LIMIT' || error?.code === 'UNSUPPORTED_ENCODING'
@@ -366,6 +373,8 @@ export function createEditorServer({
           ? 'Configured Astro gallery is not valid UTF-8 source.'
           : code === 'STALE_HASH'
             ? 'The Astro gallery source changed; reload and prepare the edit again.'
+            : code === 'SOURCE_REPLACEMENT_DISABLED'
+              ? error.message
             : code.startsWith('UNSUPPORTED_')
               ? error.message
               : 'Astro gallery edit could not be completed safely.'
@@ -403,7 +412,7 @@ export function createEditorServer({
   }
 
   function safeMdxFailure(error) {
-    const code = typeof error?.code === 'string' && /^(STALE_HASH|UNSUPPORTED_[A-Z_]+|INVALID_[A-Z_]+|UNSAFE_MDX_PATH|MDX_(SOURCE|INSTANCE)_LIMIT)$/.test(error.code)
+    const code = typeof error?.code === 'string' && /^(STALE_HASH|SOURCE_REPLACEMENT_DISABLED|UNSUPPORTED_[A-Z_]+|INVALID_[A-Z_]+|UNSAFE_MDX_PATH|MDX_(SOURCE|INSTANCE)_LIMIT)$/.test(error.code)
       ? error.code
       : 'MDX_EDIT_FAILED'
     const message = code === 'UNSAFE_MDX_PATH'
@@ -412,8 +421,10 @@ export function createEditorServer({
         ? 'Configured MDX target exceeds the safe source size limit.'
         : code === 'MDX_INSTANCE_LIMIT'
           ? 'Configured MDX target exceeds the safe component instance limit.'
-          : code === 'STALE_HASH'
+        : code === 'STALE_HASH'
             ? 'The MDX source changed; reload and prepare the edit again.'
+            : code === 'SOURCE_REPLACEMENT_DISABLED'
+              ? error.message
             : code === 'MDX_EDIT_FAILED'
               ? 'MDX edit could not be completed safely.'
               : error.message
@@ -441,7 +452,7 @@ export function createEditorServer({
 
   async function writeCollectionConfigSource(expectedHash, source) {
     try {
-      await writeSource(collectionRuntime.configPath, expectedHash, source)
+      await commitSource(collectionRuntime.configPath, expectedHash, source)
     } catch (error) {
       if (error.code !== 'STALE_HASH') throw error
       const conflict = new Error('Content config changed during the write; reload and prepare the edit again.')
@@ -646,13 +657,13 @@ export function createEditorServer({
         await writeCollectionConfigSource(operation.hash, result.source)
         return json(response, 200, { hash: result.hash })
       } catch (error) {
-        const code = ['STALE_CONFIG', 'UNSUPPORTED_CONFIG', 'UNSUPPORTED_COLLECTION_EDIT', 'UNSAFE_COLLECTION_PATH'].includes(error.code) ? error.code : 'CONFIG_EDIT_FAILED'
+        const code = ['STALE_CONFIG', 'SOURCE_REPLACEMENT_DISABLED', 'UNSUPPORTED_CONFIG', 'UNSUPPORTED_COLLECTION_EDIT', 'UNSAFE_COLLECTION_PATH'].includes(error.code) ? error.code : 'CONFIG_EDIT_FAILED'
         const message = code === 'CONFIG_EDIT_FAILED'
           ? 'Schema config edit could not be completed safely.'
           : code === 'STALE_CONFIG'
             ? 'Content config changed during the write; reload and prepare the edit again.'
             : error.message
-        const statusCode = code === 'STALE_CONFIG' ? 409 : code === 'CONFIG_EDIT_FAILED' ? 500 : 422
+        const statusCode = ['STALE_CONFIG', 'SOURCE_REPLACEMENT_DISABLED'].includes(code) ? 409 : code === 'CONFIG_EDIT_FAILED' ? 500 : 422
         return json(response, statusCode, { code, error: message })
       }
     }
@@ -684,11 +695,11 @@ export function createEditorServer({
         pendingMdxPreviews.delete(payload.previewId)
         if (JSON.stringify(operation) !== JSON.stringify(pending.operation)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Commit differs from preview.' })
         const result = prepare(); if (!result.diff || result.hash !== pending.nextHash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Source no longer matches preview.' })
-        readAstroTarget(target); await writeSource(target.file, payload.hash, result.source)
+        readAstroTarget(target); await commitSource(target.file, payload.hash, result.source)
         return json(response, 200, { targetId: target.id, hash: result.hash })
       } catch (error) {
         const failure = safeAstroGalleryFailure(error)
-        return json(response, failure.code === 'STALE_HASH' ? 409 : 422, failure)
+        return json(response, ['STALE_HASH', 'SOURCE_REPLACEMENT_DISABLED'].includes(failure.code) ? 409 : 422, failure)
       }
     }
     if (request.method === 'GET' && request.url === '/api/mdx-components') {
@@ -758,11 +769,11 @@ export function createEditorServer({
         const { result } = prepare()
         if (!result.diff || result.hash !== pending.nextHash || JSON.stringify(result.diff) !== JSON.stringify(pending.diff)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Source no longer matches preview.' })
         assertMdxTargetSafe(target.root, target.file)
-        await writeSource(target.file, payload.hash, result.source)
+        await commitSource(target.file, payload.hash, result.source)
         return json(response, 200, { targetId: target.id, hash: result.hash })
       } catch (error) {
         const failure = safeMdxFailure(error)
-        return json(response, failure.code === 'STALE_HASH' ? 409 : 422, failure)
+        return json(response, ['STALE_HASH', 'SOURCE_REPLACEMENT_DISABLED'].includes(failure.code) ? 409 : 422, failure)
       }
     }
 
@@ -908,7 +919,7 @@ export function createEditorServer({
             !beforeWriteCollection.entries.some((entry) => entry.id === payload.entryId && entry.hash === payload.hash)) {
           return json(response, 409, { code: 'STALE_CONFIG', error: 'Content config or entry membership changed immediately before write; prepare the edit again.' })
         }
-        await writeSource(target.path, payload.hash, result.source)
+        await commitSource(target.path, payload.hash, result.source)
         return json(response, 200, {
           collectionId: payload.collectionId,
           entryId: payload.entryId,
@@ -917,7 +928,7 @@ export function createEditorServer({
         })
       } catch (error) {
         const safeCodes = new Set([
-          'STALE_HASH', 'STALE_CONFIG', 'UNSUPPORTED_COLLECTION', 'UNSUPPORTED_FIELD', 'UNSUPPORTED_ENTRY',
+          'STALE_HASH', 'STALE_CONFIG', 'SOURCE_REPLACEMENT_DISABLED', 'UNSUPPORTED_COLLECTION', 'UNSUPPORTED_FIELD', 'UNSUPPORTED_ENTRY',
           'UNSAFE_COLLECTION_PATH', 'ENTRY_LIMIT', 'UNSUPPORTED_FIELD_TYPE', 'INVALID_FIELD_VALUE',
           'UNSUPPORTED_FRONTMATTER', 'PREVIEW_EXPIRED', 'PREVIEW_MISMATCH', 'INVALID_REQUEST',
         ])
@@ -925,7 +936,7 @@ export function createEditorServer({
         const message = code === 'COLLECTION_EDIT_FAILED'
           ? 'Collection edit could not be completed safely.'
           : error.message
-        const statusCode = error.statusCode || (['STALE_HASH', 'STALE_CONFIG'].includes(code) ? 409 : code === 'COLLECTION_EDIT_FAILED' ? 500 : 422)
+        const statusCode = error.statusCode || (['STALE_HASH', 'STALE_CONFIG', 'SOURCE_REPLACEMENT_DISABLED'].includes(code) ? 409 : code === 'COLLECTION_EDIT_FAILED' ? 500 : 422)
         return json(response, statusCode, { error: message, code })
       }
     }
@@ -936,6 +947,7 @@ export function createEditorServer({
       }
 
       try {
+        if (request.url === '/api/commit' && safeSourceReplacementMode) await commitSource()
         const payload = await readJson(request)
         const isPreview = request.url === '/api/preview'
         if (isPreview) {
@@ -1009,10 +1021,10 @@ export function createEditorServer({
             JSON.stringify(result.diff) !== JSON.stringify(pending.diff) || validated.hash !== result.hash) {
           return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'The source operation no longer matches the confirmed preview.' })
         }
-        await writeSource(fixturePath, payload.hash, result.source)
+        await commitSource(fixturePath, payload.hash, result.source)
         return json(response, 200, { galleries: validated.galleries, hash: validated.hash })
       } catch (error) {
-        const statusCode = error.statusCode || (error.code === 'STALE_HASH' ? 409 : 422)
+        const statusCode = error.statusCode || (['STALE_HASH', 'SOURCE_REPLACEMENT_DISABLED'].includes(error.code) ? 409 : 422)
         return json(response, statusCode, { error: error.message, code: error.code || 'INVALID_REQUEST' })
       }
     }
