@@ -79,14 +79,14 @@
               <button class="btn" type="submit">Vorschau</button>
             </form>
           </div>
-          <div id="config-conflict" class="grid gap-2" hidden></div><section id="config-confirmation" class="grid gap-3" hidden><h3 class="font-semibold">Exakte Konfigurationsänderung bestätigen</h3><pre class="overflow-auto rounded-box bg-base-200 p-3"><code id="config-diff"></code></pre><button id="config-commit" class="btn btn-primary" type="button">Bestätigen und speichern</button><button id="config-cancel" class="btn" type="button">Abbrechen</button></section>
+          <div id="config-conflict" class="grid gap-2" hidden></div><section id="config-confirmation" class="grid gap-3" hidden><h3 class="font-semibold">Exakte Konfigurationsänderung bestätigen</h3><pre class="overflow-auto rounded-box bg-base-200 p-3"><code id="config-diff"></code></pre><button id="config-commit" class="btn btn-primary" type="button">Bestätigen und Änderungsvorschlag erstellen</button><button id="config-cancel" class="btn" type="button">Abbrechen</button></section>
           <p class="text-xs opacity-70">Nach einer künftigen bestätigten Schema-/Collection-Konfigurationsänderung Content Sync bzw. einen Astro-Dev-Server-Neustart prüfen.</p>
         </div>
       </section>
       <section id="diff-confirmation" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Quelländerung bestätigen</h2>
-          <p class="text-sm">Nur dieser exakte Arraybereich wird geändert. Die Datei wird erst nach deiner Bestätigung geschrieben.</p>
+          <p class="text-sm">Nur dieser exakte Arraybereich ist Teil des Vorschlags. Die Bestätigung schreibt keine bestehende Quelldatei.</p>
           <p id="diff-range" class="font-mono text-xs"></p>
           <div class="grid gap-4 md:grid-cols-2">
             <div>
@@ -99,7 +99,7 @@
             </div>
           </div>
           <div class="flex flex-wrap gap-2">
-            <button id="confirm-change" class="btn btn-primary" type="button">Änderung bestätigen und speichern</button>
+            <button id="confirm-change" class="btn btn-primary" type="button">Bestätigen und Änderungsvorschlag erstellen</button>
             <button id="cancel-change" class="btn" type="button">Abbrechen</button>
           </div>
         </div>
@@ -107,14 +107,14 @@
       <section id="collection-diff-confirmation" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Frontmatter-Änderung bestätigen</h2>
-          <p class="text-sm">Nur dieser exakte Skalar wird geändert. Die Datei wird erst nach deiner Bestätigung geschrieben.</p>
+          <p class="text-sm">Nur dieser exakte Skalar ist Teil des Vorschlags. Die Bestätigung schreibt keine bestehende Quelldatei.</p>
           <p id="collection-diff-range" class="font-mono text-xs"></p>
           <div class="grid gap-4 md:grid-cols-2">
             <div><h3 class="font-semibold">Vorher</h3><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="collection-diff-before"></code></pre></div>
             <div><h3 class="font-semibold">Nachher</h3><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="collection-diff-after"></code></pre></div>
           </div>
           <div class="flex flex-wrap gap-2">
-            <button id="confirm-collection-change" class="btn btn-primary" type="button">Änderung bestätigen und speichern</button>
+            <button id="confirm-collection-change" class="btn btn-primary" type="button">Bestätigen und Änderungsvorschlag erstellen</button>
             <button id="cancel-collection-change" class="btn" type="button">Abbrechen</button>
           </div>
         </div>
@@ -137,14 +137,20 @@
             </div>
             <button id="mdx-conflict-discard" class="btn" type="button">Verwerfen und neu laden</button>
             <button id="mdx-conflict-reapply" class="btn btn-warning" type="button">Eingabe erneut anwenden und Diff erstellen</button>
-            <button id="mdx-proposal-export" class="btn" type="button" hidden>Änderungsvorschlag herunterladen</button>
-            <p id="mdx-proposal-note" hidden>Manuelle Übergabe für genau diesen Quellhash; nicht automatisch übernommen oder zusammengeführt.</p>
           </section>
           <section id="mdx-confirmation" hidden><h3>Änderung bestätigen</h3><p id="mdx-diff-range"></p>
             <div class="grid gap-4 md:grid-cols-2"><div><h4>Vorher</h4><pre><code id="mdx-diff-before"></code></pre></div><div><h4>Nachher</h4><pre><code id="mdx-diff-after"></code></pre></div></div>
-            <button id="mdx-confirm-button" class="btn btn-primary" type="button">Änderung bestätigen und speichern</button>
+             <button id="mdx-confirm-button" class="btn btn-primary" type="button">Bestätigen und Änderungsvorschlag erstellen</button>
             <button id="mdx-cancel-button" class="btn" type="button">Abbrechen</button>
           </section>
+        </div>
+      </section>
+      <section id="source-proposal-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+        <div class="card-body">
+          <h2 class="card-title">Manueller Quelländerungsvorschlag</h2>
+          <p id="source-proposal-description" class="text-sm"></p>
+          <p class="text-xs opacity-70">Der Vorschlag enthält keine Quell-Dateipfade oder vollständige Quelldatei. Er wird nicht automatisch angewendet oder zusammengeführt. Vor einer manuellen Übernahme muss die Basisrevision erneut geprüft werden.</p>
+          <button id="source-proposal-export" class="btn btn-outline justify-self-start" type="button">Revision prüfen und Vorschlag herunterladen</button>
         </div>
       </section>
     </main>
@@ -240,11 +246,10 @@
         mdxTarget.focus();
         status(`MDX-Ziel ${target.id} / Instanz ${data.instanceId} ausgewählt. Vorschau und Bestätigung bleiben erforderlich.`, 'success');
       });
-      let pendingMdxPreview = null;
-      const mdxDraftConflicts = new Map();
-      const mdxConflictRevisions = new Map();
-      const mdxProposals = new Map();
-      let mdxLastHashes = new Map();
+       let pendingMdxPreview = null;
+       const mdxDraftConflicts = new Map();
+       const mdxConflictRevisions = new Map();
+       let mdxLastHashes = new Map();
       let mdxPollSequence = 0;
       const mdxDrafts = new Map();
       let mdxSelectionEpoch = 0;
@@ -255,10 +260,16 @@
       const mdxProp = document.querySelector('#mdx-prop');
       const mdxValueControl = document.querySelector('#mdx-value-control');
       let mdxValue = null;
-      const mdxDraftKey = (targetId = mdxTarget.value, instanceId = mdxInstance.value, prop = mdxProp.value) => `${targetId}\u0000${instanceId}\u0000${prop}`;
+       const mdxDraftKey = (targetId = mdxTarget.value, instanceId = mdxInstance.value, prop = mdxProp.value) => `${targetId}\u0000${instanceId}\u0000${prop}`;
+       const collectionProposalTargetId = (collectionId, entryId) => JSON.stringify([collectionId, entryId]);
       const selectedMdxDraftConflict = () => mdxDraftConflicts.get(mdxDraftKey()) || null;
       const formatMdxConflictValue = (value) => value === undefined ? 'Nicht verfügbar' : JSON.stringify(value) ?? String(value);
-      const mdxConfirmation = document.querySelector('#mdx-confirmation');
+       const mdxConfirmation = document.querySelector('#mdx-confirmation');
+       const sourceProposalPanel = document.querySelector('#source-proposal-panel');
+        const sourceProposalDescription = document.querySelector('#source-proposal-description');
+        const sourceProposalExportButton = document.querySelector('#source-proposal-export');
+        let sourceProposal = null;
+        let sourceProposalLookup = null;
       let selectedGalleryId = '';
       let selectedCollectionId = '';
       let selectedEntryId = '';
@@ -281,10 +292,120 @@
       let draggedSlug = null;
       let focusImageSlugAfterRender = '';
 
-      function status(message, type = 'info') {
-        statusBox.className = `alert alert-${type}`;
-        statusBox.textContent = message;
-      }
+       function status(message, type = 'info') {
+         statusBox.className = `alert alert-${type}`;
+         statusBox.textContent = message;
+       }
+
+       function renderSourceProposal() {
+         sourceProposalPanel.hidden = sourceProposal === null;
+         if (sourceProposal) {
+           sourceProposalDescription.textContent = `Ziel ${sourceProposal.target.id} · Basisrevision ${sourceProposal.baseHash} · vorgeschlagene Revision ${sourceProposal.proposedHash}.`;
+         }
+         sourceProposalExportButton.disabled = saving || sourceProposal === null;
+       }
+
+        function clearSourceProposal() {
+          sourceProposal = null;
+          sourceProposalLookup = null;
+          renderSourceProposal();
+        }
+
+       function setSourceProposal({ kind, targetId, baseHash, proposedHash, change, diff, contextHash }) {
+         if (!kind || typeof targetId !== 'string' || !/^[a-f0-9]{64}$/.test(baseHash || '') ||
+             !/^[a-f0-9]{64}$/.test(proposedHash || '') || !diff ||
+             !Number.isInteger(diff.start) || !Number.isInteger(diff.end) ||
+             typeof diff.before !== 'string' || typeof diff.after !== 'string') {
+           clearSourceProposal();
+           return;
+         }
+          sourceProposalLookup = { kind, id: targetId };
+          sourceProposal = {
+            schemaVersion: 1,
+            type: 'astro-visual-cms-source-proposal',
+            target: { kind, id: kind === 'collection-entry' ? `entry-${crypto.randomUUID()}` : targetId },
+            baseHash,
+           proposedHash,
+           ...(contextHash ? { contextHash } : {}),
+           change,
+           diff: { start: diff.start, end: diff.end, before: diff.before, after: diff.after },
+         };
+         renderSourceProposal();
+       }
+
+        function invalidateSourceProposal(kind, targetId, revision, contextHash) {
+          if (!sourceProposal || sourceProposalLookup?.kind !== kind || sourceProposalLookup.id !== targetId) return;
+         if (revision !== sourceProposal.baseHash || sourceProposal.contextHash && contextHash !== sourceProposal.contextHash) {
+           clearSourceProposal();
+           status('Der Änderungsvorschlag wurde verworfen, weil sich seine gebundene Quellrevision geändert hat.', 'warning');
+         }
+       }
+
+        async function sourceProposalRevision(proposal, lookup) {
+         const read = async (endpoint) => {
+           const response = await fetch(endpoint, { cache: 'no-store' });
+           if (!response.ok) throw new Error(`HTTP ${response.status}`);
+           return response.json();
+         };
+          const target = lookup || proposal.target;
+          switch (target.kind) {
+           case 'gallery-fixture': {
+             const state = await read('/api/state');
+             return { hash: state.hash };
+           }
+           case 'astro-gallery': {
+             const state = await read('/api/astro-galleries');
+              const currentTarget = state.targets?.find((item) => item.id === target.id && item.supported);
+              return { hash: currentTarget?.hash || '' };
+           }
+           case 'collection-entry': {
+             const state = await read('/api/collections');
+              const [collectionId, entryId] = JSON.parse(target.id);
+             const entry = state.collections?.find((item) => item.id === collectionId)?.entries?.find((item) => item.id === entryId);
+             return { hash: entry?.hash || '', contextHash: state.configHash || '' };
+           }
+           case 'collection-config': {
+             const state = await read('/api/collections');
+             return { hash: state.configHash || '' };
+           }
+           case 'mdx-target': {
+             const state = await read('/api/mdx-components');
+              const currentTarget = state.targets?.find((item) => item.id === target.id && item.supported);
+              return { hash: currentTarget?.hash || '' };
+           }
+           default:
+             throw new Error('Unbekannter Änderungsvorschlagstyp.');
+         }
+       }
+
+       sourceProposalExportButton.addEventListener('click', async () => {
+          const proposal = sourceProposal;
+          const lookup = sourceProposalLookup;
+          if (saving || !proposal) return;
+         saving = true;
+         renderSourceProposal();
+         try {
+            const latest = await sourceProposalRevision(proposal, lookup);
+           if (latest.hash !== proposal.baseHash || proposal.contextHash && latest.contextHash !== proposal.contextHash) {
+             if (sourceProposal === proposal) clearSourceProposal();
+             status('Die gebundene Quellrevision ist nicht mehr aktuell; es wurde kein Vorschlag exportiert.', 'warning');
+             return;
+           }
+           const blob = new Blob([JSON.stringify(proposal, null, 2)], { type: 'application/json' });
+           const url = URL.createObjectURL(blob);
+           const link = document.createElement('a');
+           link.href = url;
+           link.download = 'astro-visual-cms-source-proposal.json';
+           document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+           status('Pfadfreier Änderungsvorschlag exportiert. Er muss manuell gegen die angegebene Basisrevision geprüft werden.', 'success');
+         } catch (error) {
+           if (sourceProposal === proposal) clearSourceProposal();
+           status(`Quellrevision nicht prüfbar; es wurde kein Änderungsvorschlag exportiert (${error.message}).`, 'warning');
+         } finally {
+           saving = false;
+           renderSourceProposal();
+         }
+       });
 
       function busy() {
          return saving || pendingPreview !== null || pendingCollectionPreview !== null || pendingConfigPreview !== null || pendingMdxPreview !== null;
@@ -344,11 +465,6 @@
         document.querySelector('#mdx-conflict-draft').textContent = formatMdxConflictValue(draftConflict?.draftValue);
         document.querySelector('#mdx-conflict-discard').disabled = saving || !draftConflict;
         document.querySelector('#mdx-conflict-reapply').disabled = saving || !draftConflict || draftConflict.unavailable;
-        const proposal = mdxProposals.get(conflictKey);
-        const proposalButton = document.querySelector('#mdx-proposal-export');
-        proposalButton.hidden = !draftConflict || !proposal;
-        proposalButton.disabled = saving || !proposal;
-        document.querySelector('#mdx-proposal-note').hidden = proposalButton.hidden;
         document.querySelector('#mdx-confirm-button').disabled = saving || !pendingMdxPreview;
         document.querySelector('#mdx-cancel-button').disabled = saving || !pendingMdxPreview;
         if (pendingMdxPreview) {
@@ -457,7 +573,7 @@
         for (const form of editors.querySelectorAll('form')) for (const control of form.elements) control.disabled = busy() || Boolean(configConflict) || Boolean(pendingConfigPreview);
         document.querySelector('#config-confirmation').hidden = !pendingConfigPreview;
         document.querySelector('#config-diff').textContent = pendingConfigPreview?.diff?.before + (pendingConfigPreview ? '\n→\n' + pendingConfigPreview.diff.after : '');
-        document.querySelector('#config-commit').disabled = saving || !pendingConfigPreview;
+         document.querySelector('#config-commit').disabled = saving || !pendingConfigPreview;
         document.querySelector('#config-cancel').disabled = saving || !pendingConfigPreview;
         collectionPicker.replaceChildren();
         collectionEntryPicker.replaceChildren();
@@ -856,9 +972,10 @@
         reapply.disabled = !configConflict.latest || !collectionState.configured || !validOperation || Boolean(duplicateCollection || duplicateField) || !(op?.name ? caps.creationSupported : caps.fieldExtensionSupported && col?.supported && col?.mode === 'editable');
         reapply.onclick = () => { if (reapply.disabled) return; const latestHash = configConflict.latest; const operation = { ...op, hash: latestHash }; if (!operation.name) operation.collection = configDraft.collection; configDraft.base = latestHash; configDraft.operation = operation; configBaseHash = latestHash; configConflict = null; prepareConfig(operation.name ? '/api/collections/config/create/preview' : '/api/collections/config/preview', operation); }; host.append(reapply);
       }
-      async function prepareConfig(endpoint, operation) {
-        if (busy() || !collectionState.configHash) return;
-        if (configConflict) return;
+       async function prepareConfig(endpoint, operation) {
+         if (busy() || !collectionState.configHash) return;
+         if (configConflict) return;
+         clearSourceProposal();
         const kind = operation.name ? 'create' : 'extend';
         const previous = configDraft?.kind === kind ? configDraft : null;
         configDraft = { ...readConfigDraft(kind), base: previous?.base || collectionState.configHash, operation: { ...operation } };
@@ -867,7 +984,7 @@
           const response = await postOperation(endpoint, operation); const result = await response.json();
           if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
           if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau erhalten.');
-          configOperation = operation; pendingConfigPreview = { previewId: result.previewId, diff: result.diff }; render(); status('Quell-Diff prüfen; erst nach Bestätigung wird gespeichert.', 'warning');
+           configOperation = operation; pendingConfigPreview = { previewId: result.previewId, diff: result.diff, hash: result.hash, nextHash: result.nextHash }; render(); status('Quell-Diff prüfen; die Bestätigung erstellt einen revisionsgebundenen manuellen Vorschlag.', 'warning');
         } catch (error) {
           const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
           if (stale) { configConflict = { base: configDraft.base, latest: '' }; pendingConfigPreview = null; await pollCollections(); }
@@ -895,11 +1012,24 @@
           if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
           pendingConfigPreview = null; configOperation = null; configDraft = null; configConflict = null; await load(); status('Konfiguration gespeichert. Content Sync bzw. Astro-Neustart prüfen.', 'success');
         } catch (error) {
-          pendingConfigPreview = null; configOperation = null;
-          const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
-          if (stale) configConflict = { base: configDraft?.base || configBaseHash, latest: '' };
-          status(error.code === 'SOURCE_REPLACEMENT_DISABLED' ? `Schreibstatus blockiert: ${error.message}; der Entwurf bleibt erhalten.` : `Konfiguration nicht gespeichert: ${error.message}`, error.code === 'SOURCE_REPLACEMENT_DISABLED' ? 'warning' : 'error');
-          await pollCollections();
+           const blockedCreateHasPath = error.code === 'SOURCE_REPLACEMENT_DISABLED' && pendingConfigPreview && configOperation?.name;
+           const blockedProposal = error.code === 'SOURCE_REPLACEMENT_DISABLED' && pendingConfigPreview && configOperation && !configOperation.name
+             ? {
+                 kind: 'collection-config', targetId: 'content-config', baseHash: pendingConfigPreview.hash,
+                 proposedHash: pendingConfigPreview.nextHash,
+                 change: { action: 'extend-collection', collection: configOperation.collection, field: configOperation.field },
+                 diff: pendingConfigPreview.diff,
+               }
+             : null;
+           pendingConfigPreview = null; configOperation = null;
+           const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
+           if (stale) configConflict = { base: configDraft?.base || configBaseHash, latest: '' };
+           if (blockedCreateHasPath) clearSourceProposal();
+           status(error.code === 'SOURCE_REPLACEMENT_DISABLED'
+             ? `Schreibstatus blockiert: ${error.message}; ${blockedCreateHasPath ? 'der exakte Diff enthält einen relativen Loader-Basispfad, deshalb wird kein Änderungsvorschlag exportiert.' : 'der Entwurf bleibt erhalten.'}`
+             : `Konfiguration nicht gespeichert: ${error.message}`, error.code === 'SOURCE_REPLACEMENT_DISABLED' ? 'warning' : 'error');
+           if (blockedProposal) setSourceProposal(blockedProposal);
+           await pollCollections();
         }
         finally { saving = false; render(); }
       });
@@ -919,6 +1049,7 @@
       });
 
       function render() {
+        renderSourceProposal();
         renderConfirmation();
         renderGalleryConflict();
         renderGalleryDraftActions();
@@ -1085,18 +1216,27 @@
             return fallback;
           }
         };
-        current = await loadPanelState('/api/state', 'Galerie-Fixture', { galleries: [], hash: '' });
-        astroGalleryState = await loadPanelState('/api/astro-galleries', 'Astro-interne Galerien', { configured: false, targets: [] });
-        current.galleries = [...(current.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astroGalleryState.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
+         current = await loadPanelState('/api/state', 'Galerie-Fixture', { galleries: [], hash: '' });
+         astroGalleryState = await loadPanelState('/api/astro-galleries', 'Astro-interne Galerien', { configured: false, targets: [] });
+         if (sourceProposal?.target.kind === 'gallery-fixture') invalidateSourceProposal('gallery-fixture', sourceProposal.target.id, current.hash || '');
+         for (const target of astroGalleryState.targets || []) invalidateSourceProposal('astro-gallery', target.id, target.supported ? target.hash : '');
+         current.galleries = [...(current.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astroGalleryState.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
         for (const [id, draft] of galleryDrafts) {
           const latest = current.galleries.find((gallery) => gallery.id === id);
           if (!latest) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: '' }); }
           else if (galleryConflicts.has(id) || galleryRevision(latest) !== draft.base) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: galleryRevision(latest) }); }
           else latest.order = [...draft.order];
         }
-        collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
-        reconcileCreateEntryDrafts(collectionState, unavailable.some((item) => item.startsWith('Collections (')));
-        mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
+         collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
+         if (sourceProposal?.target.kind === 'collection-config') invalidateSourceProposal('collection-config', sourceProposal.target.id, collectionState.configHash || '');
+          if (sourceProposal?.target.kind === 'collection-entry') {
+            const [collectionId, entryId] = JSON.parse(sourceProposalLookup.id);
+            const entry = collectionState.collections?.find((item) => item.id === collectionId)?.entries?.find((item) => item.id === entryId);
+            invalidateSourceProposal('collection-entry', sourceProposalLookup.id, entry?.hash || '', collectionState.configHash || '');
+         }
+         reconcileCreateEntryDrafts(collectionState, unavailable.some((item) => item.startsWith('Collections (')));
+         mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
+         for (const target of mdxState.targets || []) invalidateSourceProposal('mdx-target', target.id, target.supported ? target.hash || '' : '');
         for (const target of mdxState.targets || []) if (target.hash) mdxLastHashes.set(target.id, target.hash);
         if (previousSelection) {
           if (mdxState.targets.some((item) => item.id === previousSelection.targetId)) mdxTarget.value = previousSelection.targetId;
@@ -1146,7 +1286,13 @@
         try {
           const response = await fetch('/api/collections', { cache: 'no-store' });
           if (!response.ok) throw new Error(String(response.status));
-          const next = await response.json(); collectionState = next;
+           const next = await response.json(); collectionState = next;
+           if (sourceProposal?.target.kind === 'collection-config') invalidateSourceProposal('collection-config', sourceProposal.target.id, next.configHash || '');
+            if (sourceProposal?.target.kind === 'collection-entry') {
+              const [collectionId, entryId] = JSON.parse(sourceProposalLookup.id);
+              const entry = next.collections?.find((item) => item.id === collectionId)?.entries?.find((item) => item.id === entryId);
+              invalidateSourceProposal('collection-entry', sourceProposalLookup.id, entry?.hash || '', next.configHash || '');
+           }
           configBaseHash ||= next.configHash || '';
           if (configDraft) {
             if (!next.configured || !next.configHash || configConflict || next.configHash !== configDraft.base) {
@@ -1192,7 +1338,9 @@
         try {
           const [fixtureResponse, astroResponse] = await Promise.all([fetch('/api/state', { cache: 'no-store' }), fetch('/api/astro-galleries', { cache: 'no-store' })]);
           if (!fixtureResponse.ok || !astroResponse.ok) throw new Error('Galerie nicht verfügbar');
-          const fixture = await fixtureResponse.json(); const astro = await astroResponse.json();
+           const fixture = await fixtureResponse.json(); const astro = await astroResponse.json();
+           if (sourceProposal?.target.kind === 'gallery-fixture') invalidateSourceProposal('gallery-fixture', sourceProposal.target.id, fixture.hash || '');
+           for (const target of astro.targets || []) invalidateSourceProposal('astro-gallery', target.id, target.supported ? target.hash : '');
           const next = [...(fixture.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astro.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
           current = { ...current, ...fixture, galleries: next }; astroGalleryState = astro;
           for (const [id, draft] of galleryDrafts) {
@@ -1238,7 +1386,7 @@
         if (descriptor?.type === 'number' && !Number.isFinite(value)) { status('Bitte einen gültigen Zahlenwert eingeben.', 'warning'); return; }
         const operation = { targetId: target.id, instanceId: instance.id, prop, value, hash: target.hash };
         const selectionKey = `${operation.targetId}\u0000${operation.instanceId}\u0000${operation.prop}`;
-        mdxProposals.delete(selectionKey);
+         clearSourceProposal();
         saving = true; renderMdx(); status('MDX-Änderung wird vorbereitet …');
         try {
           const response = await postOperation('/api/mdx-components/preview', operation);
@@ -1247,7 +1395,7 @@
           if (mdxDraftConflicts.has(selectionKey) || selectionKey !== mdxDraftKey() || mdxState.targets.find((item) => item.id === operation.targetId)?.hash !== operation.hash) return;
           if (!result.diff || !result.previewId) { status('Der MDX-Wert ist unverändert; es wurde nichts geschrieben.'); return; }
           pendingMdxPreview = { ...operation, previewId: result.previewId, diff: result.diff, hash: result.hash, nextHash: result.nextHash };
-          renderMdx(); status('Diff prüfen. Erst nach Bestätigung wird geschrieben.', 'warning');
+           renderMdx(); status('Diff prüfen. Die Bestätigung erstellt einen revisionsgebundenen manuellen Vorschlag; bestehende Quelldateien werden nicht geschrieben.', 'warning');
         } catch (error) { status(`Keine MDX-Vorschau erstellt: ${error.message}`, 'error'); if (error.status === 409 || error.status === 403) await load(); }
         finally { saving = false; renderMdx(); }
       }
@@ -1257,7 +1405,7 @@
         const { previewId, targetId, instanceId, prop, value, hash } = confirmedPreview;
         const operation = { previewId, targetId, instanceId, prop, value, hash };
         const key = mdxDraftKey(targetId, instanceId, prop);
-        mdxProposals.delete(key);
+         if (sourceProposal?.target.kind === 'mdx-target' && sourceProposal.target.id === targetId) clearSourceProposal();
         saving = true; renderMdx();
         try {
           const response = await postOperation('/api/mdx-components/commit', operation);
@@ -1271,16 +1419,10 @@
         } catch (error) {
           pendingMdxPreview = null;
           if (error.code === 'SOURCE_REPLACEMENT_DISABLED' && confirmedPreview.diff && /^[a-f0-9]{64}$/.test(confirmedPreview.nextHash || '')) {
-            mdxProposals.set(key, {
-              schemaVersion: 1,
-              type: 'astro-visual-cms-mdx-proposal',
-              targetId,
-              instanceId,
-              prop,
-              baseHash: hash,
-              proposedHash: confirmedPreview.nextHash,
-              diff: { start: confirmedPreview.diff.start, end: confirmedPreview.diff.end, before: confirmedPreview.diff.before, after: confirmedPreview.diff.after },
-            });
+           setSourceProposal({
+             kind: 'mdx-target', targetId, baseHash: hash, proposedHash: confirmedPreview.nextHash,
+             change: { instanceId, prop, value }, diff: confirmedPreview.diff,
+           });
           }
           const replacementDisabled = error.code === 'SOURCE_REPLACEMENT_DISABLED';
           const baseTarget = mdxState.targets.find((item) => item.id === targetId);
@@ -1299,8 +1441,9 @@
         try {
           const response = await fetch('/api/mdx-components', { cache: 'no-store' });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const latest = await response.json();
-          if (sequence !== mdxPollSequence) return;
+           const latest = await response.json();
+           if (sequence !== mdxPollSequence) return;
+           for (const item of latest.targets || []) invalidateSourceProposal('mdx-target', item.id, item.supported ? item.hash || '' : '');
           const selectedId = mdxTarget.value;
           const oldTarget = mdxState.targets.find((item) => item.id === selectedId);
           const newTarget = latest.targets?.find((item) => item.id === selectedId);
@@ -1326,7 +1469,6 @@
           for (const item of latest.targets || []) {
             const oldHash = mdxLastHashes.get(item.id);
             if (item.id === selectedId && item.hash && oldHash !== item.hash) {
-              for (const proposalKey of mdxProposals.keys()) if (proposalKey.startsWith(`${item.id}\u0000`)) mdxProposals.delete(proposalKey);
               const instance = oldTarget?.instances?.find((entry) => entry.id === mdxInstance.value);
               const oldValue = instance?.props?.[mdxProp.value];
               const draftKey = mdxDraftKey(selectedId);
@@ -1399,7 +1541,8 @@
       document.querySelector('#mdx-conflict-discard').addEventListener('click', async () => {
         const key = mdxDraftKey();
         if (saving || !mdxDraftConflicts.has(key)) return;
-        mdxDrafts.delete(key); mdxDraftConflicts.delete(key); mdxConflictRevisions.delete(key); mdxProposals.delete(key);
+         mdxDrafts.delete(key); mdxDraftConflicts.delete(key); mdxConflictRevisions.delete(key);
+         if (sourceProposal?.target.kind === 'mdx-target' && sourceProposal.target.id === mdxTarget.value) clearSourceProposal();
         if (pendingMdxPreview && mdxDraftKey(pendingMdxPreview.targetId, pendingMdxPreview.instanceId, pendingMdxPreview.prop) === key) pendingMdxPreview = null;
         await load(); status('Externe MDX-Änderung geladen; lokale Eingabe verworfen.', 'info');
       });
@@ -1407,7 +1550,7 @@
         const key = mdxDraftKey();
         const conflict = mdxDraftConflicts.get(key);
         if (saving || !conflict || conflict.unavailable) return;
-        mdxProposals.delete(key);
+         if (sourceProposal?.target.kind === 'mdx-target' && sourceProposal.target.id === mdxTarget.value) clearSourceProposal();
         const epoch = mdxSelectionEpoch;
         const retained = { targetId: mdxTarget.value, instanceId: mdxInstance.value, prop: mdxProp.value, value: mdxValue.type === 'checkbox' ? mdxValue.checked : mdxValue.value };
         saving = true; renderMdx();
@@ -1425,38 +1568,10 @@
         saving = false; renderMdx();
         await prepareMdxChange();
       });
-      document.querySelector('#mdx-proposal-export').addEventListener('click', async () => {
-        const key = mdxDraftKey();
-        const proposal = mdxProposals.get(key);
-        if (saving || !proposal) return;
-        try {
-          const response = await fetch('/api/mdx-components', { cache: 'no-store' });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const latest = await response.json();
-          const target = latest.targets?.find((item) => item.id === proposal.targetId);
-          if (!target?.supported || target.hash !== proposal.baseHash) {
-            mdxProposals.delete(key);
-            renderMdx();
-            await pollMdxRevision();
-            status('Der Vorschlag war an eine ältere Quellrevision gebunden und wurde verworfen. Prüfe den neuen Stand und erstelle bei Bedarf eine neue Vorschau.', 'warning');
-            return;
-          }
-          const blob = new Blob([JSON.stringify(proposal, null, 2)], { type: 'application/json' });
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url; link.download = 'astro-visual-cms-mdx-proposal.json';
-          document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
-        } catch (error) {
-          mdxProposals.delete(key);
-          mdxDraftConflicts.set(key, { selectionKey: key, unavailable: true, message: `Quellrevision konnte vor dem Export nicht geprüft werden (${error.message}); Vorschlag verworfen. Deine Eingabe bleibt erhalten.` });
-          renderMdx();
-          status('Quellrevision nicht prüfbar; es wurde kein Änderungsvorschlag exportiert.', 'warning');
-        }
-      });
-
       async function prepareOrder(galleryId, order, reapply = false) {
         const gallery = galleryById(galleryId);
         if (busy() || !gallery || (!reapply && galleryConflicts.has(galleryId))) return;
+        clearSourceProposal();
         const existing = galleryDrafts.get(galleryId);
         const baseline = existing || { base: galleryRevision(gallery), baseOrder: [...gallery.order], order: [...gallery.order] };
         if (!galleryConflicts.has(galleryId) && galleryRevision(gallery) === baseline.base && order.every((slug, index) => slug === baseline.baseOrder[index]) && order.length === baseline.baseOrder.length) {
@@ -1491,9 +1606,9 @@
             status('Die Reihenfolge ist unverändert; es wurde nichts geschrieben.', 'info');
             return;
           }
-          pendingPreview = { ...operation, previewId: result.previewId, diff: result.diff, focusSlug };
+           pendingPreview = { ...operation, previewId: result.previewId, diff: result.diff, nextHash: result.nextHash, focusSlug };
           render();
-          status('Quelländerung prüfen. Es wird erst nach Bestätigung gespeichert.', 'warning');
+           status('Quelländerung prüfen. Die Bestätigung erstellt einen revisionsgebundenen manuellen Vorschlag.', 'warning');
         } catch (error) {
           const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
           if (stale) {
@@ -1513,6 +1628,7 @@
         const draftKey = collectionDraftKey(collection.id, entry.id, field.name);
         const draft = collectionDrafts.get(draftKey);
         if (busy() || collectionConflicts.has(draftKey) && !reapply) return;
+        clearSourceProposal();
         if (draft) { draft.value = input.value; draft.type = field.type; draft.dirty = true; }
         let value;
         if (field.type === 'boolean') {
@@ -1554,9 +1670,9 @@
             status('Der Wert ist unverändert; es wurde nichts geschrieben.', 'info');
             return;
           }
-          pendingCollectionPreview = { ...operation, previewId: result.previewId, diff: result.diff };
+           pendingCollectionPreview = { ...operation, previewId: result.previewId, diff: result.diff, nextHash: result.nextHash, contextHash: result.contextHash };
           render();
-          status('Frontmatter-Diff prüfen. Erst nach Bestätigung wird geschrieben.', 'warning');
+           status('Frontmatter-Diff prüfen. Die Bestätigung erstellt einen revisionsgebundenen manuellen Vorschlag.', 'warning');
         } catch (error) {
           if (collectionSourceConflictCodes.has(error.code)) {
             pendingCollectionPreview = null;
@@ -1575,6 +1691,7 @@
 
       createEntryForm.addEventListener('submit', async (event) => {
         event.preventDefault();
+        clearSourceProposal();
         const collection = selectedCollection();
         if (busy() || createEntryUnavailable || !collection?.creationSupported) return;
         const draft = createEntryDrafts.get(collection.id);
@@ -1625,7 +1742,7 @@
           const result = await response.json();
           if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
           if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau für den neuen Eintrag erhalten.');
-          pendingCollectionPreview = { ...operation, kind: 'create-entry', previewId: result.previewId, diff: result.diff };
+           pendingCollectionPreview = { ...operation, kind: 'create-entry', previewId: result.previewId, diff: result.diff, nextHash: result.hash };
           render();
           status('Vollständigen Frontmatter-Diff prüfen. Erst nach Bestätigung wird die neue Datei angelegt.', 'warning');
         } catch (error) {
@@ -1642,7 +1759,7 @@
         saving = true;
         render();
         const creating = operation.kind === 'create-entry';
-        status(creating ? 'Bestätigter neuer Eintrag wird angelegt …' : 'Bestätigte Frontmatter-Änderung wird geschrieben …');
+         status(creating ? 'Bestätigter neuer Eintrag wird exklusiv angelegt …' : 'Bestätigte Frontmatter-Änderung wird als manueller Vorschlag vorbereitet …');
         try {
           const response = creating
             ? await postOperation('/api/collections/create-entry/commit', {
@@ -1679,9 +1796,17 @@
           status(creating
             ? `Neuer Eintrag angelegt: ${result.collectionId}/${result.entryId}. Astro Content Sync sollte die Vorschau aktualisieren.`
             : `Gespeichert. Bei späteren Schemaänderungen Astro Content Sync bzw. Dev-Server-Neustart prüfen. (${result.collectionId}/${result.entryId})`, 'success');
-        } catch (error) {
-          pendingCollectionPreview = null;
-          if (creating && createEntrySourceConflictCodes.has(error.code)) {
+         } catch (error) {
+           pendingCollectionPreview = null;
+           if (!creating && error.code === 'SOURCE_REPLACEMENT_DISABLED') {
+             setSourceProposal({
+               kind: 'collection-entry', targetId: collectionProposalTargetId(operation.collectionId, operation.entryId),
+               baseHash: operation.hash, proposedHash: operation.nextHash, contextHash: operation.contextHash,
+                change: { collectionId: operation.collectionId, field: operation.field, value: operation.value },
+               diff: operation.diff,
+             });
+           }
+           if (creating && createEntrySourceConflictCodes.has(error.code)) {
             const draft = createEntryDrafts.get(operation.collectionId);
             if (draft) markCreateEntryConflict(operation.collectionId, draft);
           }
@@ -1712,7 +1837,7 @@
         const operation = pendingPreview;
         saving = true;
         render();
-        status('Bestätigte Änderung wird geschrieben …');
+         status('Bestätigte Änderung wird als manueller Vorschlag vorbereitet …');
         let saved = false;
         try {
           const response = operation.kind === 'astro-internal-gallery'
@@ -1745,9 +1870,20 @@
           navigatePreview(previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id);
           preview.src = ready.previewUrl;
           status('Gespeichert; Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert.', 'success');
-        } catch (error) {
-          pendingPreview = null;
-          let stale = false;
+         } catch (error) {
+           pendingPreview = null;
+           if (error.code === 'SOURCE_REPLACEMENT_DISABLED') {
+             const internal = operation.kind === 'astro-internal-gallery';
+             setSourceProposal({
+               kind: internal ? 'astro-gallery' : 'gallery-fixture',
+               targetId: internal ? operation.targetId : 'fixture',
+               baseHash: operation.hash,
+               proposedHash: operation.nextHash,
+               change: internal ? { order: operation.order } : { galleryId: operation.galleryId, order: operation.order },
+               diff: operation.diff,
+             });
+           }
+           let stale = false;
           if (saved) {
             status(`Gespeichert, aber Vorschau nicht bestätigt: ${error.message}`, 'warning');
           } else {

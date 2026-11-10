@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { once } from 'node:events'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -34,7 +34,7 @@ function renderedGalleries(html) {
   })
 }
 
-test('separate editor and Astro ports render multiple galleries and persist one safe reorder', { timeout: 75_000 }, async () => {
+test('separate editor and Astro ports render multiple galleries and provide previews without replacing source', { timeout: 75_000 }, async () => {
   const original = await readFile(FIXTURE_PATH)
   const configDirectory = await mkdtemp(path.join(tmpdir(), 'astro-editor-e2e-config-'))
   const configPath = path.join(configDirectory, 'editor.json')
@@ -43,7 +43,6 @@ test('separate editor and Astro ports render multiple galleries and persist one 
     sitePort: SITE_PORT,
     basePath: '/e2e-synthetic/',
     fixturePath: FIXTURE_PATH.pathname,
-    safeSourceReplacementMode: false,
   }))
   const child = spawn(process.execPath, ['scripts/dev.mjs'], {
     cwd: new URL('../', import.meta.url),
@@ -137,74 +136,15 @@ test('separate editor and Astro ports render multiple galleries and persist one 
       },
       body: JSON.stringify({ previewId: preview.previewId, hash: state.hash, galleryId: selected.id, order }),
     })
-    assert.equal(resultResponse.status, 200)
-    const saved = await resultResponse.json()
-    assert.deepEqual(saved.galleries, [
-      { id: selected.id, order },
-      untouched,
-    ])
-    const previewReadyResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview-ready?hash=${saved.hash}`)
-    assert.equal(previewReadyResponse.status, 200)
-    const previewReady = await previewReadyResponse.json()
-    assert.deepEqual(previewReady.galleries, saved.galleries)
-    assert.equal(previewReady.hash, saved.hash)
-    const refreshedPreview = await fetch(previewReady.previewUrl)
-    assert.equal(refreshedPreview.status, 200)
-    const rendered = await refreshedPreview.text()
-    const patchedSource = await readFile(FIXTURE_PATH, 'utf8')
-    assert.deepEqual(inspectFixture(patchedSource).galleries, saved.galleries)
-    const actualGalleries = renderedGalleries(rendered)
-    assert.deepEqual(actualGalleries.map(({ order }) => order).sort(), saved.galleries.map((gallery) => gallery.order.join(',')).sort())
-    for (const [index, gallery] of saved.galleries.entries()) {
-      const section = actualGalleries[index]
-      assert.ok(section, `Missing rendered gallery ${gallery.id}`)
-      const positions = gallery.order.map((slug) => section.html.indexOf(slug))
-      assert.ok(positions.every((position) => position >= 0))
-      assert.deepEqual(positions, [...positions].sort((left, right) => left - right))
-    }
-
-    const staleResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview`, {
-      method: 'POST',
-      headers: {
-        origin: `http://127.0.0.1:${EDITOR_PORT}`,
-        'content-type': 'application/json',
-        'x-editor-token': editorToken,
-      },
-      body: JSON.stringify({ hash: state.hash, galleryId: selected.id, order: selected.order }),
-    })
-    assert.equal(staleResponse.status, 409)
-    assert.deepEqual(await readFile(FIXTURE_PATH), Buffer.from(patchedSource, 'utf8'),
-      'A second write based on the old revision must not overwrite the first accepted write.')
-
-    const pendingResponse = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/preview`, {
-      method: 'POST',
-      headers: {
-        origin: `http://127.0.0.1:${EDITOR_PORT}`,
-        'content-type': 'application/json',
-        'x-editor-token': editorToken,
-      },
-      body: JSON.stringify({ hash: saved.hash, galleryId: selected.id, order: selected.order }),
-    })
-    assert.equal(pendingResponse.status, 200)
-    const pending = await pendingResponse.json()
-    const externalLine = '\n// synthetic external modification after accepted save\n'
-    await appendFile(FIXTURE_PATH, externalLine)
-    const externalConflict = await fetch(`http://127.0.0.1:${EDITOR_PORT}/api/commit`, {
-      method: 'POST',
-      headers: {
-        origin: `http://127.0.0.1:${EDITOR_PORT}`,
-        'content-type': 'application/json',
-        'x-editor-token': editorToken,
-      },
-      body: JSON.stringify({ previewId: pending.previewId, hash: saved.hash, galleryId: selected.id, order: selected.order }),
-    })
-    assert.equal(externalConflict.status, 409)
-    assert.deepEqual(await readFile(FIXTURE_PATH), Buffer.concat([Buffer.from(patchedSource), Buffer.from(externalLine)]),
-      'An external edit after the accepted save must survive a stale revision request.')
+    assert.equal(resultResponse.status, 409)
+    assert.equal((await resultResponse.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+    assert.deepEqual(await readFile(FIXTURE_PATH), original, 'Confirmation must not replace an existing source file.')
+    assert.deepEqual(inspectFixture(await readFile(FIXTURE_PATH, 'utf8')).galleries, state.galleries)
+    assert.deepEqual(untouched.order, state.galleries.find((gallery) => gallery.id === untouched.id)?.order)
   } catch (error) {
     throw new Error(`${error.message}\nDev logs:\n${logs}`)
   } finally {
-    await writeFile(FIXTURE_PATH, original)
+    if (!(await readFile(FIXTURE_PATH)).equals(original)) await writeFile(FIXTURE_PATH, original)
     if (child.exitCode === null) {
       const exited = once(child, 'exit')
       child.kill('SIGTERM')

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -68,22 +69,23 @@ try {
   const fixtureFile = path.join(consumer, 'src/pages/fixture.mdx')
   await writeFile(fixtureFile, 'import Gallery from "../components/Gallery.astro";\n\nexport const ITEMS = ["noise-fixture-01", "noise-fixture-02", "noise-fixture-03"];\n\n<Gallery sorted={ITEMS} />')
   const mdxFile = path.join(consumer, 'src/pages/mdx-proof.mdx')
-  const mdxSource = 'import Card from "../components/Card.astro";\n\n<Card id="fixture-gallery" label="Original MDX label" rank={2} enabled={true} tone="quiet" />'
-  await writeFile(path.join(consumer, 'src/components/Card.astro'), '---\nconst { id, label = "", rank = 0, enabled = false, tone = "" } = Astro.props\n---\n<section data-card-id={id} data-rank={rank} data-enabled={enabled} data-tone={tone}>{label}</section>')
+  const mdxSource = 'import Card from "../components/Card.astro";\nimport NestedComponent from "../components/NestedComponent.astro";\n\n<Card id="fixture-gallery" label="Original MDX label" rank={2} enabled={true} tone="quiet" unconfigured="preserve-me">\n  Nested MDX prose survives unchanged.\n\n  <NestedComponent label="Nested custom component content survives" />\n</Card>'
+  await writeFile(path.join(consumer, 'src/components/Card.astro'), '---\nconst { id, label = "", rank = 0, enabled = false, tone = "" } = Astro.props\n---\n<section data-card-id={id} data-rank={rank} data-enabled={enabled} data-tone={tone}>{label}<slot /></section>')
+  await writeFile(path.join(consumer, 'src/components/NestedComponent.astro'), '---\nconst { label = "" } = Astro.props\n---\n<aside data-nested-component>{label}</aside>')
   await writeFile(mdxFile, mdxSource)
   await writeFile(path.join(consumer, 'src/pages/notes.astro'), `---
 import { getCollection } from 'astro:content'
 const notes = (await getCollection('notes')).sort((a, b) => a.data.order - b.data.order)
 ---
 <ol>{notes.map((note) => <li data-note-id={note.id}>{note.data.title}</li>)}</ol>`)
-  await writeFile(path.join(consumer, 'src/content.config.ts'), `import { defineCollection, z } from 'astro:content'; import { glob } from 'astro/loaders'; export const collections = { notes: defineCollection({ loader: glob({ base: './src/content/notes', pattern: '**/*.md' }), schema: z.object({ title: z.string(), order: z.number() }) }) }`)
+  await writeFile(path.join(consumer, 'src/content.config.ts'), `import { defineCollection, z } from 'astro:content'; import { glob } from 'astro/loaders'; export const collections = { notes: defineCollection({ loader: glob({ base: './src/content/notes', pattern: '**/*.md' }), schema: z.object({ title: z.string(), order: z.number() }) }), smokeNotes: defineCollection({ loader: glob({ base: './src/content/smoke-notes', pattern: '*.md' }), schema: z.object({ title: z.string() }) }) }`)
   const noteFile = path.join(consumer, 'src/content/notes/one.md')
   const noteSource = '---\ntitle: One\norder: 1\n---\nText'
   await writeFile(noteFile, noteSource)
   await writeFile(path.join(consumer, 'src/content/notes/two.md'), '---\ntitle: Two\norder: 2\n---\nOther text')
   const install = spawnSync('npm', ['install', '--no-audit', '--no-fund', '--no-save', path.join(temp, packed.filename), 'astro@7.4.7', '@astrojs/mdx@8.1.3'], { cwd: consumer, encoding: 'utf8', timeout: 180000 })
   assert.equal(install.status, 0, install.stderr)
-  const config = { port, sitePort, safeSourceReplacementMode: false, projectRoot: '.', contentConfigPath: 'src/content.config.ts', fixturePath: 'src/pages/mdx-proof.mdx', previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }], astroGalleryTargets: [{ id: 'internal-gallery', projectRoot: '.', filePath: 'src/components/InternalGallery.astro', variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], mdxComponentTargets: [{ id: 'fixture-gallery', projectRoot: '.', filePath: 'src/pages/mdx-proof.mdx', importSource: '../components/Card.astro', idProp: 'id', fields: [{ name: 'label', type: 'string' }, { name: 'rank', type: 'number', min: 1, max: 5, step: 1 }, { name: 'enabled', type: 'boolean' }, { name: 'tone', type: 'enum', values: ['quiet', 'bold'] }] }] }
+  const config = { port, sitePort, projectRoot: '.', contentConfigPath: 'src/content.config.ts', fixturePath: 'src/pages/mdx-proof.mdx', previewRoutes: [{ id: 'references', label: 'Referenzen', path: '/referenzen/' }], astroGalleryTargets: [{ id: 'internal-gallery', projectRoot: '.', filePath: 'src/components/InternalGallery.astro', variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], mdxComponentTargets: [{ id: 'fixture-gallery', projectRoot: '.', filePath: 'src/pages/mdx-proof.mdx', importSource: '../components/Card.astro', idProp: 'id', fields: [{ name: 'label', type: 'string' }, { name: 'rank', type: 'number', min: 1, max: 5, step: 1 }, { name: 'enabled', type: 'boolean' }, { name: 'tone', type: 'enum', values: ['quiet', 'bold'] }] }] }
   await writeFile(path.join(consumer, 'editor.json'), JSON.stringify(config))
   child = spawn(path.join(consumer, 'node_modules/.bin/astro-visual-cms-editor'), ['--config', 'editor.json'], { cwd: consumer, stdio: 'ignore', detached: process.platform !== 'win32' })
   let response
@@ -102,7 +104,7 @@ const notes = (await getCollection('notes')).sort((a, b) => a.data.order - b.dat
   const headers = { origin: `http://127.0.0.1:${port}`, 'content-type': 'application/json', 'x-editor-token': token }
 
   const schemaOperation = {
-    name: 'smokeNotes', base: './src/content/smoke-notes', pattern: '*.md', hash: state.configHash,
+    name: 'proposedNotes', base: './src/content/notes', pattern: '*.md', hash: state.configHash,
     fields: [{ name: 'title', type: 'string', required: true }],
   }
   const contentConfig = path.join(consumer, 'src/content.config.ts')
@@ -111,14 +113,17 @@ const notes = (await getCollection('notes')).sort((a, b) => a.data.order - b.dat
   const schemaPreview = await schemaPreviewResponse.json()
   assert(schemaPreviewResponse.ok && schemaPreview.previewId, `static collection preview failed: ${JSON.stringify(schemaPreview)}`)
   assert.equal(await readFile(contentConfig, 'utf8'), originalConfig, 'collection preview wrote before confirmation')
-  assert.match(schemaPreview.diff.after, /smokeNotes/)
+  assert.match(schemaPreview.diff.after, /proposedNotes/)
   assert.match(schemaPreview.diff.after, /z\.string\(\)/)
   const schemaCommit = await fetch(`http://127.0.0.1:${port}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...schemaOperation, previewId: schemaPreview.previewId }) })
-  assert.equal(schemaCommit.status, 200, `static collection commit failed: ${await schemaCommit.text()}`)
-  assert.equal(await readFile(contentConfig, 'utf8'), originalConfig.slice(0, schemaPreview.diff.start) + schemaPreview.diff.after + originalConfig.slice(schemaPreview.diff.end), 'collection commit changed bytes outside its confirmed diff')
+  const schemaCommitResult = await schemaCommit.json()
+  assert.equal(schemaCommit.status, 409, `existing config replacement was not blocked: ${JSON.stringify(schemaCommitResult)}`)
+  assert.equal(schemaCommitResult.code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(await readFile(contentConfig, 'utf8'), originalConfig, 'blocked schema proposal changed the config')
   state = await (await fetch(`http://127.0.0.1:${port}/api/collections`)).json()
   const smokeNotes = state.collections.find((collection) => collection.id === 'smokeNotes')
-  assert(smokeNotes?.supported && smokeNotes.creationSupported, 'created collection was not rediscovered as editable')
+  assert(smokeNotes?.supported && smokeNotes.creationSupported, 'preconfigured static collection was not discovered as editable')
+  assert.equal(state.collections.some((collection) => collection.id === 'proposedNotes'), false, 'a manual config proposal must not mutate discovery state')
 
   const createdStaticNote = path.join(consumer, 'src/content/smoke-notes/first-note.md')
   const entryOperation = { collectionId: 'smokeNotes', entryId: 'first-note.md', values: { title: 'Created collection entry — 東京' }, hash: state.configHash }
@@ -154,7 +159,10 @@ const entries = await getCollection('smokeNotes')
       assert(!content.includes(marker), `production artifact ${path.relative(consumer, file)} contains dev-only marker ${marker}`)
     }
   }
-  assert((await readFile(path.join(consumer, 'dist/mdx-proof/index.html'), 'utf8')).includes('Original MDX label'), 'Astro did not compile the synthetic MDX target')
+  const mdxBuildHtml = await readFile(path.join(consumer, 'dist/mdx-proof/index.html'), 'utf8')
+  assert(mdxBuildHtml.includes('Original MDX label'), 'Astro did not compile the synthetic MDX target')
+  assert(mdxBuildHtml.includes('Nested MDX prose survives unchanged'), 'Astro did not render nested MDX prose')
+  assert(mdxBuildHtml.includes('Nested custom component content survives'), 'Astro did not preserve the nested custom component slot')
   assert((await readFile(path.join(consumer, 'dist/internal-gallery/index.html'), 'utf8')).includes('keep-alpha'), 'Astro did not compile the synthetic internal array gallery')
   const createdCollectionHtml = await readFile(path.join(consumer, 'dist/created-notes/index.html'), 'utf8')
   assert.match(createdCollectionHtml, /data-entry-id="first-note"/)
@@ -171,6 +179,9 @@ const entries = await getCollection('smokeNotes')
   }
   assert(page?.ok, 'installed Astro dev server did not serve custom preview route')
   assert((await page.text()).includes('Referenzen-Beweis'))
+  const mdxDevPage = await fetch(`http://127.0.0.1:${sitePort}/mdx-proof/`)
+  const mdxDevHtml = await mdxDevPage.text()
+  assert(mdxDevPage.ok && mdxDevHtml.includes('Original MDX label') && mdxDevHtml.includes('Nested MDX prose survives unchanged') && mdxDevHtml.includes('Nested custom component content survives'), 'Astro dev did not render the configured custom component and its nested slot')
   const browser = await chromium.launch({ headless: true })
   try {
     const context = await browser.newContext()
@@ -199,19 +210,20 @@ const entries = await getCollection('smokeNotes')
   assert(collectionPreviewResponse.ok && collectionPreview.previewId, `numeric collection preview failed: ${JSON.stringify(collectionPreview)}`)
   assert.equal(await readFile(noteFile, 'utf8'), noteSource, 'numeric collection preview wrote before confirmation')
   const collectionCommit = await fetch(`http://127.0.0.1:${port}/api/collections/commit`, { method: 'POST', headers, body: JSON.stringify({ ...collectionOperation, previewId: collectionPreview.previewId }) })
-  assert.equal(collectionCommit.status, 200, `numeric collection commit failed: ${await collectionCommit.text()}`)
-  const noteAfter = noteSource.replace('order: 1', 'order: 3')
-  assert.equal(await readFile(noteFile, 'utf8'), noteAfter, 'numeric collection commit changed bytes outside the selected scalar')
+  const collectionCommitResult = await collectionCommit.json()
+  assert.equal(collectionCommit.status, 409, `existing entry replacement was not blocked: ${JSON.stringify(collectionCommitResult)}`)
+  assert.equal(collectionCommitResult.code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(await readFile(noteFile, 'utf8'), noteSource, 'blocked numeric proposal changed the entry')
   let notesRendered = false
   for (let n = 0; n < 100; n++) {
     const page = await fetch(`http://127.0.0.1:${sitePort}/notes/`)
     if (page.ok) {
       const html = await page.text()
-      if (html.indexOf('data-note-id="two"') < html.indexOf('data-note-id="one"')) { notesRendered = true; break }
+      if (html.indexOf('data-note-id="one"') < html.indexOf('data-note-id="two"')) { notesRendered = true; break }
     }
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  assert(notesRendered, 'Astro glob collection did not sync the confirmed numeric edit and rerender the sorted route')
+  assert(notesRendered, 'Astro glob collection did not preserve the source order after a blocked replacement')
   const createOperation = { collectionId: 'notes', entryId: 'three.md', values: { title: 'Three', order: 0 }, hash: state.configHash }
   const createPreviewResponse = await fetch(`http://127.0.0.1:${port}/api/collections/create-entry/preview`, { method: 'POST', headers, body: JSON.stringify(createOperation) })
   const createPreview = await createPreviewResponse.json()
@@ -241,10 +253,12 @@ const entries = await getCollection('smokeNotes')
   assert(previewResponse.ok && preview.previewId, `installed MDX preview failed: ${JSON.stringify(preview)}`)
   assert.equal(await readFile(mdxFile, 'utf8'), mdxSource, 'MDX preview wrote before confirmation')
   const commit = await fetch(`http://127.0.0.1:${port}/api/mdx-components/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
-  assert.equal(commit.status, 200, `installed MDX commit failed: ${await commit.text()}`)
-  let mdxAfter = mdxSource.replace('label="Original MDX label"', 'label="Installed MDX edit"')
-  assert.equal(await readFile(mdxFile, 'utf8'), mdxAfter, 'MDX adapter changed bytes outside the selected literal')
-  for (const [prop, value, oldLiteral, newLiteral] of [['rank', 4, 'rank={2}', 'rank={4}'], ['enabled', false, 'enabled={true}', 'enabled={false}'], ['tone', 'bold', 'tone="quiet"', 'tone="bold"']]) {
+  const commitResult = await commit.json()
+  assert.equal(commit.status, 409, `existing MDX replacement was not blocked: ${JSON.stringify(commitResult)}`)
+  assert.equal(commitResult.code, 'SOURCE_REPLACEMENT_DISABLED')
+  let mdxAfter = mdxSource
+  assert.equal(await readFile(mdxFile, 'utf8'), mdxSource, 'blocked MDX proposal changed source bytes')
+  for (const [prop, value] of [['rank', 4], ['enabled', false], ['tone', 'bold']]) {
     const latest = await (await fetch(`http://127.0.0.1:${port}/api/mdx-components`)).json()
     const typedTarget = latest.targets.find((item) => item.id === 'fixture-gallery')
     const typedOperation = { targetId: 'fixture-gallery', instanceId: 'fixture-gallery', prop, value, hash: typedTarget.hash }
@@ -252,9 +266,11 @@ const entries = await getCollection('smokeNotes')
     const typedPreview = await typedPreviewResponse.json()
     assert(typedPreviewResponse.ok && typedPreview.previewId, `typed ${prop} preview failed: ${JSON.stringify(typedPreview)}`)
     const typedCommit = await fetch(`http://127.0.0.1:${port}/api/mdx-components/commit`, { method: 'POST', headers, body: JSON.stringify({ ...typedOperation, previewId: typedPreview.previewId }) })
-    assert.equal(typedCommit.status, 200, `typed ${prop} commit failed: ${await typedCommit.text()}`)
+    const typedCommitResult = await typedCommit.json()
+    assert.equal(typedCommit.status, 409, `typed ${prop} replacement was not blocked: ${JSON.stringify(typedCommitResult)}`)
+    assert.equal(typedCommitResult.code, 'SOURCE_REPLACEMENT_DISABLED')
     const currentSource = await readFile(mdxFile, 'utf8')
-    assert.equal(currentSource, mdxAfter.replace(oldLiteral, newLiteral), `${prop} commit changed bytes beyond its literal`)
+    assert.equal(currentSource, mdxAfter, `${prop} blocked proposal changed source bytes`)
     mdxAfter = currentSource
   }
   const uiBrowser = await chromium.launch({ headless: true })
@@ -268,30 +284,48 @@ const entries = await getCollection('smokeNotes')
     await uiPage.locator('#mdx-prop').selectOption('rank')
     const rankInput = uiPage.locator('#mdx-value-control input[type="number"]')
     await rankInput.waitFor()
-    assert.equal(await rankInput.inputValue(), '4')
+    assert.equal(await rankInput.inputValue(), '2')
     await uiPage.locator('#mdx-prop').selectOption('enabled')
     assert.equal(await uiPage.locator('#mdx-value-control input').getAttribute('type'), 'checkbox')
-    assert.equal(await uiPage.locator('#mdx-value-control input').isChecked(), false)
+    assert.equal(await uiPage.locator('#mdx-value-control input').isChecked(), true)
     await uiPage.locator('#mdx-prop').selectOption('tone')
-    assert.equal(await uiPage.locator('#mdx-value-control select').inputValue(), 'bold')
+    assert.equal(await uiPage.locator('#mdx-value-control select').inputValue(), 'quiet')
     await uiPage.locator('#mdx-prop').selectOption('rank')
     await uiPage.locator('#mdx-value-control input[type="number"]').fill('5')
     await uiPage.locator('#mdx-preview-button').click()
     await uiPage.locator('#mdx-confirmation:not([hidden])').waitFor()
-    assert.equal(await uiPage.locator('#mdx-diff-before').textContent(), '{4}')
+    assert.equal(await uiPage.locator('#mdx-diff-before').textContent(), '{2}')
     assert.equal(await uiPage.locator('#mdx-diff-after').textContent(), '{5}')
     const uiCommitResponse = uiPage.waitForResponse((response) => response.url().endsWith('/api/mdx-components/commit') && response.request().method() === 'POST')
     await uiPage.locator('#mdx-confirm-button').click()
-    assert.equal((await uiCommitResponse).status(), 200, 'custom component field UI commit failed')
-    const uiExpectedSource = mdxAfter.replace('rank={4}', 'rank={5}')
-    assert.equal(await readFile(mdxFile, 'utf8'), uiExpectedSource, 'UI commit changed bytes outside the selected custom component scalar')
-    mdxAfter = uiExpectedSource
+    assert.equal((await uiCommitResponse).status(), 409, 'custom component replacement must fail closed')
+    await uiPage.locator('#source-proposal-panel').waitFor({ state: 'visible' })
+    const [mdxDownload] = await Promise.all([
+      uiPage.waitForEvent('download'), uiPage.locator('#source-proposal-export').click(),
+    ])
+    const mdxProposal = JSON.parse(await readFile(await mdxDownload.path(), 'utf8'))
+    assert.deepEqual(mdxProposal, {
+      schemaVersion: 1,
+      type: 'astro-visual-cms-source-proposal',
+      target: { kind: 'mdx-target', id: 'fixture-gallery' },
+      baseHash: createHash('sha256').update(mdxSource).digest('hex'),
+      proposedHash: createHash('sha256').update(mdxSource.replace('rank={2}', 'rank={5}')).digest('hex'),
+      change: { instanceId: 'fixture-gallery', prop: 'rank', value: 5 },
+      diff: { start: mdxSource.indexOf('{2}'), end: mdxSource.indexOf('{2}') + 3, before: '{2}', after: '{5}' },
+    })
+    assert(!JSON.stringify(mdxProposal).includes(mdxFile), 'proposal disclosed the source path')
+    assert(!JSON.stringify(mdxProposal).includes(mdxSource), 'proposal embedded the full source file')
+    assert.equal(await readFile(mdxFile, 'utf8'), mdxSource, 'the manual proposal must not write source')
+    const mdxAfterProposalResponse = await fetch(`http://127.0.0.1:${sitePort}/mdx-proof/`)
+    const mdxAfterProposalHtml = await mdxAfterProposalResponse.text()
+    assert(mdxAfterProposalResponse.ok && mdxAfterProposalHtml.includes('Original MDX label') && mdxAfterProposalHtml.includes('Nested MDX prose survives unchanged') && mdxAfterProposalHtml.includes('Nested custom component content survives'), 'Astro rendering changed after the fail-closed MDX proposal')
+    await uiPage.locator('#mdx-conflict-discard').click()
     const noOpSource = await readFile(mdxFile, 'utf8')
     let noOpCommitRequests = 0
     uiPage.on('request', (request) => {
       if (request.method() === 'POST' && request.url().endsWith('/api/mdx-components/commit')) noOpCommitRequests += 1
     })
-    await uiPage.locator('#mdx-value-control input[type="number"]').fill('5')
+    await uiPage.locator('#mdx-value-control input[type="number"]').fill('2')
     await uiPage.locator('#mdx-preview-button').click()
     await uiPage.waitForFunction(() => document.querySelector('#status')?.textContent === 'Der MDX-Wert ist unverändert; es wurde nichts geschrieben.')
     assert.equal(await uiPage.locator('#mdx-confirmation').isHidden(), true, 'no-op must not show a confirmation diff')
@@ -306,30 +340,40 @@ const entries = await getCollection('smokeNotes')
     assert.match(await galleryPage.locator('#diff-after').textContent(), /beta[\s\S]*alpha/)
     const astroGalleryCommit = galleryPage.waitForResponse((response) => response.url().endsWith('/api/astro-galleries/commit') && response.request().method() === 'POST')
     await galleryPage.locator('#confirm-change').click()
-    assert.equal((await astroGalleryCommit).status(), 200, 'Astro internal-array UI commit failed')
+    assert.equal((await astroGalleryCommit).status(), 409, 'Astro internal-array replacement must fail closed')
     const expectedGallery = astroGallerySource.replace('{ name: "alpha", alt: "Alpha", note: "keep-alpha" },\n  { name: "beta", alt: "Beta", note: "keep-beta" },', '{ name: "beta", alt: "Beta", note: "keep-beta" },\n  { name: "alpha", alt: "Alpha", note: "keep-alpha" },')
-    assert.equal(await readFile(astroGalleryFile, 'utf8'), expectedGallery, 'Astro internal-gallery edit changed bytes outside the object-array reorder')
+    await galleryPage.locator('#source-proposal-panel').waitFor({ state: 'visible' })
+    const [galleryDownload] = await Promise.all([
+      galleryPage.waitForEvent('download'), galleryPage.locator('#source-proposal-export').click(),
+    ])
+    const galleryProposal = JSON.parse(await readFile(await galleryDownload.path(), 'utf8'))
+    assert.deepEqual(galleryProposal.target, { kind: 'astro-gallery', id: 'internal-gallery' })
+    assert.equal(galleryProposal.baseHash, createHash('sha256').update(astroGallerySource).digest('hex'))
+    assert.equal(galleryProposal.proposedHash, createHash('sha256').update(expectedGallery).digest('hex'))
+    assert(!JSON.stringify(galleryProposal).includes(astroGalleryFile), 'Astro gallery proposal disclosed the source path')
+    assert(!JSON.stringify(galleryProposal).includes(astroGallerySource), 'Astro gallery proposal embedded the full source')
+    assert.equal(await readFile(astroGalleryFile, 'utf8'), astroGallerySource, 'blocked Astro gallery proposal changed source bytes')
   } finally { await uiBrowser.close() }
   let astroGalleryRendered = false
   for (let n = 0; n < 100; n++) {
     const response = await fetch(`http://127.0.0.1:${sitePort}/internal-gallery/`)
-    if (response.ok) { const html = await response.text(); if (html.indexOf('data-image="beta"') < html.indexOf('data-image="alpha"') && html.includes('keep-beta') && html.includes('keep-alpha')) { astroGalleryRendered = true; break } }
+      if (response.ok) { const html = await response.text(); if (html.indexOf('data-image="alpha"') < html.indexOf('data-image="beta"') && html.includes('keep-beta') && html.includes('keep-alpha')) { astroGalleryRendered = true; break } }
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
-  assert(astroGalleryRendered, `Astro internal gallery did not HMR-render the reordered object array: ${astroLogs}`)
+  assert(astroGalleryRendered, `Astro internal gallery did not preserve the source array order after the blocked edit: ${astroLogs}`)
   let mdxRendered = false
   for (let n = 0; n < 100; n++) {
     const page = await fetch(`http://127.0.0.1:${sitePort}/mdx-proof/`)
-    if (page.ok) { const html = await page.text(); if (html.includes('Installed MDX edit') && html.includes('data-rank="5"') && html.includes('data-enabled="false"') && html.includes('data-tone="bold"')) { mdxRendered = true; break } }
+      if (page.ok) { const html = await page.text(); if (html.includes('Original MDX label') && html.includes('data-rank="2"') && html.includes('data-enabled="true"') && html.includes('data-tone="quiet"')) { mdxRendered = true; break } }
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   if (!mdxRendered) {
     const last = await fetch(`http://127.0.0.1:${sitePort}/mdx-proof/`).catch(() => null)
-    throw new Error(`Astro MDX route did not rerender the confirmed installed-package edit (last status ${last?.status ?? 'unavailable'}): ${(await last?.text())?.slice(0, 1200) ?? ''}\n${astroLogs}`)
+    throw new Error(`Astro MDX route did not render the unchanged installed-package source (last status ${last?.status ?? 'unavailable'}): ${(await last?.text())?.slice(0, 1200) ?? ''}\n${astroLogs}`)
   }
   const ui = await (await fetch(`http://127.0.0.1:${port}/`)).text()
   assert(ui.includes('/referenzen/'), 'custom preview route not rendered by editor UI')
-  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro production isolation, installed editor API, confirmed collection/entry creation, numeric Content Sync, Dev Toolbar route launch, typed custom-component UI/API preview/commit, exact source-byte preservation, Astro internal-array UI preview/commit, and MDX/Astro gallery HMR`)
+  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro production isolation, installed editor API, fail-closed existing-source proposals, exclusive collection entry creation, Dev Toolbar route launch, typed custom-component and nested-slot rendering, Astro internal-gallery proposals, exact source-byte preservation, and unchanged Astro rendering`)
 } finally {
   await stop(child)
   if (astro) {

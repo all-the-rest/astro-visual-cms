@@ -26,7 +26,7 @@ test('editor entrypoint accepts only a configured toolbar route ID and health pr
   assert.equal((await fetch(`${origin}/api/health`, { headers: { origin: 'http://localhost:4321' } })).status, 403)
 })
 
-test('configured MDX target exposes path-free state and requires a matching explicit commit', async (t) => {
+test('configured MDX target exposes path-free state and blocks existing-source replacement after confirmation', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'mdx-target-'))
   const file = path.join(root, 'src/page.mdx')
   await mkdir(path.dirname(file), { recursive: true })
@@ -34,7 +34,7 @@ test('configured MDX target exposes path-free state and requires a matching expl
   await writeFile(file, source)
   t.after(() => rm(root, { recursive: true, force: true }))
   let writeCalls = 0
-  const server = createEditorServer({ port: 0, safeSourceReplacementMode: false, mdxComponentTargets: [{ id: 'page', projectRoot: root, filePath: file, importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] }], writeSource: async (...args) => { writeCalls += 1; return writeSourceAtomically(...args) } })
+  const server = createEditorServer({ port: 0, mdxComponentTargets: [{ id: 'page', projectRoot: root, filePath: file, importSource: '../components/Card.astro', idProp: 'id', editableProps: ['title'] }], writeSource: async (...args) => { writeCalls += 1; return writeSourceAtomically(...args) } })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise((resolve) => server.close(resolve)))
   const origin = `http://127.0.0.1:${server.address().port}`
@@ -56,9 +56,10 @@ test('configured MDX target exposes path-free state and requires a matching expl
   assert.equal(canceled.status, 409)
   assert.equal(writeCalls, 0)
   const committed = await fetch(`${origin}/api/mdx-components/commit`, { method: 'POST', headers, body: JSON.stringify({ ...op, previewId: preview.previewId }) })
-  assert.equal(committed.status, 200)
-  assert.equal(await readFile(file, 'utf8'), source.replace('title="Old"', 'title="literal </script>"'))
-  assert.equal(writeCalls, 1)
+  assert.equal(committed.status, 409)
+  assert.equal((await committed.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(await readFile(file, 'utf8'), source)
+  assert.equal(writeCalls, 0)
 })
 
 test('default replacement policy refuses MDX component commit without invoking injected writer', async (t) => {
@@ -83,14 +84,14 @@ test('default replacement policy refuses MDX component commit without invoking i
   assert.equal(await readFile(file, 'utf8'), source)
 })
 
-test('Astro internal gallery endpoint enforces preview session, exact replay, stale hash, and writes only on confirmation', async (t) => {
+test('Astro internal gallery endpoint enforces preview session, exact replay, stale hash, and fail-closed replacement', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'astro-gallery-target-'))
   const file = path.join(root, 'src/Galerie.astro')
   const source = `---\ntype Image = { name: string; alt: string };\nconst imageNames: Image[] = [\n  { name: "a", alt: "A" },\n  { name: "b", alt: "B" },\n]\n---\n`
   await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, source)
   t.after(() => rm(root, { recursive: true, force: true }))
   let writes = 0
-  const server = createEditorServer({ port: 0, safeSourceReplacementMode: false, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async (...args) => { writes++; return writeSourceAtomically(...args) } })
+  const server = createEditorServer({ port: 0, astroGalleryTargets: [{ id: 'gal', projectRoot: root, filePath: file, variableName: 'imageNames', identityProperty: 'name', labelProperty: 'alt' }], writeSource: async (...args) => { writes++; return writeSourceAtomically(...args) } })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve)); t.after(() => new Promise((resolve) => server.close(resolve)))
   const origin = `http://127.0.0.1:${server.address().port}`
   const token = async () => (await (await fetch(`${origin}/api/session`)).json()).token
@@ -106,17 +107,21 @@ test('Astro internal gallery endpoint enforces preview session, exact replay, st
   const mismatch = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...op, order: ['a', 'b'], previewId: own.previewId }) })
   assert.equal(mismatch.status, 409); assert.equal((await readFile(file, 'utf8')), source)
   const stalePreview = await (await fetch(`${origin}/api/astro-galleries/preview`, { method: 'POST', headers: headers(session), body: JSON.stringify(op) })).json()
-  await writeFile(file, source.replace('alt: "A"', 'alt: "External"'))
+  const externalSource = source.replace('alt: "A"', 'alt: "External"')
+  await writeFile(file, externalSource)
   const stale = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...op, previewId: stalePreview.previewId }) })
   assert.equal(stale.status, 409); assert.equal(writes, 0)
   const latest = await (await fetch(`${origin}/api/astro-galleries`)).json()
   const freshOp = { ...op, hash: latest.targets[0].hash }
   const fresh = await (await fetch(`${origin}/api/astro-galleries/preview`, { method: 'POST', headers: headers(session), body: JSON.stringify(freshOp) })).json()
   const commit = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...freshOp, previewId: fresh.previewId }) })
-  assert.equal(commit.status, 200); assert.equal(writes, 1)
+  assert.equal(commit.status, 409)
+  assert.equal((await commit.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(writes, 0)
   const committedBytes = await readFile(file, 'utf8')
+  assert.equal(committedBytes, externalSource)
   const replay = await fetch(`${origin}/api/astro-galleries/commit`, { method: 'POST', headers: headers(session), body: JSON.stringify({ ...freshOp, previewId: fresh.previewId }) })
-  assert.equal(replay.status, 409); assert.equal(await readFile(file, 'utf8'), committedBytes); assert.equal(writes, 1)
+  assert.equal(replay.status, 409); assert.equal((await replay.json()).code, 'PREVIEW_EXPIRED'); assert.equal(await readFile(file, 'utf8'), committedBytes); assert.equal(writes, 0)
 })
 
 test('default replacement policy refuses Astro gallery commit and preserves source bytes', async (t) => {

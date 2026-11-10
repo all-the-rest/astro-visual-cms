@@ -87,12 +87,12 @@ try {
     await writeFile(fixture, original.replace(importAnchor, `${importAnchor}\nimport NestedUnknown from '../components/NestedUnknown.astro';`).replace(galleryAnchor, '<NestedUnknown><Gallery sorted={HIGHLIGHTS} /></NestedUnknown>'))
   } else if (mode === 'collection') {
     const contentRoot = path.join(root, 'src/content/acceptance-notes')
-    const contentFile = path.join(contentRoot, 'entry.mdx')
+    const contentFile = path.join(contentRoot, 'nested', 'entry.mdx')
     const configFile = path.join(root, 'src/content.config.ts')
     const pageFile = path.join(root, 'src/pages/collection-proof.astro')
-    await mkdir(contentRoot, { recursive: true })
+    await mkdir(path.dirname(contentFile), { recursive: true })
     await writeFile(configFile, `import { defineCollection, z } from 'astro:content';\nimport { glob } from 'astro/loaders';\nexport const collections = { notes: defineCollection({ loader: glob({ pattern: '**/*.mdx', base: './src/content/acceptance-notes' }), schema: z.object({ title: z.string(), rank: z.number() }) }) };\n`)
-    await writeFile(contentFile, `---\ntitle: "Synthetic collection entry"\nrank: 7\n---\nimport EditorUnknownChip from '../../components/EditorUnknownChip.astro'\n\n# Collection body remains MDX\n\n<EditorUnknownChip id="collection-proof" label="Nested synthetic component" />\n`)
+    await writeFile(contentFile, `---\ntitle: "Synthetic collection entry"\nrank: 7\n---\nimport EditorUnknownChip from '../../../components/EditorUnknownChip.astro'\n\n# Collection body remains MDX\n\n<EditorUnknownChip id="collection-proof" label="Nested synthetic component" />\n`)
     await writeFile(pageFile, `---\nimport { getCollection, render } from 'astro:content';\nconst [entry] = await getCollection('notes');\nif (!entry) throw new Error('Synthetic MDX collection entry was not loaded.');\nconst { Content } = await render(entry);\n---\n<html><body><h1 data-entry-title>{entry.data.title}</h1><p data-entry-rank={String(entry.data.rank)}>{entry.data.rank}</p><Content /></body></html>\n`)
     await mkdir(path.dirname(collectionReceipt), { recursive: true })
     await writeFile(collectionReceipt, JSON.stringify({ contentFile, configFile, pageFile }))
@@ -121,10 +121,9 @@ try {
     env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', EDITOR_PORT: String(editorPort) },
   })
   astroStarted = true
-  // These disposable-copy modes exercise confirmed replacements; other modes retain the fail-closed default.
+  // Every mode runs with existing-source replacement fail-closed; edit confirmations export proposals only.
   editor = createEditorServer({
     port: editorPort, sitePort, fixturePath: fixture, basePath: '/browser-synthetic/',
-    ...(['gallery', 'collection', 'markdown'].includes(mode) ? { safeSourceReplacementMode: false } : {}),
     ...(mode === 'collection' ? { previewRoutes: [
       { id: 'home', label: 'Startseite', path: '/' },
       { id: 'fixture', label: 'Fixture', path: '/fixture/', cacheBustOnRevision: true },

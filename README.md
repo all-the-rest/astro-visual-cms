@@ -1,12 +1,12 @@
 # Astro Visual CMS – lokaler, begrenzt schreibender Astro-Editor
 
-Das Repository enthält das installierbare Paket `@astro-visual-cms/editor` sowie eine synthetische Demo-/Testanwendung. Das Paket startet einen loopback-only Editor und eine Astro-Dev-Integration; Bearbeitung bleibt auf explizit konfigurierte, getestete Adapter beschränkt. Es ist kein allgemeiner visueller MDX-Editor und kein Produktions-CMS.
+Das Repository enthält das installierbare Paket `@astro-visual-cms/editor` sowie eine synthetische Demo-/Testanwendung. Das Paket startet einen loopback-only Editor und eine Astro-Dev-Integration; Vorschläge bleiben auf explizit konfigurierte, getestete Adapter beschränkt. Bestehende Quelldateien werden nicht automatisch ersetzt: die Bestätigung exportiert einen pfadfreien, revisionsgebundenen manuellen Vorschlag. Nur die exklusive Neuanlage eines Collection-Eintrags schreibt eine neue Datei. Es ist kein allgemeiner visueller MDX-Editor und kein Produktions-CMS.
 
-Für Paketinstallation, Astro-Konfiguration, vertrauenswürdige Serveroptionen, Supportgrenzen und nachgewiesene Projektkopien siehe [Editor-Paket](docs/editor-package.md). Ein reproduzierbarer Tarball-Installationsgate ist `npm run pack:smoke`.
+Für Paketinstallation, Astro-Konfiguration, vertrauenswürdige Serveroptionen, Supportgrenzen und nachgewiesene Projektkopien siehe [Editor-Paket](docs/editor-package.md). Ein reproduzierbarer Tarball-Installationsgate ist `pnpm run pack:smoke`.
 
 ## Repository-Fixture starten
 
-Die lokale Demo rendert eine Astro-MDX-Seite und ändert über die separate Editor-UI die Bildreihenfolge ausschließlich in der synthetischen Datei `src/pages/fixture.mdx`. Die komplexere Route `/reisinger-sample/editorial/showcase/` bildet zusätzlich typische Content-Layer-, MDX-Import-, Komponenten- und Slot-Strukturen aus einem realen Astro-Projekt nach. Sie enthält ausschließlich synthetische Texte und generierte Noise-Testbilder; sie erweitert nicht den allgemeinen Editor-Vertrag.
+Die lokale Demo rendert eine Astro-MDX-Seite und zeigt über die separate Editor-UI einen Galerie-Reorder-Vorschlag für die synthetische Datei `src/pages/fixture.mdx`; die Quelldatei bleibt unverändert. Die komplexere Route `/reisinger-sample/editorial/showcase/` bildet typische Content-Layer-, MDX-Import-, Komponenten- und Slot-Strukturen aus einem realen Astro-Projekt nach. Sie enthält ausschließlich synthetische Texte und generierte Noise-Testbilder; sie erweitert nicht den allgemeinen Editor-Vertrag.
 
 ## Start
 
@@ -20,7 +20,7 @@ pnpm dev
 - Editor: <http://127.0.0.1:4322>
 - Astro-Seite: <http://127.0.0.1:4321/fixture/>
 
-`pnpm dev` legt bei Bedarf drei zufällige RGB-Noise-JPEGs mit Sharp in `public/images/` an und erhält sie bei weiteren Starts/Builds. Die Dateien sind generiert und in Git ignoriert. Die Editor-Seite läuft in einem eigenen Node-Server und zeigt die Astro-Seite in einem iframe. Native Drag-and-drop-Sortierung sowie zugängliche Hoch-/Runter-Buttons patchen dieselbe MDX-Fixture lokal.
+`pnpm dev` legt bei Bedarf drei zufällige RGB-Noise-JPEGs mit Sharp in `public/images/` an und erhält sie bei weiteren Starts/Builds. Die Dateien sind generiert und in Git ignoriert. Die Editor-Seite läuft in einem eigenen Node-Server und zeigt die Astro-Seite in einem iframe. Native Drag-and-drop-Sortierung sowie zugängliche Hoch-/Runter-Buttons erstellen eine Vorschau und einen manuellen Änderungsvorschlag; sie patchen die MDX-Fixture nicht.
 
 ## Checks
 
@@ -31,7 +31,7 @@ pnpm run browser-tests # echte Chromium-Browsertests für den Galerie-Editor
 pnpm run verify       # Tests, synthetischer Sharp/Astro-Static-Build und bestehender Astro-Build
 ```
 
-Der HTTP-E2E-Test startet beide Server auf eigenen Testports, wartet auf Astos tatsächlich aktualisierte Galerie-Markierung und stellt die Fixture bytegenau wieder her. Die getrennte Playwright-Konfiguration nutzt Chromium und ausschließlich `browser-tests/**/*.spec.ts`; die Server laufen auf `127.0.0.1:15321` (Astro) und `127.0.0.1:15322` (Editor), ohne vorhandene Server wiederzuverwenden. Der Browser-Test prüft Galeriewahl, Drag-and-drop und Button-Sortierung, den wirklich neu gerenderten Astro-iframe samt unveränderter zweiter Galerie und begrenzt den MDX-Patch auf das gewählte Array. Die Fixture wird auch bei Testfehlern in `finally` bytegenau wiederhergestellt. Zusätzlich prüft ein mobiler Viewport auf horizontalen Overflow. Chromium lokal einmalig mit `pnpm exec playwright install chromium` installieren; CI installiert es samt System-Abhängigkeiten. Der Build-Verify baut denselben Slug zweimal mit unterschiedlichen Quellpixeln, vergleicht die dekodierten WebP-Pixel und baut anschließend mit restaurierter Quelle erneut, damit `dist/` zur Ausgangsquelle passt.
+Der HTTP-E2E-Test startet beide Server auf eigenen Testports, rendert die Galerien und bestätigt, dass Preview plus Bestätigung die Fixture bytegenau unverändert lassen. Die getrennte Playwright-Konfiguration nutzt Chromium und ausschließlich `browser-tests/**/*.spec.ts`; die Server laufen auf `127.0.0.1:15321` (Astro) und `127.0.0.1:15322` (Editor), ohne vorhandene Server wiederzuverwenden. Der Browser-Test prüft Galeriewahl, Drag-and-drop und Button-Sortierung, die exakte Vorschau, einen pfadfreien Proposal-Export und die unveränderte Astro-Ausgabe; die zweite Galerie bleibt unverändert. Die Fixture wird auch bei Testfehlern in `finally` bytegenau wiederhergestellt. Zusätzlich prüft ein mobiler Viewport auf horizontalen Overflow. Chromium lokal einmalig mit `pnpm exec playwright install chromium` installieren; CI installiert es samt System-Abhängigkeiten. Der Build-Verify baut denselben Slug zweimal mit unterschiedlichen Quellpixeln, vergleicht die dekodierten WebP-Pixel und baut anschließend mit restaurierter Quelle erneut, damit `dist/` zur Ausgangsquelle passt.
 
 ## Begrenzter Quellpatch
 

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
-test('gallery editing is isolated to the real Astro copied fixture and JSX spread stays read-only', async ({ page, request }) => {
+test('gallery editing is isolated to a disposable Astro copy and exports only a current-revision proposal', async ({ page, request }) => {
   const rootFixture = resolve('src/pages/fixture.mdx')
   const rootComponent = resolve('src/components/EditorUnknownChip.astro')
   const rootBytes = await readFile(rootFixture), componentBytes = await readFile(rootComponent)
@@ -26,7 +26,7 @@ test('gallery editing is isolated to the real Astro copied fixture and JSX sprea
   const beforeExternalWrite = await readFile((await readFile(copiedPath, 'utf8')).trim(), 'utf8')
   const externalSource = `${beforeExternalWrite}\n// external receipt-path revision before stale gallery commit\n`
   await writeFile((await readFile(copiedPath, 'utf8')).trim(), externalSource)
-  await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
+  await page.getByRole('button', { name: 'Bestätigen und Änderungsvorschlag erstellen' }).click()
   await expect(page.locator('#gallery-conflict').getByRole('alert')).toBeVisible()
   await expect(page.locator('#gallery-conflict')).toContainText('lokale Reihenfolge')
   await expect(page.locator('#diff-confirmation')).toBeHidden()
@@ -46,16 +46,32 @@ test('gallery editing is isolated to the real Astro copied fixture and JSX sprea
   expect(await readFile((await readFile(copiedPath, 'utf8')).trim(), 'utf8')).toBe(externalAfterReapplyPreview)
   await page.locator('#gallery-conflict').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' }).click()
   await expect(page.locator('#diff-confirmation')).toBeVisible()
-  await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
+  await page.getByRole('button', { name: 'Bestätigen und Änderungsvorschlag erstellen' }).click()
+  await expect(page.locator('#source-proposal-panel')).toBeVisible()
   const copiedFixturePath = (await readFile(copiedPath, 'utf8')).trim()
   const expected = externalAfterReapplyPreview.replace(array![1], JSON.stringify(next))
-  await expect.poll(() => readFile(copiedFixturePath, 'utf8')).toBe(expected)
+  expect(await readFile(copiedFixturePath, 'utf8')).toBe(externalAfterReapplyPreview)
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#source-proposal-export').click(),
+  ])
+  const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+  expect(proposal).toMatchObject({
+    schemaVersion: 1,
+    type: 'astro-visual-cms-source-proposal',
+    target: { kind: 'gallery-fixture', id: 'fixture' },
+    baseHash: createHash('sha256').update(externalAfterReapplyPreview).digest('hex'),
+    proposedHash: createHash('sha256').update(expected).digest('hex'),
+    change: { galleryId: 'HIGHLIGHTS', order: next },
+  })
+  expect(JSON.stringify(proposal)).not.toContain(copiedFixturePath)
+  expect(JSON.stringify(proposal)).not.toContain(externalAfterReapplyPreview)
   const afterCommit = await request.get('/api/state'); expect(afterCommit.ok()).toBeTruthy()
   expect(await readFile(rootFixture)).toEqual(rootBytes); expect(await readFile(rootComponent)).toEqual(componentBytes)
   await page.goto('http://127.0.0.1:15331/browser-synthetic/fixture/')
   await expect(page.locator('[data-nested-unknown]')).toBeVisible()
-  await expect(page.locator('section[data-gallery-order]').first()).toHaveAttribute('data-gallery-order', next.join(','))
-  const spread = expected.replace('<Gallery sorted={HIGHLIGHTS} />', '<Gallery {...{ sorted: HIGHLIGHTS }} />')
+  await expect(page.locator('section[data-gallery-order]').first()).toHaveAttribute('data-gallery-order', old.join(','))
+  const spread = externalAfterReapplyPreview.replace('<Gallery sorted={HIGHLIGHTS} />', '<Gallery {...{ sorted: HIGHLIGHTS }} />')
   await writeFile(copiedFixturePath, spread)
   const state = await request.get('/api/state'); expect(state.status()).toBe(422)
   expect(await state.json()).toMatchObject({ code: 'UNSUPPORTED_DYNAMIC_VALUE' })

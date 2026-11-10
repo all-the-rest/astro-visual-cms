@@ -1,8 +1,9 @@
 import { expect, test } from '@playwright/test'
+import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 
-test('a confirmed MDX collection field edit is rendered by Astro in an isolated project copy', async ({ page, request }) => {
+test('collection field edits produce revision-bound manual proposals in an isolated project copy', async ({ page, request }) => {
   const rootFixture = resolve('src/pages/fixture.mdx')
   const rootComponent = resolve('src/components/EditorUnknownChip.astro')
   const rootPage = resolve('src/pages/index.astro')
@@ -25,7 +26,7 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
   expect(catalog.configured).toBe(true)
   expect(catalog.collections).toHaveLength(1)
   expect(catalog.collections[0]).toMatchObject({ name: 'notes', supported: true, mode: 'editable' })
-  expect(catalog.collections[0].entries.map((entry: { id: string }) => entry.id)).toEqual(['entry.mdx'])
+  expect(catalog.collections[0].entries.map((entry: { id: string }) => entry.id)).toEqual(['nested/entry.mdx'])
   expect(catalog.collections[0].fields.map((field: { name: string; editable: boolean }) => [field.name, field.editable])).toEqual([['title', true], ['rank', true]])
   expect(JSON.stringify(catalog)).not.toContain('avcms-readonly-')
 
@@ -52,7 +53,7 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
   await expect(page.frameLocator('#preview').locator('[data-entry-title]')).toHaveText('Synthetic collection entry')
   await expect(page.locator('#collections-panel')).toBeVisible()
   await expect(page.getByRole('group', { name: 'Collection auswählen' }).getByRole('button', { name: 'notes' })).toBeEnabled()
-  await expect(page.getByRole('group', { name: 'Eintrag auswählen' }).getByRole('button', { name: 'entry.mdx' })).toBeEnabled()
+  await expect(page.getByRole('group', { name: 'Eintrag auswählen' }).getByRole('button', { name: 'nested/entry.mdx' })).toBeEnabled()
   const titleInput = () => page.locator('#collection-fields label').filter({ hasText: 'title (string)' }).locator('input')
   const baseline = catalog.collections[0].entries[0].hash as string
   await writeFile(receipt.contentFile, original.replace('rank: 7', 'rank: 8'))
@@ -86,11 +87,27 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
   await page.keyboard.press('Enter')
   await expect(page.locator('#collection-diff-after')).toContainText('First local title')
   await page.locator('#confirm-collection-change').click()
-  await expect(page.locator('#status')).toContainText('Gespeichert.')
+  await expect(page.locator('#status')).toContainText('Nicht gespeichert')
+  await expect(page.locator('#source-proposal-panel')).toBeVisible()
   let afterFirst = await readFile(receipt.contentFile, 'utf8')
-  expect(afterFirst).toContain('rank: 9')
-  expect(afterFirst).toContain('title: "First local title"')
-  expect(afterFirst.replace('rank: 9', 'rank: 7').replace('title: "First local title"', 'title: "Synthetic collection entry"')).toBe(original)
+  expect(afterFirst).toBe(beforeExternalPreview.replace('rank: 8', 'rank: 9'))
+  const [fieldDownload] = await Promise.all([
+    page.waitForEvent('download'), page.locator('#source-proposal-export').click(),
+  ])
+  const fieldProposal = JSON.parse(await readFile(await fieldDownload.path(), 'utf8'))
+  expect(fieldProposal).toMatchObject({
+    type: 'astro-visual-cms-source-proposal',
+    target: { kind: 'collection-entry' },
+    change: { collectionId: 'notes', field: 'title', value: 'First local title' },
+  })
+  expect(fieldProposal.target.id).toMatch(/^entry-[0-9a-f-]{36}$/)
+  expect(fieldProposal.change).not.toHaveProperty('entryId')
+  expect(JSON.stringify(fieldProposal)).not.toContain('nested/entry.mdx')
+  expect(fieldProposal.baseHash).toBe(createHash('sha256').update(afterFirst).digest('hex'))
+  expect(fieldProposal.proposedHash).toBe(createHash('sha256').update(afterFirst.replace('title: "Synthetic collection entry"', 'title: "First local title"')).digest('hex'))
+  expect(fieldProposal.contextHash).toBe(catalog.configHash)
+  expect(JSON.stringify(fieldProposal)).not.toContain(receipt.contentFile)
+  expect(JSON.stringify(fieldProposal)).not.toContain(afterFirst)
 
   await titleInput().fill('discard this local value')
   await titleInput().fill('')
@@ -143,38 +160,34 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
   await page.locator('#collection-conflicts').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' }).click()
   await expect(page.locator('#collection-diff-after')).toContainText('Second local title')
   await page.locator('#confirm-collection-change').click()
-  await expect(page.locator('#status')).toContainText('Gespeichert.')
+  await expect(page.locator('#status')).toContainText('Nicht gespeichert')
+  await expect(page.locator('#source-proposal-panel')).toBeVisible()
   const finalSource = await readFile(receipt.contentFile, 'utf8')
   expect(finalSource).toContain('rank: 12')
-  expect(finalSource).toContain('title: "Second local title"')
+  expect(finalSource).toContain('title: "Synthetic collection entry"')
   await expect(collectionRoute).toHaveAttribute('aria-pressed', 'true')
-  await expect(page.frameLocator('#preview').locator('[data-entry-title]')).toHaveText('Second local title')
+  await expect(page.frameLocator('#preview').locator('[data-entry-title]')).toHaveText('Synthetic collection entry')
 
-  await expect.poll(async () => (await request.get(route)).text()).toMatch(/<h1 data-entry-title(?:\s[^>]*)?>Second local title<\/h1>/)
+  await expect.poll(async () => (await request.get(route)).text()).toMatch(/<h1 data-entry-title(?:\s[^>]*)?>Synthetic collection entry<\/h1>/)
   const rendered = await (await request.get(route)).text()
   expect(rendered).toContain('Nested synthetic component')
-  expect(rendered).toMatch(/<p data-entry-rank="12"(?:\s[^>]*)?>12<\/p>/)
+  expect(rendered).toMatch(/<p data-entry-rank="\d+"(?:\s[^>]*)?>\d+<\/p>/)
 
+  await page.locator('#collection-conflicts').getByRole('button', { name: 'Verwerfen und neu laden' }).click()
   await titleInput().fill('Write-blocked draft')
   await page.locator('#collection-fields label').filter({ hasText: 'title (string)' }).getByRole('button', { name: 'Vorschau' }).click()
   await expect(page.locator('#collection-diff-after')).toContainText('Write-blocked draft')
-  await page.route('**/api/collections/commit', route => route.fulfill({
-    status: 409,
-    contentType: 'application/json',
-    body: JSON.stringify({ code: 'SOURCE_REPLACEMENT_DISABLED', error: 'Safe source replacement mode blocks replacing existing source files; no changes were written.' }),
-  }))
   await page.locator('#confirm-collection-change').click()
-  await expect(page.locator('#collection-conflicts')).toContainText('Schreibstatus: Blockiert; keine externe Revision erkannt')
+  await expect(page.locator('#source-proposal-panel')).toBeVisible()
+  await expect(page.locator('#status')).toContainText('Nicht gespeichert')
   await expect(page.locator('#collection-conflicts')).toContainText('Write-blocked draft')
-  await expect(page.locator('#collection-conflicts').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' })).toBeDisabled()
   expect(await readFile(receipt.contentFile, 'utf8')).toBe(finalSource)
-  await page.unroute('**/api/collections/commit')
 
   const createForm = page.locator('#create-entry-form')
   const createSlug = createForm.locator('[name="slug"]')
   const createTitle = page.locator('#create-entry-fields [data-field-name="title"]')
   const createRank = page.locator('#create-entry-fields [data-field-name="rank"]')
-  const createdFile = (slug: string) => join(dirname(receipt.contentFile), `${slug}.mdx`)
+  const createdFile = (slug: string) => join(dirname(dirname(receipt.contentFile)), `${slug}.mdx`)
   const fileExists = async (file: string) => { try { await readFile(file); return true } catch { return false } }
   expect(catalog.collections[0].creationSupported).toBe(true)
   await createSlug.fill('poll-reapply-note')
@@ -279,7 +292,7 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await poll
   }
-  const verifyConfigOperation = async (formSelector: string, values: Record<string, string>, expectedLocalText: string) => {
+  const verifyConfigOperation = async (formSelector: string, values: Record<string, string>, expectedLocalText: string, action: string) => {
     const form = page.locator(formSelector)
     await expect(form).toBeVisible()
     for (const [name, value] of Object.entries(values)) {
@@ -314,44 +327,101 @@ test('a confirmed MDX collection field edit is rendered by Astro in an isolated 
     await expect(page.locator('#config-confirmation')).toBeVisible()
     await expect(page.locator('#config-diff')).toContainText(expectedLocalText)
     await configCommit.click()
-    await expect(page.locator('#status')).toContainText('Konfiguration gespeichert.')
-    expect(await readFile(receipt.configFile, 'utf8')).toContain(configComment.trim())
+    await expect(page.locator('#status')).toContainText('Schreibstatus blockiert')
+    await expect(configConflict).toBeHidden()
+    const currentConfig = await readFile(receipt.configFile, 'utf8')
+    expect(currentConfig).toBe(externalAfterPreview)
+    if (action === 'create-collection') {
+      await expect(page.locator('#status')).toContainText('relativen Loader-Basispfad')
+      await expect(page.locator('#source-proposal-panel')).toBeHidden()
+      return await readFile(receipt.configFile)
+    }
+    await expect(page.locator('#source-proposal-panel')).toBeVisible()
+    const [download] = await Promise.all([
+      page.waitForEvent('download'), page.locator('#source-proposal-export').click(),
+    ])
+    const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+    const expectedSource = currentConfig.slice(0, proposal.diff.start) + proposal.diff.after + currentConfig.slice(proposal.diff.end)
+    expect(proposal).toMatchObject({
+      type: 'astro-visual-cms-source-proposal',
+      target: { kind: 'collection-config', id: 'content-config' },
+      baseHash: createHash('sha256').update(currentConfig).digest('hex'),
+    })
+    expect(proposal.proposedHash).toBe(createHash('sha256').update(expectedSource).digest('hex'))
+    expect(proposal.change.action).toBe(action)
+    expect(JSON.stringify(proposal)).not.toContain(receipt.configFile)
+    expect(JSON.stringify(proposal)).not.toContain(currentConfig)
     return await readFile(receipt.configFile)
   }
 
   const configAfterCreation = await verifyConfigOperation('#create-collection-form', {
     name: 'browser_copy_notes', base: './src/content/acceptance-notes', pattern: '*.md',
     fieldName: 'label', fieldType: 'string', enumValues: '',
-  }, 'browser_copy_notes')
+  }, 'browser_copy_notes', 'create-collection')
   const configAfterExtension = await verifyConfigOperation('#extend-field-form', {
     fieldName: 'browser_copy_flag', fieldType: 'boolean', enumValues: '',
-  }, 'browser_copy_flag')
-
-  const policyField = page.locator('#extend-field-form')
-  await policyField.locator('[name="fieldName"]').fill('browser_copy_policy')
-  await policyField.locator('[name="fieldType"]').selectOption('string')
-  await policyField.locator('button[type="submit"]').click()
-  await expect(page.locator('#config-diff')).toContainText('browser_copy_policy')
-  await page.route('**/api/collections/config/commit', route => route.fulfill({
-    status: 409,
-    contentType: 'application/json',
-    body: JSON.stringify({ code: 'SOURCE_REPLACEMENT_DISABLED', error: 'Safe source replacement mode blocks replacing existing source files; no changes were written.' }),
-  }))
-  await configCommit.click()
-  await expect(page.locator('#status')).toContainText('Schreibstatus blockiert')
-  await expect(configConflict).toBeHidden()
-  await expect(policyField.locator('[name="fieldName"]')).toHaveValue('browser_copy_policy')
-  expect(await readFile(receipt.configFile)).toEqual(configAfterExtension)
-  await page.unroute('**/api/collections/config/commit')
+  }, 'browser_copy_flag', 'extend-collection')
 
   expect(configAfterExtension).not.toEqual(config)
-  expect(configAfterExtension.toString()).toContain('browser_copy_notes')
-  expect(configAfterExtension.toString()).toContain('browser_copy_flag')
-  expect(configAfterCreation.toString()).toContain('browser_copy_notes')
+  expect(configAfterExtension.toString()).not.toContain('browser_copy_notes')
+  expect(configAfterExtension.toString()).not.toContain('browser_copy_flag')
+  expect(configAfterCreation.toString()).not.toContain('browser_copy_notes')
   expect(await readFile(receipt.configFile)).toEqual(configAfterExtension)
   expect(await readFile(receipt.pageFile)).toEqual(pageSource)
   expect(await readFile(rootFixture)).toEqual(rootFixtureBytes)
   expect(await readFile(rootComponent)).toEqual(rootComponentBytes)
   expect(await readFile(rootPage)).toEqual(rootPageBytes)
   expect(await readFile(rootConfig)).toEqual(rootConfigBytes)
+})
+
+test('collection-entry proposals are not exported after their config revision changes', async ({ page }) => {
+  const receiptPath = resolve('test-results/readonly-collection-copy-path')
+  await expect.poll(async () => { try { return (await readFile(receiptPath, 'utf8')).length > 0 } catch { return false } }).toBe(true)
+  const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as { contentFile: string; configFile: string }
+  const originalEntry = await readFile(receipt.contentFile, 'utf8')
+  const originalConfig = await readFile(receipt.configFile, 'utf8')
+  expect(originalEntry).toContain('title: "Synthetic collection entry"')
+  let downloads = 0
+  page.on('download', () => { downloads += 1 })
+  await page.addInitScript(() => {
+    const nativeSetInterval = window.setInterval.bind(window)
+    const editorPolls: number[] = []
+    ;(window as Window & { stopEditorPolls?: () => void }).stopEditorPolls = () => {
+      for (const interval of editorPolls) window.clearInterval(interval)
+      editorPolls.length = 0
+    }
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      const interval = nativeSetInterval(handler, timeout, ...args)
+      if (timeout === 2000) editorPolls.push(interval)
+      return interval
+    }) as typeof window.setInterval
+  })
+
+  try {
+    await page.goto('/')
+    const collectionRoute = page.getByRole('navigation', { name: 'Vorschau-Route' }).getByRole('button', { name: 'Collection proof' })
+    await collectionRoute.click()
+    await expect(page.locator('#collections-panel')).toBeVisible()
+    const titleInput = page.locator('#collection-fields label').filter({ hasText: 'title (string)' }).locator('input')
+    await expect(titleInput).toHaveValue('')
+    await titleInput.fill('Revision-bound entry draft')
+    await page.locator('#collection-fields label').filter({ hasText: 'title (string)' }).getByRole('button', { name: 'Vorschau' }).click()
+    await expect(page.locator('#collection-diff-after')).toContainText('Revision-bound entry draft')
+    await page.locator('#confirm-collection-change').click()
+    await expect(page.locator('#source-proposal-panel')).toBeVisible()
+    await expect(page.locator('#source-proposal-export')).toBeEnabled()
+    await page.evaluate(() => (window as Window & { stopEditorPolls?: () => void }).stopEditorPolls?.())
+
+    const changedConfig = `${originalConfig}\n// external config revision after entry proposal\n`
+    await writeFile(receipt.configFile, changedConfig)
+    await page.locator('#source-proposal-export').click()
+    await expect(page.locator('#source-proposal-panel')).toBeHidden()
+    await expect(page.locator('#status')).toContainText('gebundene Quellrevision ist nicht mehr aktuell')
+    await expect(titleInput).toHaveValue('Revision-bound entry draft')
+    expect(await readFile(receipt.contentFile, 'utf8')).toBe(originalEntry)
+    expect(await readFile(receipt.configFile, 'utf8')).toBe(changedConfig)
+    expect(downloads).toBe(0)
+  } finally {
+    await writeFile(receipt.configFile, originalConfig)
+  }
 })

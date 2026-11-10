@@ -5,6 +5,14 @@
 - **Date:** 2026-11-07
 - **Scope:** Architecture choice after Phase 0 only; no production-content migration
 
+> **Policy update (2026-11-09):** This ADR records the prototype's historical
+> writer experiments. Current server endpoints do not replace existing source
+> files: confirmation produces a path-free, revision-bound manual proposal.
+> `safeSourceReplacementMode: false` is rejected. Exclusive creation of a new
+> collection entry remains the only editor source-write operation. See
+> [`editor-package.md`](../editor-package.md#source-replacement-policy) for the
+> current contract.
+
 ## Context
 
 Phase 0 compared TinaCMS, `astro-dev-edit`, Opace, and the existing prototype
@@ -56,27 +64,28 @@ The detailed comparison and command evidence are recorded in the Phase 0
 
 ## Phase 3 follow-on (2026-11-08)
 
-The development-only editor now has an opt-in, server-configured content-collection
-catalog and confirmed frontmatter-scalar edits for a narrowly supported static
-Astro subset. The default synthetic gallery workflow is unchanged when no trusted
-collection config is supplied. Collection-configuration writes are limited to
-the bounded API-only slice below. This follow-on does not expand the ADR
+The development-only editor has an opt-in, server-configured content-collection
+catalog and preview/proposal handling for frontmatter-scalar edits in a narrowly
+supported static Astro subset. Existing entries and configs are not written by
+the editor. The default synthetic gallery workflow is unchanged when no trusted
+collection config is supplied. This follow-on does not expand the ADR
 into a general content writer or approve production use. The supported paths,
 patterns, validation boundary, and
 remaining race/security limitations are documented in
 [`gallery-editor.md`](../gallery-editor.md#phase-3-collection-editor-experimentell-nicht-produktionsreif).
 
-### Phase 3 schema configuration write slice (2026-11-08)
+### Phase 3 schema configuration preview/proposal slice (2026-11-08; current write policy supersedes original behavior)
 
-The API-only config endpoint supports one new static glob collection or one
+The API-only config endpoint can preview one new static glob collection or one
 field on an existing supported schema. The config target remains server-trusted;
 preview binds the original config hash, exact diff, operation, and editor
-session; commit replans before using the atomic writer. The local editor now
-offers capability-gated forms for one-field collection creation and one-field
-schema extension, with exact-diff confirmation and cancellation. New collection
-bases must already exist as regular in-root directories; this operation does
-not create content directories or entries. This narrowly tested capability does
-not establish Astro/Zod compatibility or production readiness.
+session. The local editor offers capability-gated forms for one-field collection
+creation and one-field schema extension. Under the current policy, confirmation
+is refused and may export a manual proposal; it does not call a replacement
+writer. New collection bases must already exist as regular in-root directories;
+this operation does not create content directories or entries. This narrowly
+tested capability does not establish Astro/Zod compatibility or production
+readiness.
 
 ## Phase 4 bounded adapter experiment (2026-11-08)
 
@@ -92,28 +101,29 @@ for the supported syntax and unresolved identity-analysis limits.
 The adapter is now optionally wired through trusted server-side target
 configuration to a path-free catalog and authenticated preview/confirm API.
 The UI only appears when targets are configured and renders the exact source
-diff using text nodes. Commits revalidate and use the existing atomic source
-writer. The feature remains a local prototype: shadowing/binding ambiguity,
+diff using text nodes. Under the current policy, confirmation is refused and
+offers a manual proposal bound to the expected source hash; it does not use the
+replacement writer. The feature remains a local prototype: shadowing/binding ambiguity,
 non-cooperating concurrent filesystem changes, visual preview of arbitrary
 target routes, broader literal forms, and release compatibility gates remain
 unresolved.
 
 ### Per-source writer lock (2026-11-09)
 
-`writeSourceAtomically` now creates an exclusive same-directory sidecar lock
-before reading the source and holds it through the atomic rename. Concurrent
-editor requests/processes using this writer fail closed with a stale-source
-conflict; the source hash is checked only after the lock is acquired. Same-
-process and child-process tests hold the lock while competing writes attempt
-different edits, then confirm the winner's bytes survive and no temporary or
-lock files remain.
+`writeSourceAtomically` (a low-level helper, not used for server replacement)
+creates an exclusive same-directory sidecar lock before reading the source and
+holds it through the atomic rename. Same-process and child-process tests hold
+the lock while competing writes attempt different edits, then confirm the
+winner's bytes survive and no temporary or lock files remain.
 Normal failures release the lock in `finally`. A forced process termination can
 leave a stale lock; inspect its recorded PID and remove the sidecar only after
 confirming its owner is gone. This is a cooperative writer protocol, not a
 portable filesystem compare-and-swap: arbitrary external programs that ignore
 the lock can still modify the target during the final check-to-rename interval.
-The Issue #1 cross-writer gate therefore remains partial until that boundary is
-accepted or all relevant writers participate in a stronger protocol.
+This lock protocol is not a portable compare-and-swap and does not protect
+against arbitrary writers. Current server replacement endpoints avoid that race
+by refusing existing-source writes. Exclusive creation uses its separate
+no-replace creation path.
 
 ### Phase 5 explicit-marker selection proof (2026-11-08)
 

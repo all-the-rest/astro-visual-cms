@@ -45,8 +45,8 @@ async function close(server) {
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
 }
 
-async function start(t, options, unsafeReplacementOptOut = true) {
-  const server = createEditorServer({ port: 0, ...(unsafeReplacementOptOut ? { safeSourceReplacementMode: false } : {}), ...options })
+async function start(t, options) {
+  const server = createEditorServer({ port: 0, ...options })
   const origin = await listen(server)
   t.after(() => close(server))
   const token = (await (await fetch(`${origin}/api/session`)).json()).token
@@ -94,7 +94,7 @@ test('discovery endpoint exposes a bounded, path-free catalog and explicit unsup
   assert.equal(wrongOrigin.status, 403)
 })
 
-test('schema extension config API previews exact patch and writes only after a matching confirmation', async (t) => {
+test('schema extension config API previews exact patch and refuses replacement after confirmation', async (t) => {
   const project = await makeProject(t)
   let writes = 0
   const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath, writeSource: async (...args) => { writes += 1; const { writeSourceAtomically } = await import('../src/editor/source-write.mjs'); return writeSourceAtomically(...args) } })
@@ -120,12 +120,13 @@ test('schema extension config API previews exact patch and writes only after a m
   const invalid = await fetch(`${origin}/api/collections/config/preview`, { method: 'POST', headers, body: JSON.stringify({ ...operation, path: project.configPath }) })
   assert.equal(invalid.status, 422)
   const commit = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
-  assert.equal(commit.status, 200, JSON.stringify(await commit.json()))
-  assert.equal(writes, 1)
-  assert.match(await readFile(project.configPath, 'utf8'), /"summary": z\.string\(\)\.optional\(\)/)
+  assert.equal(commit.status, 409)
+  assert.equal((await commit.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(writes, 0)
+  assert.equal(await readFile(project.configPath, 'utf8'), before)
 })
 
-test('static collection creation previews, validates and writes only the trusted config after same-session confirmation', async (t) => {
+test('static collection creation previews a path-free config patch but cannot replace the existing config', async (t) => {
   const project = await makeProject(t)
   const collectionBase = path.join(project.projectRoot, 'src/content/notes')
   await mkdir(collectionBase, { recursive: true })
@@ -169,16 +170,14 @@ test('static collection creation previews, validates and writes only the trusted
   assert.equal(writes, 0)
 
   const commit = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
-  assert.equal(commit.status, 200)
-  assert.equal(writes, 1)
-  const updated = await readFile(project.configPath, 'utf8')
-  assert.equal(updated, original.slice(0, preview.diff.start) + preview.diff.after + original.slice(preview.diff.end))
-  assert.equal(hash(updated), preview.nextHash)
-  assert.match(updated, /"notes": defineCollection/)
+  assert.equal(commit.status, 409)
+  assert.equal((await commit.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(writes, 0)
+  assert.equal(await readFile(project.configPath, 'utf8'), original)
   assert.equal(await readFile(project.entryPath, 'utf8'), entrySource)
   assert.deepEqual(await readdir(collectionBase), [], 'creation never adds content files')
   const catalog = await (await fetch(`${origin}/api/collections`)).json()
-  assert.ok(catalog.collections.some((collection) => collection.id === 'notes' && collection.supported))
+  assert.equal(catalog.collections.some((collection) => collection.id === 'notes'), false)
 })
 
 test('collection creation cancel, stale config and unsafe bases never write', async (t) => {
@@ -217,7 +216,7 @@ test('collection creation cancel, stale config and unsafe bases never write', as
   assert.match(await readFile(project.configPath, 'utf8'), /external change/)
 })
 
-test('collection creation revalidates its base and reports a stale atomic write as 409', async (t) => {
+test('collection creation revalidates its base and then refuses all existing-config replacement', async (t) => {
   const project = await makeProject(t)
   const collectionBase = path.join(project.projectRoot, 'src/content/notes')
   const outsideBase = path.join(project.projectRoot, 'outside-notes')
@@ -242,12 +241,12 @@ test('collection creation revalidates its base and reports a stale atomic write 
   await rm(collectionBase)
   await mkdir(collectionBase)
   const writerPreview = await (await fetch(`${origin}/api/collections/config/create/preview`, { method: 'POST', headers, body: JSON.stringify(operation) })).json()
-  const staleWrite = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: writerPreview.previewId }) })
-  assert.equal(staleWrite.status, 409)
-  const result = await staleWrite.json()
-  assert.equal(result.code, 'STALE_CONFIG')
+  const refused = await fetch(`${origin}/api/collections/config/create/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: writerPreview.previewId }) })
+  assert.equal(refused.status, 409)
+  const result = await refused.json()
+  assert.equal(result.code, 'SOURCE_REPLACEMENT_DISABLED')
   assert.doesNotMatch(result.error, /private config path/)
-  assert.equal(writes, 1)
+  assert.equal(writes, 0)
   assert.equal(await readFile(project.configPath, 'utf8'), original)
 })
 
@@ -279,12 +278,13 @@ test('schema config preview cancellation and stale config never invoke the write
   assert.match(await readFile(project.configPath, 'utf8'), /external change/)
 })
 
-test('a stale atomic-writer result becomes a safe config conflict', async (t) => {
+test('existing-config replacement policy blocks before an injected atomic writer', async (t) => {
   const project = await makeProject(t)
+  let writes = 0
   const { origin, headers } = await start(t, {
     projectRoot: project.projectRoot,
     contentConfigPath: project.configPath,
-    writeSource: async () => { const error = new Error('private path detail'); error.code = 'STALE_HASH'; throw error },
+    writeSource: async () => { writes += 1; const error = new Error('private path detail'); error.code = 'STALE_HASH'; throw error },
   })
   const source = await readFile(project.configPath, 'utf8')
   const operation = { collection: 'posts', field: { name: 'summary', type: 'string', required: true }, hash: hash(source) }
@@ -292,8 +292,9 @@ test('a stale atomic-writer result becomes a safe config conflict', async (t) =>
   const response = await fetch(`${origin}/api/collections/config/commit`, { method: 'POST', headers, body: JSON.stringify({ ...operation, previewId: preview.previewId }) })
   assert.equal(response.status, 409)
   const result = await response.json()
-  assert.equal(result.code, 'STALE_CONFIG')
+  assert.equal(result.code, 'SOURCE_REPLACEMENT_DISABLED')
   assert.doesNotMatch(result.error, /private path detail/)
+  assert.equal(writes, 0)
   assert.equal(await readFile(project.configPath, 'utf8'), source)
 })
 
@@ -349,7 +350,7 @@ test('static glob entry creation previews YAML, validates values and exclusively
   assert.equal(creations, 1)
 })
 
-test('collection field preview is exact and path-free; cancel/no-confirm never writes, confirmation writes one scalar', async (t) => {
+test('collection field preview is exact and path-free; confirmation refuses replacement and preserves source', async (t) => {
   const project = await makeProject(t)
   const { origin, headers } = await start(t, { projectRoot: project.projectRoot, contentConfigPath: project.configPath })
   const state = await (await fetch(`${origin}/api/collections`)).json()
@@ -392,6 +393,7 @@ test('collection field preview is exact and path-free; cancel/no-confirm never w
     before: '"Old title"',
     after: '"New title"',
   })
+  assert.equal(preview.contextHash, state.configHash)
   assert.doesNotMatch(JSON.stringify(preview), /content\.config|src\/content|astro-collection-server/)
   assert.equal(await readFile(project.entryPath, 'utf8'), untouched, 'preview must not write')
 
@@ -406,11 +408,9 @@ test('collection field preview is exact and path-free; cancel/no-confirm never w
     method: 'POST', headers,
     body: JSON.stringify({ ...edit, previewId: secondPreview.previewId }),
   })
-  assert.equal(commitResponse.status, 200)
-  assert.deepEqual(await commitResponse.json(), {
-    collectionId: 'posts', entryId: 'nested/one.md', field: 'title', hash: hash(untouched.replace('"Old title"', '"New title"')),
-  })
-  assert.equal(await readFile(project.entryPath, 'utf8'), untouched.replace('"Old title"', '"New title"'))
+  assert.equal(commitResponse.status, 409)
+  assert.equal((await commitResponse.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+  assert.equal(await readFile(project.entryPath, 'utf8'), untouched)
 })
 
 test('default replacement policy blocks collection-field and schema commits with actionable 409 and no writer call', async (t) => {
@@ -437,6 +437,10 @@ test('default replacement policy blocks collection-field and schema commits with
   assert.match(refusal.error, /no changes were written/i)
   assert.equal(writes, 0)
   assert.equal(await readFile(project.configPath, 'utf8'), originalConfig)
+})
+
+test('legacy safeSourceReplacementMode false is rejected instead of enabling the unsafe writer', () => {
+  assert.throws(() => createEditorServer({ safeSourceReplacementMode: false }), /no longer supported/)
 })
 
 test('default replacement policy permits only exclusive new entry creation and preserves a colliding path', async (t) => {

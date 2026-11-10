@@ -39,15 +39,23 @@ test('in-context selection accepts only a marked supported instance from the cur
     await expect(page.locator('#mdx-diff-after')).toHaveText(`"${updated}"`)
     expect(await readFile(fixture)).toEqual(beforeSelection)
     await page.locator('#mdx-confirm-button').click()
-    await expect(page.getByRole('status')).toContainText('MDX-Änderung gespeichert.')
-    await page.locator('#preview').evaluate((frame: HTMLIFrameElement) => {
-      frame.src = `${frame.src.split('?')[0]}?after-edit=${Date.now()}`
+    await expect(page.getByRole('status')).toContainText('Nicht gespeichert')
+    await expect(page.locator('#source-proposal-panel')).toBeVisible()
+    expect(await readFile(fixture)).toEqual(beforeSelection)
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.locator('#source-proposal-export').click(),
+    ])
+    const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+    expect(proposal).toMatchObject({
+      schemaVersion: 1,
+      type: 'astro-visual-cms-source-proposal',
+      target: { kind: 'mdx-target', id: 'fixture' },
+      change: { instanceId: 'marker-two', prop: 'label', value: updated },
+      diff: { before: '"Zweiter synthetischer Auswahlmarker"', after: `"${updated}"` },
     })
-    const frameAfter = page.frameLocator('#preview')
-    await expect(frameAfter.locator('[data-astro-visual-cms-instance="marker-two"]')).toContainText(updated)
-    const changed = await readFile(fixture, 'utf8')
-    expect(changed).toContain(`<EditorUnknownChip id="marker-two" label="${updated}" />`)
-    expect(changed).toBe(beforeSelection.toString('utf8').replace('"Zweiter synthetischer Auswahlmarker"', JSON.stringify(updated)))
+    expect(JSON.stringify(proposal)).not.toContain(fixture)
+    expect(JSON.stringify(proposal)).not.toContain(beforeSelection.toString('utf8'))
     expect(writeRequests).toHaveLength(2)
 
     await frame.locator('body').evaluate((body) => {
@@ -70,6 +78,6 @@ test('in-context selection accepts only a marked supported instance from the cur
     })
     await expect(page.locator('#mdx-instance')).toHaveValue('marker-two', 'a message from the editor window must be ignored')
   } finally {
-    await writeFile(fixture, original)
+    if (!(await readFile(fixture)).equals(original)) await writeFile(fixture, original)
   }
 })

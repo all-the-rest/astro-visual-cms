@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 
-test('a dev-only source-mapped Markdown paragraph is selectable, confirmed, and rerendered in an isolated Astro copy', async ({ page, request }) => {
+test('a dev-only source-mapped Markdown paragraph exports a revision-bound proposal in an isolated Astro copy', async ({ page, request }) => {
   const trackedFiles = ['src/pages/fixture.mdx', 'src/components/EditorUnknownChip.astro', 'astro.config.mjs']
   const trackedBytes = await Promise.all(trackedFiles.map((file) => readFile(resolve(file))))
   const receiptPath = resolve('test-results/readonly-markdown-copy-path')
@@ -55,17 +55,35 @@ test('a dev-only source-mapped Markdown paragraph is selectable, confirmed, and 
   await expect(page.locator('#mdx-diff-after')).toHaveText('Updated mapped Markdown paragraph.')
   expect(await readFile(copiedFile, 'utf8')).toBe(initial)
   await page.locator('#mdx-confirm-button').click()
-  await expect(page.locator('#status')).toContainText('MDX-Änderung gespeichert.')
-  await expect.poll(() => readFile(copiedFile, 'utf8')).toBe(expected)
+  await expect(page.locator('#status')).toContainText('Nicht gespeichert')
+  await expect(page.locator('#source-proposal-panel')).toBeVisible()
+  expect(await readFile(copiedFile, 'utf8')).toBe(initial)
   expect(operations).toHaveLength(2)
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#source-proposal-export').click(),
+  ])
+  const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+  expect(proposal).toMatchObject({
+    schemaVersion: 1,
+    type: 'astro-visual-cms-source-proposal',
+    target: { kind: 'mdx-target', id: 'markdown-note' },
+    baseHash: createHash('sha256').update(initial).digest('hex'),
+    proposedHash: createHash('sha256').update(expected).digest('hex'),
+    change: { instanceId: 'paragraph-one', prop: 'text', value: 'Updated mapped Markdown paragraph.' },
+    diff: { before: 'Synthetic mapped Markdown paragraph.', after: 'Updated mapped Markdown paragraph.' },
+  })
+  expect(JSON.stringify(proposal)).not.toContain(copiedFile)
+  expect(JSON.stringify(proposal)).not.toContain(initial)
 
   await preview.evaluate((frame: HTMLIFrameElement) => { frame.src = `http://127.0.0.1:15331/browser-synthetic/markdown-proof/?revision=${Date.now()}` })
   const rerendered = page.frameLocator('#preview')
-  await expect(rerendered.locator('[data-astro-visual-cms-target="markdown-note"]')).toHaveText('Updated mapped Markdown paragraph.')
+  await expect(rerendered.locator('[data-astro-visual-cms-target="markdown-note"]')).toHaveText('Synthetic mapped Markdown paragraph.')
   const renderedResponse = await request.get('http://127.0.0.1:15331/browser-synthetic/markdown-proof/')
-  expect(await renderedResponse.text()).toContain('Updated mapped Markdown paragraph.')
+  expect(await renderedResponse.text()).toContain('Synthetic mapped Markdown paragraph.')
 
-  const duplicate = `${expected}\n\nA second paragraph makes this mapping ambiguous.\n`
+  const duplicate = `${initial}\n\nA second paragraph makes this mapping ambiguous.\n`
   await writeFile(copiedFile, duplicate)
   const unsupported = await (await request.get('/api/mdx-components')).json()
   expect(unsupported.targets[0]).toMatchObject({ id: 'markdown-note', supported: false })

@@ -19,11 +19,11 @@ Der Patchbereich stammt aus dem JavaScript-AST innerhalb des zugehörigen MDX-ES
 
 Die Diff-Offsets in der Preview sind JavaScript-String-/UTF-16-Codeeinheiten, keine UTF-8-Bytepositionen. Der Preview-Response enthält den exakten Bereich `before`/`after`, Offsets, Hashes und eine kurzlebige Preview-ID; er enthält weder vollständigen Quelltext noch Dateipfad.
 
-## Writer und Konfliktgrenze
+## Legacy-Writer und aktuelle Konfliktgrenze
 
 Der Dateischreiber liest die Originalbytes und prüft den erwarteten SHA-256-Hash, schreibt die neue Quelle in eine zufällig benannte temporäre Datei im selben Verzeichnis und prüft den Hash der Originaldatei unmittelbar vor dem atomaren Rename erneut. Fehlt die exakte kleingeschriebene 64-stellige Hash-Angabe oder stimmt eine Prüfung nicht, gibt es `STALE_HASH` (HTTP 409) und keinen Commit; Fehler räumen die temporäre Datei bestmöglich auf. Der injizierbare Dateisystemvertrag des Writers umfasst nur `readFile`, `writeFile`, `rename` und `unlink`.
 
-Es bleibt ein nicht eliminierter Race-Abschnitt zwischen der letzten Hashprüfung und `rename`: Ein externer Schreiber kann in genau diesem Abschnitt noch ändern, und der Rename kann diese Änderung ersetzen. Der Demo-Server ist für einen einzelnen lokalen Prozess gedacht. Der doppelte Hash-Check und der atomare Rename sind **kein** prozessübergreifendes Compare-and-Swap und keine Produktionsgarantie.
+Es bleibt ein nicht eliminierter Race-Abschnitt zwischen der letzten Hashprüfung und `rename`: Ein externer Schreiber kann in genau diesem Abschnitt noch ändern, und der Rename kann diese Änderung ersetzen. Deshalb verwenden die bestehenden-Quell-HTTP-Endpunkte diesen Writer nicht: ihre Bestätigung wird fail-closed abgelehnt. Der Hash-Check plus Rename ist **kein** plattformübergreifendes, prozessübergreifendes Compare-and-Swap und keine Produktionsgarantie.
 
 ## Adapter-Vertrag
 
@@ -40,9 +40,9 @@ Der HTTP-Client kann für eine Preview nur `galleryId`, `order` und `hash` sende
 
 ## Bedienung, Diff-Bestätigung und Vorschau
 
-Die UI lässt eine Galerie auswählen und deren Einträge nativ per Drag-and-drop oder mit ↑/↓-Buttons sortieren. Ein Sortiervorgang ruft zuerst `POST /api/preview` auf. Der Server prüft aktuelle Quelle und Adapter, erzeugt eine kurzlebige, einmal verwendbare Preview-Bindung und liefert nur die beschriebene Änderung. Die UI zeigt `before`/`after`; erst der explizite Bestätigungsbutton sendet `POST /api/commit`.
+Die UI lässt eine Galerie auswählen und deren Einträge nativ per Drag-and-drop oder mit ↑/↓-Buttons sortieren. Ein Sortiervorgang ruft zuerst `POST /api/preview` auf. Der Server prüft aktuelle Quelle und Adapter, erzeugt eine kurzlebige, einmal verwendbare Preview-Bindung und liefert nur die beschriebene Änderung. Die UI zeigt `before`/`after`; die explizite Bestätigung sendet `POST /api/commit`, das bestehende Quelländerungen mit HTTP 409 (`SOURCE_REPLACEMENT_DISABLED`) fail-closed ablehnt. Die UI kann dann einen pfadfreien, an den Basis-Hash gebundenen manuellen Vorschlag erzeugen.
 
-Commit verlangt dieselbe Session, Preview-ID und dieselbe Operation. Der Server prüft erneut den Quellhash, erzeugt denselben Patch erneut, vergleicht Diff und Ergebnis-Hash mit der bestätigten Preview, validiert die Ausgabe erneut mit MDX-/Galerieadapter und Bildmanifest und ruft erst dann den bestehenden atomaren Writer auf. Eine Änderung nach der Vorschau liefert HTTP 409 und lässt die externe Änderung bestehen. Der frühere direkte `/api/reorder`-Schreibweg existiert nicht mehr.
+Commit verlangt dieselbe Session, Preview-ID und dieselbe Operation. Der Server prüft erneut den Quellhash, erzeugt denselben Patch erneut und vergleicht Diff und Ergebnis-Hash mit der bestätigten Preview. Auch bei gültiger Preview wird die Ersetzung danach durch die zentrale Policy abgelehnt; kein Writer wird aufgerufen und die Quelldatei bleibt unverändert. Der Proposal-Export liest die Basisrevision vor dem Download erneut und verwirft den Vorschlag, wenn sie nicht mehr stimmt. Das ist eine manuelle Übergabe, kein Merge und keine Schreibgarantie. Der frühere direkte `/api/reorder`-Schreibweg existiert nicht mehr.
 
 Die Demo-Fixture hat absichtlich dieselbe MDX-Form wie `<Gallery sorted={SORTING} />` ohne `id`. Preview-Readiness hängt daher nicht von einem Source-`id`-Prop ab: sie prüft die erwartete Anzahl und Reihenfolge der gerenderten Galerie-Marker. Die lokale Vorschau bietet Desktop-, Tablet- und Mobil-Presets mit tatsächlichen iframe-Viewportmaßen (1280×800, 768×1024 und 390×844) und feste Navigation zwischen synthetischer Start- und Fixture-Seite. Routen werden aus vertrauenswürdigen Konstanten zusammengesetzt; es gibt kein URL-Eingabefeld.
 
@@ -56,7 +56,7 @@ Der eigenständige Server meldet einen belegten Port verständlich und beendet s
 
 ## Tests und Grenzen
 
-`pnpm test` prüft die AST-Teilmenge, LF/CRLF, Unicode, BOM, Kommentare, No-op, Originalbereichserhalt, stale/malformed hashes, Preview-/Bestätigungsablauf, Konflikte ohne Überschreiben, unbekannte JSX-Komponenten, serverseitige Manifestgrenzen, CSP/Host/Origin/Token, sichere Basispfade und eine echte Präfixroute in einer isolierten synthetischen Astro-App. Separate Writer-Tests prüfen stale Hash ohne Schreibzugriff, externe Änderung zwischen den beiden Reads (kein Rename, Temp-Datei entfernt), exakte Bytes im Happy Path und die dokumentierte verbleibende Race-Grenze (Änderung direkt vor Rename wird überschrieben). Der HTTP-E2E-Test nutzt einen Präfixpfad, wartet auf Astros gerenderte Galerien und bestätigt, dass externe Änderungen nach einer Preview erhalten bleiben. `pnpm run verify:build` prüft zusätzlich, dass das statische Produktions-Build keine lokalen Editor/API-Routen oder Editor-UI enthält. `pnpm run browser-tests` prüft im Browser CSP, Presets, Routenwechsel, Diff-Bestätigung, HMR/Readiness und Reorder; der Axe-Test prüft die Editor-UI im Desktop-/Mobilzustand und die MDX-Diff-Bestätigung gegen WCAG 2.2 AA plus Best Practices (die externe Astro-Vorschau im iframe ist ausgeschlossen). Diese Demo verspricht weder einen allgemeinen MDX-Parser noch produktiven Betrieb.
+`pnpm test` prüft die AST-Teilmenge, LF/CRLF, Unicode, BOM, Kommentare, No-op, Originalbereichserhalt, stale/malformed hashes, Preview-/Bestätigungsablauf, fail-closed Konflikte, unbekannte JSX-Komponenten, serverseitige Manifestgrenzen, CSP/Host/Origin/Token, sichere Basispfade und eine Präfixroute in einer isolierten synthetischen Astro-App. Separate Tests dokumentieren den Legacy-Writer-Race; dieser Writer ist kein Server-Replacement-Pfad. Der HTTP-E2E-Test bestätigt, dass eine vorhandene Quelldatei nach Preview und Bestätigung byte-identisch bleibt. `pnpm run verify:build` prüft zusätzlich, dass das statische Produktions-Build keine lokalen Editor/API-Routen oder Editor-UI enthält. `pnpm run browser-tests` prüft im Browser CSP, Presets, Routenwechsel, Preview-/Proposal-Bedienung, Quellunverändertheit und Auswahl; der Axe-Test prüft die Editor-UI im Desktop-/Mobilzustand und die MDX-Diff-Bestätigung gegen WCAG 2.2 AA plus Best Practices (die externe Astro-Vorschau im iframe ist ausgeschlossen). Der installierte Tarball-Smoke prüft zusätzlich Proposals in Astro 7.4.7. Diese Demo verspricht weder einen allgemeinen MDX-Parser noch produktiven Betrieb.
 
 ## Phase 3: Collection-Editor (experimentell, nicht produktionsreif)
 
@@ -73,9 +73,9 @@ Ohne diese Serveroptionen bleibt die bisherige Galerie-Demo unverändert und `GE
 
 Die Serverintegration katalogisiert höchstens 250 passende Einträge je Collection, 64 Collections, 500 Einträge/16 MiB insgesamt und 20.000 gescannte Verzeichniseinträge pro Inspection. Sie gibt nur IDs relativ zur Collection-Base sowie SHA-256-Hashes aus, keine absoluten Pfade oder Quelltexte. Einträge sind ausschließlich `.md`/`.mdx`; aktuell bewiesene Pattern sind exakt `*.md`, `*.mdx`, `**/*.md` und `**/*.mdx`. Andere Globs/Loader bleiben mit sichtbarem Grund read-only. Config-Datei, Base-Verzeichnisse, alle geprüften Vorfahren und passende Dateien müssen reguläre, nicht-symlinkte Pfade strikt innerhalb des absoluten Projektroots sein. Symlinks, fehlende Roots, Traversal, nicht unterstützte Patterns und übergroße Dateien lassen die betroffene Config/Collection read-only. Config-/Entry-Quellen sind auf 1 MiB, JSON-Requests auf 8 KiB begrenzt.
 
-Im UI können vorhandene Top-Level-Frontmatter-Skalare bearbeitet werden, wenn das direkt erkannte Schema `string`, endliche `number`, `boolean` oder ein statisches String-`enum` vorgibt. `date`, Arrays und unsichere Feldnamen bleiben read-only. Der Server verlangt Collection-ID, relative Entry-ID, Feld, JSON-Skalar und erwarteten Content-Hash; er löst den Eintrag selbst erneut unter der konfigurierten Base auf, prüft Glob-Mitgliedschaft und analysiert Config und YAML erneut. Preview zeigt nur den exakten Skalarbereich. Es wird ausschließlich nach expliziter Bestätigung mit derselben Session, Preview-ID und Operation geschrieben. Stale Hashes liefern 409. Preview, Cancel und abgelehnte Operationen schreiben nicht. Same-origin/Host-Prüfungen, Session-Token, JSON-Schema-/Größenlimits und die CSP gelten auch für diese Endpunkte.
+Im UI können vorhandene Top-Level-Frontmatter-Skalare als Vorschlag bearbeitet werden, wenn das direkt erkannte Schema `string`, endliche `number`, `boolean` oder ein statisches String-`enum` vorgibt. `date`, Arrays und unsichere Feldnamen bleiben read-only. Der Server verlangt Collection-ID, relative Entry-ID, Feld, JSON-Skalar und erwarteten Content-Hash; er löst den Eintrag selbst erneut unter der konfigurierten Base auf, prüft Glob-Mitgliedschaft und analysiert Config und YAML erneut. Preview zeigt nur den exakten Skalarbereich. Eine Bestätigung der vorhandenen Datei wird durch die zentrale Policy abgelehnt; die UI kann stattdessen einen pfadfreien Vorschlag exportieren, nachdem Entry- und Config-Hash erneut geprüft wurden. Stale Hashes liefern 409. Preview, Cancel und abgelehnte Operationen schreiben nicht. Same-origin/Host-Prüfungen, Session-Token, JSON-Schema-/Größenlimits und die CSP gelten auch für diese Endpunkte.
 
-`planCollectionCreation(...)` bleibt diff-only. Die API bietet Preview/Commit/Cancel für genau eine neue statische glob Collection über `/api/collections/config/create/{preview,commit,cancel}` sowie bestehende Ein-Feld-Erweiterungen über `/api/collections/config/{preview,commit,cancel}`. Das lokale Editor-UI bietet dafür nun capability-gesteuerte Formulare mit expliziter Bestätigung des exakten Source-Diffs. Es bietet keine nicht unterstützten Optionen und erstellt weder Ordner noch Content. Das Gesamtwerkzeug bleibt experimentell und **nicht produktionsreif**. Die Collection muss einen bereits vorhandenen, regulären, symlinkfreien Basisordner innerhalb des Projektroots verwenden; der Editor erstellt weder Ordner noch Content-Dateien. Clients liefern nur statische Collection-/Feldwerte und den aktuellen Config-Hash; Config-Pfad, Importidentitäten und Loader bleiben serverseitig vertrauenswürdig und die nötigen Imports müssen bereits explizit vorliegen. Nicht unterstützte oder dynamische Config-Syntax bleibt read-only. Antworten enthalten nur den exakten Quellbereich-Diff, weder Config-Inhalt noch absolute Pfade. Nach einer bestätigten Config-Änderung müssen Astro Content Sync bzw. der Dev-Server-Neustart geprüft werden. Beim Commit wird die Config unmittelbar vor dem Writer erneut geplant/gehasht. Der Writer erhält vorhandene POSIX-Rechte, aber keine sonstigen Metadaten; er ist kein prozessübergreifendes Compare-and-Swap. Vollständige Zod-/Astro-Validierung, symlink-freie TOCTOU-Garantien und sicherer Mehrprozessbetrieb sind nicht abgedeckt. Dies ist ein lokaler Prototyp und **keine** Produktionsfreigabe.
+`planCollectionCreation(...)` bleibt diff-only. Die API bietet Preview/Commit/Cancel für genau eine neue statische glob Collection über `/api/collections/config/create/{preview,commit,cancel}` sowie bestehende Ein-Feld-Erweiterungen über `/api/collections/config/{preview,commit,cancel}`. Das lokale Editor-UI bietet capability-gesteuerte Formulare und zeigt den exakten Source-Diff. Bestätigte Ersetzungen der vorhandenen Config werden durch die zentrale Policy abgelehnt; die UI bietet dafür einen pfadfreien, revisionsgebundenen manuellen Vorschlag. Es werden weder Config noch Ordner oder Content durch diese Operationen geschrieben. Das Gesamtwerkzeug bleibt experimentell und **nicht produktionsreif**. Die Collection muss einen bereits vorhandenen, regulären, symlinkfreien Basisordner innerhalb des Projektroots verwenden. Clients liefern nur statische Collection-/Feldwerte und den aktuellen Config-Hash; Config-Pfad, Importidentitäten und Loader bleiben serverseitig vertrauenswürdig und die nötigen Imports müssen bereits explizit vorliegen. Nicht unterstützte oder dynamische Config-Syntax bleibt read-only. Antworten enthalten nur den exakten Quellbereich-Diff und keine absolute Config-Quelldateipfade. Vollständige Zod-/Astro-Validierung, symlink-freie TOCTOU-Garantien und sicherer Mehrprozessbetrieb sind nicht abgedeckt. Dies ist ein lokaler Prototyp und **keine** Produktionsfreigabe.
 # Phase 4 adapter experiment (not production-ready)
 
 `src/lib/mdx-props-patch.mjs` provides an isolated, source-preserving adapter for
@@ -94,14 +94,14 @@ startup and before access; symlink paths are rejected. `GET /api/mdx-components`
 returns a path-free catalog. Authenticated `POST /api/mdx-components/preview`
 and `/commit` use exact operation schemas, the same origin/host/token guards and
 8 KiB request limit as other writes, at most 16 configured targets, 1 MiB per
-source, 500 matching component instances, and one-shot five-minute preview bindings. No write
-occurs until a matching explicit commit; stale sources conflict. The API is
+source, 500 matching component instances, and one-shot five-minute preview bindings. The API is
 experimental and exposed in the editor when configured targets are present. The
 UI limits edits to catalogued instances and allow-listed props, previews the exact
-source delta, and writes only after explicit confirmation. Unsupported MDX syntax remains
-read-only. Writer lifecycle limitations described above still apply; do not use
-this with real content or treat it as production-ready, and make no readiness
-claim. JavaScript shadowing and every MDX binding ambiguity are not resolved.
+source delta, and refuses existing-source replacement after confirmation; it can
+export a path-free proposal after rechecking the source hash. Unsupported MDX syntax remains
+read-only. No automatic write or merge is provided. Do not use this with real
+content or treat it as production-ready, and make no readiness claim. JavaScript
+shadowing and every MDX binding ambiguity are not resolved.
 
 Typed component fields may instead be configured explicitly:
 
@@ -138,24 +138,25 @@ commit request. This proves fail-closed behavior for this one marker mismatch;
 it does not derive or establish general DOM-to-source provenance.
 
 `pnpm run browser-tests:gallery-copy` adds an unknown Astro wrapper around one
-literal gallery in another temporary copy, commits a reorder through the editor,
-and checks the exact copied-MDX delta plus the rendered order after Astro
-recompiles the route. It then changes the copied gallery to a JSX spread and
-checks that both catalog inspection and the authenticated preview endpoint
-reject it without changing the copied source. The tracked fixture and component
-are asserted byte-identical throughout. This remains a synthetic fixture on the
-repository's pinned Astro version—not a claim of compatibility with an external
-project or general MDX support.
+literal gallery in a disposable copy, previews a reorder, and confirms the
+editor refuses replacement while leaving source bytes unchanged. It exports a
+current-revision proposal, then changes the copied gallery to a JSX spread and
+checks that catalog inspection and the authenticated preview endpoint reject it
+without a write. The tracked fixture and component are asserted byte-identical
+throughout. This remains a synthetic fixture—not a claim of compatibility with
+an external project or general MDX support.
 
 `pnpm run browser-tests:collection-copy` adds a synthetic static MDX glob
 collection and Astro content route only inside another temporary copy. It checks
-the path-free collection catalog, edits one existing string frontmatter field
-through preview and explicit confirmation, verifies no write occurs before
-confirmation, and checks the exact copied-entry delta and Astro-rendered value
-after Content Sync. The MDX body, component output, rank field, copied config and
-route source, and tracked fixture/component are checked unchanged. This is
-limited to the repository's pinned Astro/MDX setup and does not establish
-external consumer compatibility or production readiness.
+the path-free collection catalog, including a nested entry ID, previews a string
+frontmatter edit, verifies confirmation does not write, and exports a
+revision-bound proposal with an opaque target ID that does not expose that entry
+ID. Schema-extension proposals and exclusive new-entry creation are also
+verified. New-collection config diffs containing a relative loader base remain
+preview-only and are not exported. The copied entry/config remain unchanged by
+replacement proposals; the MDX body, component output, route source, and tracked
+fixture/component are checked too. This is limited to the tested Astro/MDX setup
+and does not establish external consumer compatibility or production readiness.
 
 The Phase 5 in-context selection proof is opt-in at the rendered-node level: a
 trusted component may render `data-astro-visual-cms-target` and
@@ -165,8 +166,9 @@ source target identity. The browser proof configures exactly one synthetic
 from literal MDX `id` props. The dev-only Astro bridge and editor accept
 selection messages only from the exact preview frame/origin with a per-load
 nonce, then resolve both IDs against the actual server-loaded supported MDX
-catalog. The test exercises the real preview/commit API, verifies the exact
-source delta and confirms the saved value appears in the Astro iframe. Normal
+catalog. The test exercises selection and the preview/confirmation API, verifies
+the exact source delta in the exported proposal, and confirms the source and
+Astro iframe remain unchanged. Normal
 standalone startup still configures no MDX targets; embedding applications must
 provide trusted targets server-side. No marker means no selection. This is not
 general DOM-to-source provenance and does not support computed, repeated or
@@ -177,48 +179,50 @@ paragraph to an isolated Astro 7.4.7 copy. Its marker is emitted by the pinned
 Sätteri MDX `mdastPlugins` pipeline only in `dev`, for the exact configured MDX
 file, after parsing verifies a single paragraph with an exact source range. The
 test selects it through the nonce-bound preview bridge, previews and confirms a
-single text-range patch, checks Astro's rerender, and verifies a second paragraph
-removes the marker and is rejected by the edit API without a write. Formatting,
+single text-range proposal, verifies the source is unchanged, and verifies a
+second paragraph removes the marker and is rejected by the edit API without a
+write. Formatting,
 links, JSX, expressions, multiline text, multiple nodes, and processor setups
 without the supported Sätteri hook are refused at dev startup when an editable
 Markdown target is configured. This is one synthetic,
 version-pinned acceptance slice; external Astro/MDX consumer compatibility and
 production readiness remain unverified.
 
-### External static Markdown collection probe (2026-11-08)
+### Historical external static Markdown probe (2026-11-08; prior write policy)
 
 The real project `/projects/powerbros.at` is pinned to Astro 7.2.4 and declares
 two `glob()` Markdown collections through top-level `const` bindings, with `z`
 imported from `astro/zod`. On a temporary content/config copy (not the project
 checkout), discovery found two editable collections; `referenzen` had 12
 entries and its `event` field was editable. The API probe previewed one field
-without writing, confirmed a byte-exact single-scalar patch, then introduced a
-competing copied-file edit and observed HTTP 409 with those bytes preserved. The
-original entry SHA-256 stayed unchanged.
+without writing, then introduced a competing copied-file edit and observed
+HTTP 409 with those bytes preserved. The original entry SHA-256 stayed unchanged.
 
 A separate full temporary project copy retained the installed dependency graph
 and imported `createLoopbackDevIntegration()` from the local worktree by file
 URL (no package installation or original config change). Its `pnpm run build`
 completed successfully, including `astro check`, and generated files contained
 neither the bridge challenge nor the integration identifier. `astro dev` served
-`/referenzen/`; editing a copied Markdown entry caused its updated value to
-appear through the live route after Content Sync/HMR. Recorded probe output:
+`/referenzen/`. Direct external edits to a copied Markdown entry appeared through
+the live route after Content Sync/HMR. Recorded probe output:
 `PROJECT_BUILD=PASS; Astro check passed=true; production bridge absent=true`,
 `DEV_ROUTE=PASS`, and `CONTENT_SYNC_HMR=PASS (true)`. All temporary copies were
 removed; the external worktree remained clean and the tested entry retained
 SHA-256 `f0e5a8da81aa080121a3dcc64e7603ec56641ce10972c8c3477a5d1d79e1130b`.
-This establishes one external project's local-source integration, production
-isolation, and static Markdown file-change HMR slice. A combined follow-up ran
-the external editor API and Astro dev server together after the copied project
-build: `EDITOR_PREVIEW_NO_WRITE=true`, `CONFIRMED_SOURCE_PATCH_EXACT=true`, and
-`EDITOR_COMMIT_TO_ASTRO_CONTENT_SYNC_HMR=true`. One no-build attempt against the
-copied pnpm dependency tree returned a ClientRouter "No cached compile metadata"
-500; rerunning after the copy's successful project build passed. This copy-only
-metadata behavior is not established for a normally installed project.
+This establishes one external project's build/production-isolation, route, and
+direct-file-change Content Sync/HMR slices. The combined editor-commit result
+(`EDITOR_COMMIT_TO_ASTRO_CONTENT_SYNC_HMR=true`) and all confirmed-write results
+were collected under the former replacement policy. They are historical and do
+not describe current behavior, where editor replacement is blocked and handed
+off as a proposal. One no-build attempt against the copied pnpm dependency tree
+returned a ClientRouter "No cached compile metadata" 500; rerunning after the
+copy's successful project build passed. This copy-only metadata behavior is not
+established for a normally installed project.
 
 These probes do not establish a distributable package install, a configured MDX
-target, browser iframe/editor interaction, MDX compatibility, ClientRouter/
-navigation behavior, broader external compatibility, or production readiness.
+target, browser iframe/editor interaction under the current proposal-only policy,
+MDX compatibility, ClientRouter/navigation behavior, broader external
+compatibility, or production readiness.
 The project has no `@astrojs/mdx` dependency.
 
 ### Trusted project preview routes

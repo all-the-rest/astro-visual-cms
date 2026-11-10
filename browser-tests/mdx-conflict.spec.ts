@@ -105,23 +105,23 @@ test('configured MDX drafts survive revisions, switching, outages and stale comm
   await page.locator('#mdx-confirm-button').click()
   await expect(page.locator('#mdx-conflict')).toBeVisible()
   await expect(page.locator('#mdx-conflict-message')).toContainText('standardmäßig blockiert')
-  await expect(page.locator('#mdx-proposal-export')).toBeVisible()
+  await expect(page.locator('#source-proposal-panel')).toBeVisible()
+  await expect(page.locator('#source-proposal-export')).toBeEnabled()
   await expect(value).toHaveValue('Preserved dirty draft')
   const sourceAtExport = await readFile(fileOne, 'utf8')
   expect(sourceAtExport).toContain('External revision two')
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.locator('#mdx-proposal-export').click(),
+    page.locator('#source-proposal-export').click(),
   ])
   const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
   expect(proposal).toEqual({
     schemaVersion: 1,
-    type: 'astro-visual-cms-mdx-proposal',
-    targetId: 'one',
-    instanceId: 'conflict-1',
-    prop: 'label',
+    type: 'astro-visual-cms-source-proposal',
+    target: { kind: 'mdx-target', id: 'one' },
     baseHash: createHash('sha256').update(sourceAtExport).digest('hex'),
     proposedHash: createHash('sha256').update(sourceAtExport.replace('label="External revision two"', 'label="Preserved dirty draft"')).digest('hex'),
+    change: { instanceId: 'conflict-1', prop: 'label', value: 'Preserved dirty draft' },
     diff: {
       start: sourceAtExport.indexOf('"External revision two"'),
       end: sourceAtExport.indexOf('"External revision two"') + '"External revision two"'.length,
@@ -135,7 +135,7 @@ test('configured MDX drafts survive revisions, switching, outages and stale comm
   await updateOne('External revision three')
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await expect(page.locator('#mdx-conflict')).toBeVisible()
-  await expect(page.locator('#mdx-proposal-export')).toBeHidden()
+  await expect(page.locator('#source-proposal-panel')).toBeHidden()
   await expect(value).toHaveValue('Preserved dirty draft')
 
   await page.locator('#mdx-conflict-reapply').click()
@@ -160,4 +160,52 @@ test('configured MDX drafts survive revisions, switching, outages and stale comm
   await expect(value).toHaveValue('Preview lock draft')
   expect(await readFile(fileTwo, 'utf8')).toContain('Target two revision during A conflict')
   expect(originalOne).toContain('Initial 1')
+})
+
+test('stale MDX proposals cannot be exported after the source changes', async ({ page }) => {
+  const receiptPath = resolve('test-results/readonly-mdx-conflict-copy-path')
+  await expect.poll(async () => { try { return (await readFile(receiptPath, 'utf8')).length > 0 } catch { return false } }).toBe(true)
+  const [fileOne] = JSON.parse(await readFile(receiptPath, 'utf8')) as [string, string]
+  const original = await readFile(fileOne, 'utf8')
+  const initialValue = original.match(/label="([^"]*)"/)?.[1]
+  expect(initialValue).toBeTruthy()
+  const externalSource = original.replace(`label="${initialValue}"`, 'label="External before download"')
+  let downloads = 0
+  page.on('download', () => { downloads += 1 })
+  await page.addInitScript(() => {
+    const nativeSetInterval = window.setInterval.bind(window)
+    const editorPolls: number[] = []
+    ;(window as Window & { stopEditorPolls?: () => void }).stopEditorPolls = () => {
+      for (const interval of editorPolls) window.clearInterval(interval)
+      editorPolls.length = 0
+    }
+    window.setInterval = ((handler: TimerHandler, timeout?: number, ...args: unknown[]) => {
+      const interval = nativeSetInterval(handler, timeout, ...args)
+      if (timeout === 2000) editorPolls.push(interval)
+      return interval
+    }) as typeof window.setInterval
+  })
+
+  try {
+    await page.goto('/')
+    const value = page.locator('#mdx-value')
+    await expect(value).toHaveValue(initialValue!)
+    await value.fill('Proposal draft retained')
+    await page.locator('#mdx-preview-button').click()
+    await expect(page.locator('#mdx-confirmation')).toBeVisible()
+    await page.locator('#mdx-confirm-button').click()
+    await expect(page.locator('#source-proposal-panel')).toBeVisible()
+    await expect(page.locator('#source-proposal-export')).toBeEnabled()
+    await page.evaluate(() => (window as Window & { stopEditorPolls?: () => void }).stopEditorPolls?.())
+
+    await writeFile(fileOne, externalSource)
+    await page.locator('#source-proposal-export').click()
+    await expect(page.locator('#source-proposal-panel')).toBeHidden()
+    await expect(page.locator('#status')).toContainText('gebundene Quellrevision ist nicht mehr aktuell')
+    await expect(value).toHaveValue('Proposal draft retained')
+    expect(await readFile(fileOne, 'utf8')).toBe(externalSource)
+    expect(downloads).toBe(0)
+  } finally {
+    await writeFile(fileOne, original)
+  }
 })

@@ -15,7 +15,7 @@ function exportedArray(source: string, name: string): { value: string[]; start: 
   }
 }
 
-test('browser editor selects galleries, drag-sorts the Astro preview, and keeps the keyboard-button alternative', async ({ page }) => {
+test('browser editor previews gallery sorting and exports a revision-bound proposal without writing source', async ({ page }) => {
   const originalFixture = await readFile(FIXTURE_PATH)
   const originalSource = originalFixture.toString('utf8')
   const highlights = exportedArray(originalSource, 'HIGHLIGHTS').value
@@ -99,7 +99,7 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     await expect(page.locator('#diff-confirmation')).toBeVisible()
     await expect(page.locator('#diff-before')).toHaveText(originalSource.slice(originalArray.start, originalArray.end))
     await expect(page.locator('#diff-after')).toHaveText(JSON.stringify(nextOrder))
-    await expect(page.getByRole('button', { name: 'Änderung bestätigen und speichern' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Bestätigen und Änderungsvorschlag erstellen' })).toBeVisible()
     await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(originalSource)
     await page.getByRole('button', { name: 'Abbrechen' }).click()
     await expect(page.locator('#status')).toHaveText('Änderung abgebrochen; die Datei blieb unverändert.')
@@ -109,49 +109,41 @@ test('browser editor selects galleries, drag-sorts the Astro preview, and keeps 
     await expect(page.locator('#gallery-draft-actions')).toContainText('Lokaler Galerieentwurf')
     await page.locator('#gallery-draft-actions').getByRole('button', { name: 'Vorschau für lokale Reihenfolge erstellen' }).click()
     await expect(page.getByRole('heading', { name: 'Quelländerung bestätigen' })).toBeVisible()
-    await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
-
-    await expect(highlightsList.getByRole('listitem')).toHaveCount(nextOrder.length)
+    await page.getByRole('button', { name: 'Bestätigen und Änderungsvorschlag erstellen' }).click()
+    await expect(page.getByRole('status')).toContainText('Schreibstatus blockiert')
+    await expect(page.locator('#source-proposal-panel')).toBeVisible()
+    await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(originalSource)
     await expect(highlightsList.getByRole('listitem').first()).toHaveAttribute('aria-label', `HIGHLIGHTS, Eintrag 1: ${nextOrder[0]}`)
-    await expect.poll(renderedOrders).toEqual([
-      nextOrder.join(','),
-      details.join(','),
-    ])
-    await expect(preview.locator('section[data-gallery-order]').nth(0).locator('figcaption')).toHaveText(
-      nextOrder.map((slug, index) => `${index + 1}. ${slug}`),
-    )
+    await expect.poll(renderedOrders).toEqual([highlights.join(','), details.join(',')])
     await expect(preview.getByText('Unbekannte CMS-Komponente: bleibt außerhalb des Galerie-Editors')).toBeVisible()
-
-    const highlightRange = originalArray
-    const expectOnlyHighlightsAndAllPreviewOrders = async (order: string[]) => {
-      await expect.poll(renderedOrders).toEqual([
-        order.join(','),
-        details.join(','),
-      ])
-      const expectedSource = originalSource.slice(0, highlightRange.start) +
-        JSON.stringify(order) + originalSource.slice(highlightRange.end)
-      await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(expectedSource)
-    }
-    await expectOnlyHighlightsAndAllPreviewOrders(nextOrder)
+    const [download] = await Promise.all([
+      page.waitForEvent('download'), page.locator('#source-proposal-export').click(),
+    ])
+    const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+    expect(proposal).toMatchObject({
+      type: 'astro-visual-cms-source-proposal',
+      target: { kind: 'gallery-fixture', id: 'fixture' },
+      change: { galleryId: 'HIGHLIGHTS', order: nextOrder },
+    })
+    expect(JSON.stringify(proposal)).not.toContain(FIXTURE_PATH)
+    expect(JSON.stringify(proposal)).not.toContain(originalSource)
 
     await routeNavigation.getByRole('button', { name: 'Startseite' }).click()
     await expect(page.frameLocator('#preview').getByRole('heading', { name: /Astro visual CMS/ })).toBeVisible()
     await routeNavigation.getByRole('button', { name: 'Fixture' }).click()
-    await expect.poll(renderedOrders).toEqual([nextOrder.join(','), details.join(',')])
+    await expect.poll(renderedOrders).toEqual([highlights.join(','), details.join(',')])
 
     const moveDown = page.getByRole('button', { name: `Nach unten: ${nextOrder[0]} in HIGHLIGHTS` })
     await moveDown.focus()
     await moveDown.press('Enter')
-    await expect(page.getByRole('heading', { name: 'Quelländerung bestätigen' })).toBeVisible()
-    await page.getByRole('button', { name: 'Änderung bestätigen und speichern' }).click()
+    await expect(page.getByRole('status')).toHaveText('Die Reihenfolge entspricht wieder dem aktuellen Stand; es wurde nichts geschrieben.')
+    await expect(page.locator('#diff-confirmation')).toBeHidden()
+    await expect(page.locator('#source-proposal-panel')).toBeHidden()
     await expect(highlightsList.getByRole('listitem').first()).toHaveAttribute('aria-label', `HIGHLIGHTS, Eintrag 1: ${highlights[0]}`)
-    await expect(highlightsList.getByRole('listitem').nth(1)).toBeFocused()
-    await expect(preview.locator('section[data-gallery-order]').nth(0).locator('figcaption')).toHaveText(
-      highlights.map((slug, index) => `${index + 1}. ${slug}`),
-    )
-    await expectOnlyHighlightsAndAllPreviewOrders(highlights)
+    await expect.poll(renderedOrders).toEqual([highlights.join(','), details.join(',')])
+    await expect.poll(() => readFile(FIXTURE_PATH, 'utf8')).toBe(originalSource)
   } finally {
-    await writeFile(FIXTURE_PATH, originalFixture)
+    if (!(await readFile(FIXTURE_PATH)).equals(originalFixture)) await writeFile(FIXTURE_PATH, originalFixture)
     expect(await readFile(FIXTURE_PATH)).toEqual(originalFixture)
   }
 })

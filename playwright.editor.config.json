@@ -1,6 +1,5 @@
 {
   "fixturePath": "src/pages/fixture.mdx",
-  "safeSourceReplacementMode": false,
   "mdxComponentTargets": [
     {
       "id": "fixture",

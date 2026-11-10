@@ -38,15 +38,15 @@ For an imported MDX component, trusted editor JSON can declare scalar fields:
 
 `editableProps: ["heading"]` remains shorthand for string fields. Only the documented static literal forms are editable; unconfigured props are preserved but never exposed for editing. Spreads and dynamic expressions in configured fields remain read-only, and component code is never evaluated. See [gallery-editor.md](gallery-editor.md) for the exact boundary.
 
-The configured MDX component panel checks its selected target revision on a bounded two-second poll and when the editor regains focus. A clean value refreshes automatically; a dirty value is retained and gets explicit discard/reload or reapply choices. A detected conflict displays the baseline scalar, latest observed scalar, and retained local draft separately; unavailable external values are labeled, and values are inserted as text. Reapply only requests a new preview against the then-current supported state; the resulting diff still requires explicit confirmation. An unavailable/unsupported source disables reapply while retaining the draft. Polling is best-effort (not a filesystem watch), and can only detect revisions observed by a successful poll. Source replacement is blocked by default; `safeSourceReplacementMode: false` is a trusted-only opt-out to legacy hash-check+rename and is unsafe against arbitrary/uncooperative writers. This slice applies only to configured MDX component drafts; it is not a generic editor or a merge workflow.
+The configured MDX component panel checks its selected target revision on a bounded two-second poll and when the editor regains focus. A clean value refreshes automatically; a dirty value is retained and gets explicit discard/reload or reapply choices. A detected conflict displays the baseline scalar, latest observed scalar, and retained local draft separately; unavailable external values are labeled, and values are inserted as text. Reapply requests a new preview against the then-current supported state. Confirming an existing-source edit does not write the file: it creates a path-free, revision-bound manual proposal. Before download, the editor checks that the base revision is still current; a failed or stale check discards the proposal. The proposal is not merged or applied automatically. Polling is best-effort (not a filesystem watch), and can only detect revisions observed by a successful poll.
 
-The existing Collection-field panel also polls its catalog on a bounded two-second interval and on editor focus. Clean forms follow the latest observed entry revision; edited scalar drafts survive panel rerenders, source outages, stale previews/commits, and explicit preview cancellation. A conflict displays the baseline and latest observed SHA-256 revisions plus the local proposal, without exposing source paths or frontmatter values through the catalog. An unavailable or unsupported source blocks reapply; otherwise the user must explicitly reapply to create a fresh exact diff and confirm it before writing. A `SOURCE_REPLACEMENT_DISABLED` refusal is shown as a write-policy block, not a source conflict; the draft stays visible and reapply is disabled. Polling is best-effort, not a filesystem watch or real-time guarantee. This is not an automatic merge, and does not close the hash-check/rename race for trusted `safeSourceReplacementMode: false` deployments.
+The existing Collection-field panel also polls its catalog on a bounded two-second interval and on editor focus. Clean forms follow the latest observed entry revision; edited scalar drafts survive panel rerenders, source outages, stale previews/commits, and explicit preview cancellation. A conflict displays the baseline and latest observed SHA-256 revisions plus the local draft, without exposing source paths or frontmatter values through the catalog. An unavailable or unsupported source blocks reapply; otherwise the user must explicitly reapply to create a fresh exact diff and confirm it. Confirmation produces a manual proposal, not an entry write; download rechecks both the entry and content-config hashes. Polling is best-effort, not a filesystem watch or real-time guarantee. No universal CAS guarantee is claimed for arbitrary writers.
 
 Collection entry creation retains the slug and scalar field values across polling, rerenders, and API failures. A changed or unavailable content-config revision keeps the draft visible with baseline/latest hashes and requires an explicit reapply followed by the normal exact-diff confirmation. If the current schema no longer supports a retained field, reapply is blocked rather than silently dropping that value. Successful creation clears the draft; cancelling a preview does not. This polling remains best-effort and is not a compare-and-swap guarantee.
 
-Schema extension and collection-creation forms likewise retain edited values—including empty and unchecked values—plus the selected collection across observed config revisions and unavailable polls, even before submission. Conflicts require explicit discard or reapply against the latest supported schema, followed by a fresh exact preview and confirmation. These polls are best-effort observations, not real-time notifications or universal compare-and-swap guarantees.
+Schema extension and collection-creation forms likewise retain edited values—including empty and unchecked values—plus the selected collection across observed config revisions and unavailable polls, even before submission. Conflicts require explicit discard or reapply against the latest supported schema, followed by a fresh exact preview and confirmation. Schema extension confirmation creates a manual proposal for the existing config; collection creation remains preview-only when its exact config diff contains a relative loader base, so no path-bearing proposal is exported. Neither operation writes the config. These polls are best-effort observations, not real-time notifications or universal compare-and-swap guarantees.
 
-Gallery ordering polls fixture and Astro-internal gallery state on a bounded interval and editor focus. Dirty orders are retained across observed changes and unavailable polls; cancelling a preview leaves the local order visible so it can be previewed again or explicitly discarded. Conflict reapply is offered only when the local order remains an exact permutation of the latest target, and always creates a fresh preview. Polling is best-effort, not a filesystem watch or universal compare-and-swap guarantee.
+Gallery ordering polls fixture and Astro-internal gallery state on a bounded interval and editor focus. Dirty orders are retained across observed changes and unavailable polls; cancelling a preview leaves the local order visible so it can be previewed again or explicitly discarded. Conflict reapply is offered only when the local order remains an exact permutation of the latest target, and always creates a fresh preview. Confirmation creates a manual proposal rather than replacing the source. Polling is best-effort, not a filesystem watch or universal compare-and-swap guarantee.
 
 The editor's gallery API remains the original bounded demo fixture adapter; custom preview route selection and static content collection discovery do not make it a general-purpose content editor. Use an actual fixture file conforming to the existing supported demo shape if the gallery UI/API is enabled. MDX paragraph and component adapters support only their explicitly configured syntaxes; this package does not claim general MDX compatibility.
 
@@ -54,9 +54,17 @@ Gallery, Content Collections, and configured MDX component panels load independe
 
 Supported static `glob()` collections also expose a confirmed “new Markdown entry” workflow when every required schema field is in the scalar string/number/boolean/enum subset or has a static default. The filename is a single lowercase slug; nested paths, rich fields and unsupported schemas remain unavailable/read-only. The editor previews the generated YAML frontmatter before confirmation, revalidates the trusted collection config, and creates by exclusive hard link so an existing path is never replaced. Optional/defaulted values are omitted/applied according to the discovered schema; Astro Content Sync is responsible for refreshing the collection after creation.
 
-Verified integration/build points: Astro 7.2.4 and 7.4.7. The peer range `>=7.2.4 <8` is intentionally conservative within the verified major; it is not a claim that every version in that range has been tested. Astro is an optional peer because the server-only API does not require Astro. The package declares Node >=22.12; the package-consumer smoke was run on Node 26.10.0.
+Verified package integration/build points: Astro 7.2.4 and 7.4.7. A separate synthetic custom-component dev probe also ran on Astro 7.4.1, but did not test that consumer's production build. The peer range `>=7.2.4 <8` is intentionally conservative within the verified major; it is not a claim that every version in that range has been tested. Astro is an optional peer because the server-only API does not require Astro. The package declares Node >=22.12; the package-consumer smoke was run on Node 26.10.0.
 
-`npm run pack:smoke` packs the actual npm tarball, checks its allowlisted contents, installs it into a disposable Astro 7.4.7 consumer with `@astrojs/mdx`, and starts the installed-package editor. It confirms a new static `glob()` collection by exact config diff, creates a Unicode YAML entry only after preview confirmation, then runs an Astro production build and verifies the new collection route renders that entry. It also builds a synthetic MDX page, starts Astro dev, and verifies collection discovery, exact numeric-field preview/commit, source-byte preservation, the live Content Sync reorder and new-entry render, the trusted custom route, Dev Toolbar route launch, and typed component controls with confirmed MDX edits after HMR even though its Gallery fixture is intentionally unsupported. This proves only those narrow adapters; it does not establish general MDX authoring/round-trip compatibility. The smoke launches Playwright Chromium; install it first with `npx playwright install chromium` when running locally.
+`pnpm run pack:smoke` packs the actual npm tarball, checks its allowlisted contents, installs it into a disposable Astro 7.4.7 consumer with `@astrojs/mdx`, and starts the installed-package editor. It verifies that config, existing collection-entry, MDX-component, and Astro-gallery previews leave source bytes unchanged and confirmed replacements are refused. The installed UI exports path-free, base-revision-bound proposals for typed MDX fields and an Astro-internal gallery. Its MDX fixture edits one configured literal while retaining an unconfigured prop, nested Markdown prose, and a second imported Astro component in the slot; production build, dev rendering, and post-proposal rendering verify those regions remain intact. The smoke also creates a Unicode YAML entry by exclusive creation after preview confirmation, runs an Astro production build, and verifies that the new collection route renders the entry. It checks the trusted custom route, Dev Toolbar route launch, and unchanged Astro rendering after refused edits. This proves only those narrow adapters; it does not establish general MDX authoring/round-trip compatibility or full integration with the intended external consumer. The smoke launches Playwright Chromium; install it first with `npx playwright install chromium` when running locally.
+
+Existing-source replacement is intentionally disabled on all supported platforms. The former hash-check-plus-rename helper has a race window and is not a portable filesystem compare-and-swap. `safeSourceReplacementMode: false` is rejected; neither configuration nor request data can opt out. Existing-source edits are manual handoffs only. Exclusive creation of a genuinely new collection entry remains enabled.
+
+The intended-project gate for `reisinger.pictures` remains open: its real checkout is not available in this workspace, and the disposable clone lacks ignored production content. Against that clone's Astro 7.4.1 installation, the current tarball rendered synthetic `AreaSection.astro` with its nested `ReviewSocialLink.astro` slot, discovered the configured MDX target, returned HTTP 200 for preview and HTTP 409 (`SOURCE_REPLACEMENT_DISABLED`) for confirmation, and exported a path-free proposal bound to the exact base hash. The synthetic source stayed byte-identical. This is useful custom-component adapter evidence, not a substitute for production-content or full intended-project acceptance.
+
+### Historical disposable-consumer probes (before proposal-only replacement policy)
+
+The following Astro 7.2.4 `powerbros.at` probes were run in disposable copies and establish adapter parsing, discovery, selection, and render compatibility for those fixtures only. Their historical confirmed-write/HMR results predate the current fail-closed replacement policy; they do not describe current editor behavior and are not current write-path acceptance evidence.
 
 In a separate full copy of the real Astro 7.2.4 `powerbros.at` project installed from the local tarball using pnpm, `astro check`/build passed. Through the editor, `referenzen/2024-08-20-porec.md` changed only `order: 1` to `order: 6` (87 bytes before and after); the running `/referenzen/` HTTP response reordered the 2024 rows to `Rovinj > Pula > Umag > Moosmayr > Porec`. The earlier string-field workflow also rendered “Quarter-Show JKU Astros — CMS smoke”. Synthetic Gallery fixture/config additions and all edits were confined to disposable copies; the original project remained untouched.
 
@@ -96,12 +104,13 @@ supports one top-level `const` array of plain object literals in Astro
 frontmatter, with unique literal identity and label strings. Comments, spreads,
 computed values, and other ambiguous syntax fail closed. It only reorders
 existing objects; the editor exposes supported configured targets in the same
-reorder picker with a separate Astro-gallery preview/commit API. The diff
-replaces only the configured array range while retaining object slices and the
+reorder picker with a separate Astro-gallery preview/commit API. A preview
+describes only the configured array range while retaining object slices and the
 array's separator/whitespace slots. Reads reject symlinked paths, files over
 1 MiB, and invalid UTF-8. Preview tokens are same-session, short-lived, and
-one-shot; commits recheck the source hash and parser before the atomic write.
-This is not general Astro DOM/source provenance.
+one-shot; confirmation is refused by the existing-source replacement policy
+and can produce a manual proposal. This is not general Astro DOM/source
+provenance.
 # Source replacement policy
 
 Source replacement is blocked by default. The editor keeps reads and previews
@@ -112,23 +121,30 @@ endpoints, including injected writers. Exclusive creation of a new collection
 entry remains permitted and cannot replace an existing path. Request bodies
 cannot change this trusted server policy.
 
-The trusted JSON file passed to `astro-visual-cms-editor --config <path>` may
-explicitly set `safeSourceReplacementMode: false` to opt out and allow the
-legacy hash-check-plus-rename writer. This opt-out is unsafe against arbitrary
-or uncooperative writers: a deterministic test demonstrates an external edit
-after the final hash read being overwritten by rename. Keep the default unless
-the project accepts that risk.
+There is no configuration or request-body opt-out. The legacy
+`safeSourceReplacementMode: false` is rejected. The low-level hash-check-plus-
+rename helper remains unused by server replacements; a deterministic writer
+test documents its race window, where an edit after the final hash read can be
+overwritten by rename.
 
-When a configured MDX component commit is refused specifically by the default
-policy, the editor retains the confirmed field draft and can download a
-path-free JSON proposal containing target/instance/field IDs, the expected base
-hash, proposed hash, and exact changed source range. It does not include the
-source path or full source. The proposal is a manual handoff only; it is not
-merged, applied, or an atomic write, and is invalidated when the observed base
-revision changes. Stale-hash failures do not produce an exportable proposal.
+After a current, matching preview is confirmed, the shared proposal UI covers
+fixture galleries, configured Astro galleries, collection fields, collection
+schema extensions, and configured MDX/Markdown edits. The downloadable JSON
+contains a target kind/public ID, base and proposed SHA-256 revisions, a typed
+change, and the exact changed range. Collection-entry target IDs are opaque
+per-proposal tokens; raw collection-entry IDs (which may contain nested paths)
+remain in editor memory and are not exported. The proposal excludes the source
+file path and full source. Creating a new collection remains preview-only when
+its exact config diff contains a relative loader base: that path-bearing diff is
+not exported. Before download, the UI rereads the target revision (and the
+content-config revision for collection entries); stale or unavailable revisions
+cancel the export. Proposals are manual handoffs only: they are not merged,
+applied, or an atomic write. Exclusive creation of a genuinely new collection
+entry is the only source-writing editor operation retained.
 
 Node's ordinary hash-check-plus-rename writer cannot provide portable
 compare-and-swap against uncooperative filesystem writers. The default policy
 therefore fails closed rather than claiming atomic revision-bound writes. This
-limits replacement editing until a stronger write primitive is available; it
-does not resolve issue #14 or prove integration in every consumer project.
+removes automatic replacement as an integration capability until a stronger
+write primitive is available; it does not resolve issue #14 or prove
+integration in every consumer project.

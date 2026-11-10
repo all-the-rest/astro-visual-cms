@@ -164,7 +164,7 @@ test('standalone editor closes cleanly on SIGTERM', async () => {
   }
 })
 
-test('preview and commit require the token, show only the exact diff, and write only after confirmation', async (t) => {
+test('preview and commit require the token, show the exact diff, and fail closed on existing-source replacement', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-server-'))
   const fixturePath = path.join(directory, 'fixture.mdx')
   const source = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-01", "noise-fixture-03"];\n\n<Gallery sorted={FIRST} />\n`
@@ -173,7 +173,7 @@ test('preview and commit require the token, show only the exact diff, and write 
 
   assert.throws(() => createEditorServer({ fixturePath, basePath: '/unsafe/../path/' }), TypeError)
   const sitePort = 4321
-  const editor = createEditorServer({ port: 0, sitePort, fixturePath, basePath: '/synthetic-preview/', safeSourceReplacementMode: false })
+  const editor = createEditorServer({ port: 0, sitePort, fixturePath, basePath: '/synthetic-preview/' })
   const port = await listen(editor)
   const origin = `http://127.0.0.1:${port}`
 
@@ -254,21 +254,25 @@ test('preview and commit require the token, show only the exact diff, and write 
       method: 'POST', headers: { ...headers, 'x-editor-token': token }, body: payload,
     })
     const freshPreview = await freshPreviewResponse.json()
+    const unsupportedOptOut = await fetch(`${origin}/api/commit`, {
+      method: 'POST', headers: { ...headers, 'x-editor-token': token },
+      body: JSON.stringify({ ...JSON.parse(payload), previewId: freshPreview.previewId, safeSourceReplacementMode: false }),
+    })
+    assert.equal(unsupportedOptOut.status, 422)
+    assert.equal((await unsupportedOptOut.json()).code, 'INVALID_REQUEST')
     const accepted = await fetch(`${origin}/api/commit`, {
       method: 'POST', headers: { ...headers, 'x-editor-token': token },
       body: JSON.stringify({ ...JSON.parse(payload), previewId: freshPreview.previewId }),
     })
-    assert.equal(accepted.status, 200)
-    const saved = await accepted.json()
-    assert.deepEqual(saved.galleries[0].order, order)
-    assert.deepEqual(inspectFixture(await readFile(fixturePath, 'utf8')).galleries[0].order, order)
-    assert.doesNotMatch(JSON.stringify(saved), new RegExp(token))
+    assert.equal(accepted.status, 409)
+    assert.equal((await accepted.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
+    assert.deepEqual(inspectFixture(await readFile(fixturePath, 'utf8')).galleries[0].order, state.galleries[0].order)
   } finally {
     await close(editor)
   }
 })
 
-test('default replacement policy keeps preview/read available but refuses commit before injected writer', async (t) => {
+test('replacement policy keeps preview/read available, preserves stale edits, and blocks current revisions before injected writer', async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), 'astro-editor-safe-mode-'))
   const fixturePath = path.join(directory, 'fixture.mdx')
   const external = `import Gallery from '../components/Gallery.astro';\n\nexport const FIRST = ["noise-fixture-03", "noise-fixture-01"];\n\n<Gallery sorted={FIRST} />\n`
@@ -283,14 +287,12 @@ test('default replacement policy keeps preview/read available but refuses commit
   const order = [...state.galleries[0].order].reverse()
   const headers = { origin, 'content-type': 'application/json', 'x-editor-token': token }
   const preview = await (await fetch(`${origin}/api/preview`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash }) })).json()
-  // A deterministic external edit immediately before commit remains intact;
-  // the default policy refuses before calling any writer, regardless of request data.
+  // A stale source is rejected before the replacement-policy guard.
   await writeFile(fixturePath, external)
-  const response = await fetch(`${origin}/api/commit`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash, previewId: preview.previewId, safeSourceReplacementMode: false }) })
+  const response = await fetch(`${origin}/api/commit`, { method: 'POST', headers, body: JSON.stringify({ galleryId: state.galleries[0].id, order, hash: state.hash, previewId: preview.previewId }) })
   assert.equal(response.status, 409)
   const staleFailure = await response.json()
-  assert.equal(staleFailure.code, 'SOURCE_REPLACEMENT_DISABLED')
-  assert.match(staleFailure.error, /no changes were written/i)
+  assert.equal(staleFailure.code, 'STALE_HASH')
   assert.equal(writes, 0)
   assert.equal(await (await import('node:fs/promises')).readFile(fixturePath, 'utf8'), external)
   // With a current revision, the default returns the same actionable refusal.
@@ -313,12 +315,12 @@ test('a restarted editor rotates its token and rejects the previous session toke
   await writeFile(fixturePath, source, 'utf8')
   t.after(() => rm(directory, { recursive: true, force: true }))
 
-  const first = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: false })
+  const first = createEditorServer({ port: 0, fixturePath })
   const firstOrigin = `http://127.0.0.1:${await listen(first)}`
   const firstToken = (await (await fetch(`${firstOrigin}/api/session`)).json()).token
   await close(first)
 
-  const second = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: false })
+  const second = createEditorServer({ port: 0, fixturePath })
   const secondOrigin = `http://127.0.0.1:${await listen(second)}`
   try {
     const secondToken = (await (await fetch(`${secondOrigin}/api/session`)).json()).token
@@ -342,7 +344,8 @@ test('a restarted editor rotates its token and rejects the previous session toke
       method: 'POST', headers: { ...headers, 'x-editor-token': secondToken },
       body: JSON.stringify({ ...JSON.parse(payload), previewId: previewResult.previewId }),
     })
-    assert.equal(rotatedToken.status, 200)
+    assert.equal(rotatedToken.status, 409)
+    assert.equal((await rotatedToken.json()).code, 'SOURCE_REPLACEMENT_DISABLED')
   } finally {
     await close(second)
   }
@@ -355,7 +358,7 @@ test('a source change after preview returns 409 and preserves the external edit'
   await writeFile(fixturePath, source, 'utf8')
   t.after(() => rm(directory, { recursive: true, force: true }))
 
-  const editor = createEditorServer({ port: 0, fixturePath, safeSourceReplacementMode: false })
+  const editor = createEditorServer({ port: 0, fixturePath })
   const port = await listen(editor)
   const origin = `http://127.0.0.1:${port}`
   const token = (await (await fetch(`${origin}/api/session`)).json()).token
@@ -429,7 +432,7 @@ test('preview readiness waits for galleries in fixture order instead of acceptin
     response.end(renderedHtml)
   })
   const sitePort = await listen(site)
-  const editor = createEditorServer({ port: 0, sitePort, basePath: '/synthetic-preview/', safeSourceReplacementMode: false })
+  const editor = createEditorServer({ port: 0, sitePort, basePath: '/synthetic-preview/' })
   const editorPort = await listen(editor)
   let switchToCorrectOrder
 

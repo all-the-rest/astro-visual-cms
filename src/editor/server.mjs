@@ -244,19 +244,18 @@ export function createEditorServer({
   mdxParagraphTargets,
   astroGalleryTargets = [],
   previewRoutes = DEFAULT_PREVIEW_ROUTES,
-  safeSourceReplacementMode = true,
+  safeSourceReplacementMode,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
   }
   const siteOrigin = `http://127.0.0.1:${sitePort}`
   const safeBasePath = normalizeAstroBasePath(basePath)
-  if (typeof safeSourceReplacementMode !== 'boolean') throw new TypeError('safeSourceReplacementMode must be a trusted boolean.')
-  // Central guard covers all replacement endpoints and injected writers.
-  // Explicit opt-out uses hash-check+rename and is unsafe against arbitrary writers.
-  const commitSource = safeSourceReplacementMode
-    ? async () => { const error = new Error('Safe source replacement mode blocks replacing existing source files; no changes were written. Disable it only after reviewing the concurrent-writer risk.'); error.code = 'SOURCE_REPLACEMENT_DISABLED'; throw error }
-    : writeSource
+  if (safeSourceReplacementMode === false) throw new TypeError('safeSourceReplacementMode:false is no longer supported; existing-source replacement is fail-closed.')
+  if (safeSourceReplacementMode !== undefined && safeSourceReplacementMode !== true) throw new TypeError('safeSourceReplacementMode must be omitted or true.')
+  // Existing-source replacement is intentionally unavailable. Exclusive creation
+  // remains available through createSource for genuinely new collection entries.
+  const commitSource = async () => { const error = new Error('Existing-source replacement is blocked by policy; no changes were written. Export the proposal for manual application.'); error.code = 'SOURCE_REPLACEMENT_DISABLED'; throw error }
   const trustedPreviewRoutes = validatePreviewRoutes(previewRoutes)
   const embeddedPreviewRoutes = JSON.stringify(trustedPreviewRoutes).replaceAll('<', '\\u003c').replaceAll('\u2028', '\\u2028').replaceAll('\u2029', '\\u2029')
   const editorSessions = new Map()
@@ -887,7 +886,7 @@ export function createEditorServer({
             sessionToken: request.headers['x-editor-token'],
             expiresAt: Date.now() + PREVIEW_TTL_MS,
           })
-          return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, diff: result.diff })
+          return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, contextHash: target.configHash, diff: result.diff })
         }
 
         if (!validCollectionOperation(payload, true)) {
@@ -947,8 +946,8 @@ export function createEditorServer({
       }
 
       try {
-        if (request.url === '/api/commit' && safeSourceReplacementMode) await commitSource()
         const payload = await readJson(request)
+        if (request.url === '/api/commit' && payload.safeSourceReplacementMode === false) return json(response, 422, { code: 'INVALID_REQUEST', error: 'safeSourceReplacementMode:false is not supported.' })
         const isPreview = request.url === '/api/preview'
         if (isPreview) {
           if (!validOperation(payload, ['galleryId', 'order', 'hash'])) {
