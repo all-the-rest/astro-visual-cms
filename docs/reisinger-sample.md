@@ -50,7 +50,17 @@ The mixed `editorialSample` glob/imported-enum collection and `sampleSummary`
 `file()` collection remain visibly read-only. This does not implement #18 or
 schema/loader support. All unselected prose, frontmatter, imports, JSX, opaque
 expressions, nested components, and named slots remain outside the configured
-range. The adapter parses MDX only; it never evaluates it.
+range. The adapter parses MDX only; it never evaluates it. The marker plugins
+support both the Satteri 0.10 `setProperty` and Satteri 0.11 `setField`
+mutators; an unknown processor leaves the page readable and unmarked.
+
+A manual acceptance run on a fresh full-filesystem copy of the real
+`reisinger.pictures` checkout repeated these checks on Astro 7.4.1 /
+`@astrojs/mdx` 8.1.0 / Satteri 0.10.5. It found and fixed the Satteri 0.10
+crash and the editor's hidden dependency on the consumer's Tailwind scan. The
+evidence, isolation digests, production-isolation scan and remaining gates are
+recorded in [external-acceptance.md](external-acceptance.md). That run is
+manual and does not close #1, #14, #16 or #18.
 
 `pnpm run browser-tests:markdown-draft-copy` exercises the actual Content Layer
 route in an isolated copy, including click/keyboard selection, exact diff,

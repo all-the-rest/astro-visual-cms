@@ -55,6 +55,7 @@ test('synthetic Content Layer Markdown draft is isolated, read-only, keyboard ac
   await page.setViewportSize({ width: 390, height: 844 })
   await page.goto('/')
   await expect(page.locator('#preview')).toHaveAttribute('data-bridge-ready', 'true')
+  expect(await page.evaluate(() => [...document.styleSheets].some((sheet) => sheet.href?.endsWith('/editor.css')))).toBe(true)
   await expect(page.locator('#markdown-draft-panel')).toBeVisible()
   await expect(page.locator('#collections-panel')).toBeVisible()
   await expect(page.locator('#collection-picker')).toContainText('editorialSample')
@@ -219,8 +220,14 @@ test('synthetic Content Layer Markdown draft is isolated, read-only, keyboard ac
   await writeFile(copiedFile, duplicated)
   const unsupported = await (await request.get('/api/markdown-drafts')).json()
   expect(unsupported.targets[0]).toMatchObject({ id: 'showcase-prose', supported: false, code: 'UNSUPPORTED_MARKDOWN_MAPPING' })
-  const duplicatePage = await request.get(`${showcaseUrl}?duplicate=${Date.now()}`)
-  expect(await duplicatePage.text()).not.toContain('data-astro-visual-cms-draft-target="showcase-prose"')
+  // The dev server may finish its watcher-driven invalidation just after the
+  // catalog has re-read the file, so poll the rendered route instead of
+  // treating a single stale HMR response as a product regression.
+  await expect.poll(async () => {
+    const duplicatePage = await request.get(`${showcaseUrl}?duplicate=${Date.now()}`)
+    if (!duplicatePage.ok()) throw new Error(`Expected the duplicate route to render, got HTTP ${duplicatePage.status()}.`)
+    return (await duplicatePage.text()).includes('data-astro-visual-cms-draft-target="showcase-prose"')
+  }, { timeout: 15_000, intervals: [100, 250, 500, 1000] }).toBe(false)
   expect(await readFile(copiedFile, 'utf8')).toBe(duplicated)
   expect(mdxWriteRoutes).toEqual([])
   expect(downloads).toBe(0)

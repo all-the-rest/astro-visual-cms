@@ -87,8 +87,11 @@ test('a dev-only source-mapped Markdown paragraph exports a revision-bound propo
   await writeFile(copiedFile, duplicate)
   const unsupported = await (await request.get('/api/mdx-components')).json()
   expect(unsupported.targets[0]).toMatchObject({ id: 'markdown-note', supported: false })
-  const ambiguousPage = await request.get('http://127.0.0.1:15331/browser-synthetic/markdown-proof/')
-  expect(await ambiguousPage.text()).not.toContain('data-astro-visual-cms-target="markdown-note"')
+  await expect.poll(async () => {
+    const ambiguousPage = await request.get('http://127.0.0.1:15331/browser-synthetic/markdown-proof/')
+    if (!ambiguousPage.ok()) throw new Error(`Expected the duplicate route to render, got HTTP ${ambiguousPage.status()}.`)
+    return (await ambiguousPage.text()).includes('data-astro-visual-cms-target="markdown-note"')
+  }, { timeout: 15_000, intervals: [100, 250, 500, 1000] }).toBe(false)
   const session = await (await request.get('/api/session')).json()
   const rejected = await request.post('/api/mdx-components/preview', {
     headers: { origin: 'http://127.0.0.1:15332', 'content-type': 'application/json', 'x-editor-token': session.token },

@@ -10,6 +10,18 @@ function unsupported(message) {
   throw error
 }
 
+/**
+ * Satteri renamed its node mutator from `setProperty` (0.10.x, Astro 7.4.1)
+ * to `setField` (0.11.x, Astro 7.4.7). Only mark the node when the active
+ * processor exposes one of those bounded mutators; an unknown processor must
+ * leave the page readable instead of crashing its render.
+ */
+function setNodeData(context, node, data) {
+  if (typeof context?.setField === 'function') return context.setField(node, 'data', data)
+  if (typeof context?.setProperty === 'function') return context.setProperty(node, 'data', data)
+  return false
+}
+
 /** Return a source map only when the entire MDX document is one plain-text paragraph. */
 export function mapSinglePlainParagraph(source) {
   if (typeof source !== 'string') unsupported('Source must be text.')
@@ -78,7 +90,7 @@ export function createMarkdownParagraphMarkerPlugin({ filePath, targetId, instan
           'data-astro-visual-cms-target': targetId,
           'data-astro-visual-cms-instance': instanceId,
         }
-        context.setField(node, 'data', { ...node.data, hProperties })
+        setNodeData(context, node, { ...node.data, hProperties })
       },
     }
   }
@@ -156,7 +168,7 @@ export function createMarkdownDraftMarkerPlugin({ filePath, targetId, instanceId
           role: 'button',
           'aria-label': 'Select this visual Markdown draft paragraph',
         }
-        context.setField(node, 'data', { ...node.data, hProperties })
+        setNodeData(context, node, { ...node.data, hProperties })
       },
     }
   }

@@ -18,6 +18,7 @@ const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURE_PATH = path.join(PROJECT_ROOT, 'src/pages/fixture.mdx')
 const FIXTURE_ADAPTER = createGalleryPatchAdapter({ galleryImportSource: '../components/Gallery.astro' })
 const UI_PATH = fileURLToPath(new URL('./index.html', import.meta.url))
+const UI_CSS_PATH = fileURLToPath(new URL('./editor.generated.css', import.meta.url))
 const MAX_BODY_BYTES = 8 * 1024
 const PREVIEW_SYNC_TIMEOUT_MS = 4_000
 const PREVIEW_POLL_INTERVAL_MS = 100
@@ -604,7 +605,7 @@ export function createEditorServer({
         'content-security-policy': [
           "default-src 'none'",
           `script-src 'nonce-${nonce}'`,
-          `style-src ${siteOrigin}`,
+          `style-src ${siteOrigin} 'self'`,
           `img-src ${siteOrigin} data:`,
           `font-src ${siteOrigin} data:`,
           `frame-src ${siteOrigin}`,
@@ -617,6 +618,18 @@ export function createEditorServer({
         'cross-origin-resource-policy': 'same-origin',
       })
       return response.end(html)
+    }
+
+    if (request.method === 'GET' && request.url === '/editor.css') {
+      let css
+      try { css = readFileSync(UI_CSS_PATH) } catch { return json(response, 404, { error: 'Editor stylesheet is unavailable.' }) }
+      response.writeHead(200, {
+        'content-type': 'text/css; charset=utf-8',
+        'cache-control': 'no-store',
+        'x-content-type-options': 'nosniff',
+        'cross-origin-resource-policy': 'same-origin',
+      })
+      return response.end(css)
     }
 
     if (request.method === 'GET' && request.url === '/api/session') {

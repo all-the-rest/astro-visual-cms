@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { realpathSync } from 'node:fs'
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -542,8 +543,11 @@ test('symlinked collection bases and symlinked config files are read-only and ne
 test('unconfigured editor keeps collection discovery disabled and rejects partial trusted config', async (t) => {
   const { origin } = await start(t, {})
   assert.deepEqual(await (await fetch(`${origin}/api/collections`)).json(), { configured: false })
-  assert.throws(() => createEditorServer({ projectRoot: '/tmp' }), /both trusted projectRoot and contentConfigPath/)
-  assert.throws(() => createEditorServer({ projectRoot: '/tmp', contentConfigPath: '../outside.mjs' }), /trusted project-relative|in-root/)
+  // Use a canonical root so macOS' /var -> /private/var spelling reaches the
+  // project-relative config check instead of the earlier symlink rejection.
+  const canonicalRoot = realpathSync(tmpdir())
+  assert.throws(() => createEditorServer({ projectRoot: canonicalRoot }), /both trusted projectRoot and contentConfigPath/)
+  assert.throws(() => createEditorServer({ projectRoot: canonicalRoot, contentConfigPath: '../outside.mjs' }), /trusted project-relative|in-root/)
 })
 
 test('collection discovery rejects configs above the aggregate collection limit', async (t) => {

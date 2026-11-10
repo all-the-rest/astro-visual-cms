@@ -37,3 +37,9 @@ The integration lifecycle hook is still restricted to `command === 'dev'`;
 existing lifecycle and production-isolation tests cover that contract. The matrix
 adds actual packed-tarball build/dev checks at its listed Astro checkpoints, but
 does not replace the dedicated Content Sync or external production-consumer gates.
+
+The manual `reisinger.pictures` acceptance additionally covered Astro 7.4.1 with
+`@astrojs/mdx` 8.1.0 and Satteri 0.10.5 for the bounded visual Markdown draft
+(including the Satteri 0.10 `setProperty` mutator). That checkpoint is
+manual-only: it is not part of this matrix and the matrix does not configure a
+Markdown draft target. See [external-acceptance.md](external-acceptance.md).

@@ -51,6 +51,15 @@ test('remark marker factory marks only the exact trusted MDX file and source par
     'data-astro-visual-cms-target': 'markdown-note',
     'data-astro-visual-cms-instance': 'paragraph-one',
   })
+  const legacySatteri010Node = { type: 'paragraph', position: { start: { offset: 0 }, end: { offset: 20 } }, data: {} }
+  let legacyResult
+  plugin.paragraph(legacySatteri010Node, { setProperty(target, key, value) { legacyResult = { target, key, value } } })
+  assert.equal(legacyResult.target, legacySatteri010Node)
+  assert.equal(legacyResult.key, 'data')
+  assert.deepEqual(legacyResult.value.hProperties, {
+    'data-astro-visual-cms-target': 'markdown-note',
+    'data-astro-visual-cms-instance': 'paragraph-one',
+  })
 })
 
 test('configured visual draft maps one root prose node among opaque MDX and produces a text-only exact diff', () => {
@@ -103,4 +112,24 @@ test('visual draft marker is limited to its exact file and unique root-level pro
     'aria-label': 'Select this visual Markdown draft paragraph',
   })
   assert.equal(factory({ sourceFormat: 'mdx', fileURL: new URL('file:///project/page.mdx'), source: `${source}\n${target}\n` }), null)
+})
+
+test('visual draft marker supports the Satteri 0.10 setProperty API and stays readable without a known mutator', () => {
+  const target = 'One configured sentence.'
+  const source = `${target}\n`
+  const plugin = createMarkdownDraftMarkerPlugin({
+    filePath: '/project/page.mdx', targetId: 'draft-target', instanceId: 'draft-instance', text: target,
+  })({ sourceFormat: 'mdx', fileURL: new URL('file:///project/page.mdx'), source })
+  const node = { type: 'paragraph', position: { start: { offset: 0 }, end: { offset: target.length } }, data: {} }
+  let result
+  plugin.paragraph(node, {
+    setProperty(targetNode, key, value) { result = { targetNode, key, value } },
+  })
+  assert.equal(result.targetNode, node)
+  assert.equal(result.key, 'data')
+  assert.deepEqual(result.value.hProperties['data-astro-visual-cms-draft-target'], 'draft-target')
+
+  const fallbackNode = { type: 'paragraph', position: { start: { offset: 0 }, end: { offset: target.length } }, data: {} }
+  assert.doesNotThrow(() => plugin.paragraph(fallbackNode, {}))
+  assert.deepEqual(fallbackNode.data, {})
 })

@@ -28,7 +28,7 @@ pnpm dev
 pnpm test             # Unit-, Compile-, JPEG- und HTTP-E2E-Tests
 pnpm run test:e2e     # HTTP-E2E-Test allein
 pnpm run browser-tests # echte Chromium-Browsertests für den Galerie-Editor
-pnpm run verify       # Tests, synthetischer Sharp/Astro-Static-Build und bestehender Astro-Build
+pnpm run verify       # Tests, Sharp/Astro-Static-Build, Editor-CSS-Aktualität und bestehender Astro-Build
 ```
 
 Der HTTP-E2E-Test startet beide Server auf eigenen Testports, rendert die Galerien und bestätigt, dass Preview plus Bestätigung die Fixture bytegenau unverändert lassen. Die getrennte Playwright-Konfiguration nutzt Chromium und ausschließlich `browser-tests/**/*.spec.ts`; die Server laufen auf `127.0.0.1:15321` (Astro) und `127.0.0.1:15322` (Editor), ohne vorhandene Server wiederzuverwenden. Der Browser-Test prüft Galeriewahl, Drag-and-drop und Button-Sortierung, die exakte Vorschau, einen pfadfreien Proposal-Export und die unveränderte Astro-Ausgabe; die zweite Galerie bleibt unverändert. Die Fixture wird auch bei Testfehlern in `finally` bytegenau wiederhergestellt. Zusätzlich prüft ein mobiler Viewport auf horizontalen Overflow. Chromium lokal einmalig mit `pnpm exec playwright install chromium` installieren; CI installiert es samt System-Abhängigkeiten. Der Build-Verify baut denselben Slug zweimal mit unterschiedlichen Quellpixeln, vergleicht die dekodierten WebP-Pixel und baut anschließend mit restaurierter Quelle erneut, damit `dist/` zur Ausgangsquelle passt.

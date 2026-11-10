@@ -49,6 +49,7 @@ test('editor client previews and confirms source changes with trusted routes and
   assert.match(html, /data-preview-preset="tablet" data-width="768" data-height="1024"/)
   assert.match(html, /data-preview-preset="mobile" data-width="390" data-height="844"/)
   assert.match(html, /__SITE_BASE_PATH__src\/styles\/global\.css/)
+  assert.match(html, /<link rel="stylesheet" href="\/editor\.css"/)
   assert.match(html, /id="collections-panel"[^>]*hidden/)
   assert.match(script, /loadPanelState\('\/api\/collections', 'Collections'/)
   assert.match(script, /postOperation\('\/api\/collections\/preview'/)
