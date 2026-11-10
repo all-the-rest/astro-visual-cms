@@ -14,21 +14,29 @@ for the documented syntax/version/fixture; it is not release acceptance.
 | External concurrent edit conflicts; traversal/symlink/cross-origin/message attacks fail closed; loopback default | **Partial** | Unit/server tests cover stale edits, traversal, symlinks, origin/session boundaries, trusted-frame nonce/source and loopback binding. `writeSourceAtomically` takes an exclusive per-source sidecar lock before reading and holds it through rename; this coordinates package writers only. Replacement is blocked by default before any replacement writer; a deterministic server test changes external bytes immediately before commit and proves they remain intact and no injected writer runs. The explicit trusted `safeSourceReplacementMode: false` opt-out remains unsafe: deterministic filesystem fault injection proves a non-cooperating edit after the final hash read can be overwritten by rename. Exclusive creation remains permitted. Configured MDX commits rejected specifically by the default policy can export a path-free, base-hash-bound diff proposal for manual handoff; it is not applied or merged and is invalidated on observed revision changes. Hash+rename is not portable compare-and-swap. General conflict merge, arbitrary concurrent-writer safety, and consumer-project integration remain open. |
 | Unit/E2E/fixtures/production/accessibility/license checks on pinned and current Astro; limitations documented | **Partial** | Unit, synthetic E2E, package smoke and version-pinned Astro 7.2.4/7.4.7 probes exist. The packed-tarball Astro matrix has passed locally at 7.2.4, 7.2.10, 7.3.8, and 7.4.7; its new CI job awaits execution. Astro 7.2.10+ also covers an imported `.astro` component on an MDX route with `@astrojs/mdx` 8.1.3. These fixed synthetic checkpoints do not prove every Astro 7 minor or arbitrary consumer behavior. `pnpm run verify:licenses` gates only the editor production graph, not dev/build tooling or legal compliance. The Axe browser audit covers the editor fixture at desktop/mobile sizes and configured-MDX diff confirmation, excluding the preview iframe and arbitrary consumer/editor states. Full compatibility and broader accessibility evidence remain open. |
 
-The first named target in Issue #1, `reisinger.pictures`, is not present in this
-workspace. `/projects/powerbros.at` is the available real Astro consumer. A fresh
-copy installed the local package tarball via pnpm, passed `pnpm run build` with
-Astro check at 0 errors, and discovered 12 `referenzen` entries from its existing
-static `glob()`/Zod config. The real UI previewed and confirmed the optional
-`cmsSmokeNote` schema extension; a subsequent `event` edit changed only the
-quoted scalar (87-byte source remained 87 bytes) and appeared on the live
-`/referenzen/` route. The original entry remained at SHA-256
-`7f351538b5c55d202a976bc94f933fb8dfc5c68c48e252a5e088225eae63ab2c`; copied
-fixtures/config/content and temporary processes were discarded. A separate copy
-used the UI to create a static `cmsSmokeCollection` with required string field
-`title`, confirmed the schema diff, and restarted Astro as required for the new
-config. It then created `first-note.md` through the UI; preview left the directory
-empty, confirmation created exact YAML (`title: Neue Notiz — 東京`), the new
-`/cms-smoke/` route rendered it through Content Sync, and a second `pnpm run
-build` passed Astro check with 0 errors and included it in `dist`. That copy was
-discarded. These probes do not establish production readiness or general MDX
-support.
+The first named target in Issue #1, `reisinger.pictures`, was unavailable for the
+2026-11-07 evidence above. A checkout was provided for a later session. On
+2026-11-10, a disposable full-filesystem copy (including ignored production
+content, excluding `.git` and `node_modules`) passed the target's documented
+`pnpm install --frozen-lockfile` and `pnpm run build` gates with Astro 7.4.1;
+`astro check` reported 0 errors, warnings, or hints and the static build produced
+281 pages. The build retained existing route-conflict and missing-overview
+warnings. Target dev routes `/portfolio/akt/boudoir-fine-art/` and
+`/shootings/sport/` returned HTTP 200 and rendered their real MDX/Astro
+composition, galleries, images, and slots. This is baseline project evidence,
+**not** a completed local-package/editor acceptance run. Existing MDX imports,
+custom components, and named Astro slots were inventoried in the copy only.
+
+The CMS repository now includes a separate synthetic counterpart at
+`/reisinger-sample/editorial/showcase/`: the same style of mixed `glob()` pattern,
+an imported tag vocabulary, a `file()` loader, real-looking MDX imports, two
+literal galleries, nested components and named slots. It contains only generated
+noise images and fictional text. `pnpm run build` on the CMS repository passed
+with Astro 7.4.7 and generated that route; a dev-browser request returned HTTP
+200 and verified the rendered head/hero/body/post-contact slots and both
+galleries. This proves only the synthetic Astro shape compiles and renders. The
+editor still does not offer general visual Markdown editing, and the sample does
+not make unsupported collection schemas or arbitrary MDX editable.
+
+The earlier disposable `powerbros.at` evidence remains as described in the
+previous report. None of these partial probes closes #1 or #14.

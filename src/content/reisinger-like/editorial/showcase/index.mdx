@@ -1,0 +1,50 @@
+---
+title: "Synthetischer Spielbericht"
+description: "A fictional editorial entry that exercises real Astro and MDX structure."
+date: 2026-11-10
+heroImage: "noise-fixture-01"
+tags:
+  - sport
+  - gallery
+---
+import Gallery from '../../../../components/Gallery.astro'
+import EditorUnknownChip from '../../../../components/EditorUnknownChip.astro'
+import SampleEditorialCard from '../../../../components/SampleEditorialCard.astro'
+import SampleTestimonialBlock from '../../../../components/SampleTestimonialBlock.astro'
+
+export const FIRST_HALF = ["noise-fixture-01", "noise-fixture-02"];
+export const SECOND_HALF = ["noise-fixture-03"];
+export const OPAQUE_CONTEXT = { phase: 'synthetic', source: 'sample-only' };
+
+## Ein fiktiver Spieltag
+
+Dieser Text ist vollständig synthetisch. Er steht für Markdown-Prosa zwischen
+importierten Komponenten und bleibt außerhalb eines explizit unterstützten
+Quellbereichs unverändert.
+
+### Redaktionelle Notiz
+
+<SampleEditorialCard title="Notiz mit verschachteltem Slot">
+  <p>Dieser Absatz liegt im Default-Slot der äußeren Komponente.</p>
+  <SampleTestimonialBlock slot="note" title="Synthetische Rückschau" score={5} sourceMeta={OPAQUE_CONTEXT}>
+    <EditorUnknownChip id="nested-note" label="Unbekannte verschachtelte Komponente" context={OPAQUE_CONTEXT} />
+  </SampleTestimonialBlock>
+</SampleEditorialCard>
+
+## Erste Bildfolge
+
+Die erste Galerie verwendet dasselbe begrenzte Muster wie die bestehende Fixture:
+ein importiertes Astro-Element und ein exportiertes Literal-Array.
+
+<Gallery id="FIRST_HALF" sorted={FIRST_HALF} />
+
+## Zweite Bildfolge
+
+Auch weitere Prosa, Links und Listen gehören zum Dokument und sind keine
+Komponenten-Props.
+
+- Der Datensatz enthält nur generierte Noise-Testbilder.
+- Die Reihenfolge ist unabhängig von der ersten Galerie.
+- Ein unbekannter Ausdruck bleibt in der synthetischen Vorschau erhalten.
+
+<Gallery id="SECOND_HALF" sorted={SECOND_HALF} />

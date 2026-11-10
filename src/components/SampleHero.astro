@@ -1,0 +1,16 @@
+---
+import SlugImage from './SlugImage.astro'
+
+const { title, description, imageName } = Astro.props
+---
+
+<section class="hero bg-base-100 py-8">
+  <div class="hero-content w-full max-w-5xl flex-col gap-8 md:flex-row md:justify-between">
+    <div class="max-w-xl space-y-4">
+      <span class="badge badge-outline">Synthetischer Inhaltsdatensatz</span>
+      <h1 class="text-3xl font-semibold">{title}</h1>
+      <p>{description}</p>
+    </div>
+    <SlugImage slug={imageName} alt={title} class="aspect-[8/5] w-full max-w-md rounded-box object-cover" />
+  </div>
+</section>
