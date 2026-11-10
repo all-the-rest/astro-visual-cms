@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createMarkdownParagraphAdapter, createMarkdownParagraphMarkerPlugin, mapSinglePlainParagraph, patchSinglePlainParagraph } from '../src/lib/markdown-paragraph-map.mjs'
+import { createMarkdownDraftMarkerPlugin, createMarkdownParagraphAdapter, createMarkdownParagraphMarkerPlugin, mapConfiguredMarkdownDraft, mapSinglePlainParagraph, patchConfiguredMarkdownDraft, patchSinglePlainParagraph } from '../src/lib/markdown-paragraph-map.mjs'
 
 test('maps and patches only a single exact-source plain paragraph', () => {
   const source = 'Synthetic paragraph text.\n'
@@ -51,4 +51,56 @@ test('remark marker factory marks only the exact trusted MDX file and source par
     'data-astro-visual-cms-target': 'markdown-note',
     'data-astro-visual-cms-instance': 'paragraph-one',
   })
+})
+
+test('configured visual draft maps one root prose node among opaque MDX and produces a text-only exact diff', () => {
+  const target = 'One configured fictional sentence.'
+  const source = `---\ntitle: "Opaque frontmatter"\n---\nimport Chip from './Chip.astro'\n\n<Chip value={opaqueExpression} />\n\nOther unselected prose.\n\n${target}\n\n<Chip slot="note">Nested text</Chip>\n`
+  const mapping = mapConfiguredMarkdownDraft(source, target)
+  assert.equal(source.slice(mapping.start, mapping.end), target)
+  const result = patchConfiguredMarkdownDraft(source, target, 'A revised fictional sentence.', mapping.hash)
+  assert.deepEqual(result.diff, { start: mapping.start, end: mapping.end, before: target, after: 'A revised fictional sentence.' })
+  assert.equal(result.nextHash.length, 64)
+  assert.equal(result.hash, mapping.hash)
+  assert.equal(result.source, undefined)
+  assert.equal(source.slice(0, mapping.start), source.slice(0, mapping.start))
+  assert.equal(source.slice(0, mapping.start) + result.diff.after + source.slice(mapping.end),
+    source.replace(target, result.diff.after))
+  assert.deepEqual(patchConfiguredMarkdownDraft(source, target, target, mapping.hash), { hash: mapping.hash, diff: null })
+})
+
+test('configured visual draft fails closed for duplicate, formatted, multiline, or transformed targets and stale hashes', () => {
+  const target = 'One configured sentence.'
+  for (const source of [
+    `${target}\n\n${target}\n`,
+    `**${target}**\n`,
+    'One configured\nsentence.\n',
+    '<Chip />\n',
+  ]) assert.throws(() => mapConfiguredMarkdownDraft(source, target), { code: 'UNSUPPORTED_MARKDOWN_MAPPING' })
+  const source = `${target}\n`
+  assert.throws(() => patchConfiguredMarkdownDraft(source, target, 'Changed sentence.', '0'.repeat(64)), { code: 'STALE_HASH' })
+  assert.throws(() => patchConfiguredMarkdownDraft(source, target, '<img src=x>', mapConfiguredMarkdownDraft(source, target).hash), { code: 'UNSUPPORTED_MARKDOWN_MAPPING' })
+})
+
+test('visual draft marker is limited to its exact file and unique root-level prose target', () => {
+  const target = 'One configured sentence.'
+  const source = `${target}\n`
+  const factory = createMarkdownDraftMarkerPlugin({
+    filePath: '/project/page.mdx', targetId: 'draft-target', instanceId: 'draft-instance', text: target,
+  })
+  assert.equal(factory({ sourceFormat: 'mdx', fileURL: new URL('file:///other/page.mdx'), source }), null)
+  const plugin = factory({ sourceFormat: 'mdx', fileURL: new URL('file:///project/page.mdx'), source })
+  const node = { type: 'paragraph', position: { start: { offset: 0 }, end: { offset: target.length } }, data: {} }
+  let result
+  plugin.paragraph(node, { setField(targetNode, key, value) { result = { targetNode, key, value } } })
+  assert.equal(result.targetNode, node)
+  assert.equal(result.key, 'data')
+  assert.deepEqual(result.value.hProperties, {
+    'data-astro-visual-cms-draft-target': 'draft-target',
+    'data-astro-visual-cms-draft-instance': 'draft-instance',
+    tabindex: '0',
+    role: 'button',
+    'aria-label': 'Select this visual Markdown draft paragraph',
+  })
+  assert.equal(factory({ sourceFormat: 'mdx', fileURL: new URL('file:///project/page.mdx'), source: `${source}\n${target}\n` }), null)
 })

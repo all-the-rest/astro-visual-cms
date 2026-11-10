@@ -7,8 +7,8 @@
     <link rel="stylesheet" href="__SITE_ORIGIN____SITE_BASE_PATH__src/styles/global.css?direct" />
   </head>
   <body class="min-h-screen bg-base-200 text-base-content">
-    <main class="avcms-editor-ui mx-auto grid max-w-7xl gap-6 p-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
-      <section class="card bg-base-100 shadow-sm">
+    <main class="avcms-editor-ui mx-auto grid min-w-0 grid-cols-1 max-w-7xl gap-6 p-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
+      <section class="card min-w-0 bg-base-100 shadow-sm">
         <div class="card-body">
           <h1 class="card-title">MDX-Galerien</h1>
           <p class="text-sm">Wähle eine Galerie, ziehe Einträge zum Sortieren oder nutze die ↑/↓-Buttons als Tastatur-Alternative. Vor dem Speichern zeigt der Editor exakt den geänderten Arraybereich.</p>
@@ -20,7 +20,7 @@
           <p class="text-xs opacity-70">Dev-only · localhost · feste Demo-Fixture · keine Produktions-Schreibschnittstelle</p>
         </div>
       </section>
-      <section class="card min-h-[70vh] bg-base-100 shadow-sm">
+      <section class="card min-h-[70vh] min-w-0 bg-base-100 shadow-sm">
         <div class="card-body min-h-[70vh]">
           <h2 class="card-title">Gerenderte Astro-Seite</h2>
           <nav id="preview-navigation" class="flex flex-wrap gap-2" aria-label="Vorschau-Route">
@@ -35,7 +35,7 @@
           </div>
         </div>
       </section>
-      <section id="collections-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="collections-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Astro Content Collections</h2>
           <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Collections und vorhandene skalare Schemafelder sind bearbeitbar. Konfigurationsänderungen benötigen eine explizite Diff-Bestätigung.</p>
@@ -83,7 +83,7 @@
           <p class="text-xs opacity-70">Nach einer künftigen bestätigten Schema-/Collection-Konfigurationsänderung Content Sync bzw. einen Astro-Dev-Server-Neustart prüfen.</p>
         </div>
       </section>
-      <section id="diff-confirmation" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="diff-confirmation" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Quelländerung bestätigen</h2>
           <p class="text-sm">Nur dieser exakte Arraybereich ist Teil des Vorschlags. Die Bestätigung schreibt keine bestehende Quelldatei.</p>
@@ -104,7 +104,7 @@
           </div>
         </div>
       </section>
-      <section id="collection-diff-confirmation" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="collection-diff-confirmation" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Frontmatter-Änderung bestätigen</h2>
           <p class="text-sm">Nur dieser exakte Skalar ist Teil des Vorschlags. Die Bestätigung schreibt keine bestehende Quelldatei.</p>
@@ -119,7 +119,7 @@
           </div>
         </div>
       </section>
-      <section id="mdx-components-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="mdx-components-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body"><h2 id="mdx-panel-title" class="card-title">MDX-Bearbeitung</h2>
           <p id="mdx-reason" class="alert alert-info" role="status" hidden></p>
           <label>Ziel<select id="mdx-target" class="select select-bordered"></select></label>
@@ -145,7 +145,30 @@
           </section>
         </div>
       </section>
-      <section id="source-proposal-panel" class="card bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="markdown-draft-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
+        <div class="card-body">
+          <h2 class="card-title">Visueller Markdown-Entwurf</h2>
+          <p class="text-sm">Nur der explizit markierte, einzelne Klartext-Absatz ist auswählbar. Der Entwurf ändert ausschließlich die Vorschau: Es gibt hier weder Schreibzugriff noch Änderungsvorschlag oder Export.</p>
+          <div id="markdown-draft-status" class="alert alert-info" role="status" aria-live="polite">Markdown-Ziele werden geladen …</div>
+          <div id="markdown-draft-targets" class="flex flex-wrap gap-2" role="group" aria-label="Konfigurierte Markdown-Entwürfe"></div>
+          <label class="grid gap-1 text-sm" for="markdown-draft-value">Textentwurf
+            <input id="markdown-draft-value" class="input input-bordered w-full" type="text" maxlength="512" autocomplete="off" disabled />
+          </label>
+          <div class="flex flex-wrap gap-2">
+            <button id="markdown-draft-apply" class="btn btn-primary" type="button" disabled>Diff prüfen und Vorschau aktualisieren</button>
+            <button id="markdown-draft-reset" class="btn" type="button" disabled>Entwurf verwerfen und Originaltext laden</button>
+          </div>
+          <section id="markdown-draft-diff" class="grid gap-3" hidden>
+            <h3 class="font-semibold">Exakter Markdown-Quellbereich (nur Anzeige)</h3>
+            <p id="markdown-draft-diff-range" class="font-mono text-xs"></p>
+            <div class="grid gap-4 md:grid-cols-2">
+              <div><h4 class="font-semibold">Vorher</h4><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="markdown-draft-diff-before"></code></pre></div>
+              <div><h4 class="font-semibold">Nachher</h4><pre class="overflow-auto rounded-box bg-base-200 p-3 text-sm"><code id="markdown-draft-diff-after"></code></pre></div>
+            </div>
+          </section>
+        </div>
+      </section>
+      <section id="source-proposal-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Manueller Quelländerungsvorschlag</h2>
           <p id="source-proposal-description" class="text-sm"></p>
@@ -191,7 +214,7 @@
         ...route,
         url: `${siteOrigin}${siteBasePath}${route.path.slice(1)}`,
       }]));
-       let selectedPreviewRouteId = previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id;
+        let selectedPreviewRouteId = previewRoutes.has('showcase') ? 'showcase' : previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id;
        const requestedPreviewRouteId = __INITIAL_PREVIEW_ROUTE_ID__;
       if (requestedPreviewRouteId && previewRoutes.has(requestedPreviewRouteId)) selectedPreviewRouteId = requestedPreviewRouteId;
       for (const route of configuredPreviewRoutes) {
@@ -212,23 +235,77 @@
       let createEntryUnavailable = false;
       let mdxState = { configured: false, targets: [] };
       let mdxSelectionReadOnly = false;
+      let markdownDraftState = { configured: false, targets: [] };
+      let selectedMarkdownDraft = null;
+      let markdownDraftFailure = '';
+      let markdownDraftBusy = false;
+      const markdownDraftUpdateRequests = new Map();
       let previewNonce = '';
       let previewBridgeReady = false;
+      let previewFrameUrl = '';
       preview.addEventListener('load', () => {
+        for (const pending of markdownDraftUpdateRequests.values()) pending.reject(new Error('Die Vorschau wurde neu geladen.'));
+        markdownDraftUpdateRequests.clear();
+        const discardedDraft = Boolean(selectedMarkdownDraft);
+        selectedMarkdownDraft = null;
+        markdownDraftFailure = discardedDraft
+          ? 'Die Vorschau wurde neu geladen. Der visuelle Entwurf samt Diff wurde verworfen; wähle den Absatz erneut.'
+          : '';
+        renderMarkdownDrafts();
         previewNonce = Array.from(crypto.getRandomValues(new Uint8Array(24)), (byte) => byte.toString(16).padStart(2, '0')).join('');
         previewBridgeReady = false;
+        previewFrameUrl = '';
         preview.dataset.bridgeReady = 'false';
         preview.contentWindow?.postMessage({ type: 'avcms:challenge', nonce: previewNonce }, siteOrigin);
       });
       window.addEventListener('message', (event) => {
         const data = event.data;
         if (event.origin !== siteOrigin || event.source !== preview.contentWindow || !data || typeof data !== 'object' || Array.isArray(data)) return;
-        if (Object.keys(data).sort().join(',') === 'nonce,type' && data.type === 'avcms:ready' && data.nonce === previewNonce) {
+        if (Object.keys(data).sort().join(',') === 'href,nonce,type' && data.type === 'avcms:ready' && data.nonce === previewNonce &&
+            typeof data.href === 'string' && data.href.length <= 4096) {
+          let frameUrl;
+          try { frameUrl = new URL(data.href); } catch { return; }
+          if (frameUrl.origin !== siteOrigin || frameUrl.username || frameUrl.password) return;
+          previewFrameUrl = frameUrl.href;
           previewBridgeReady = true;
           preview.dataset.bridgeReady = 'true';
           return;
         }
         if (!previewBridgeReady) return;
+        if (data.type === 'avcms:draft-update-result') {
+          if (Object.keys(data).sort().join(',') !== 'instanceId,markerCount,nonce,ok,requestId,targetId,type' ||
+              data.nonce !== previewNonce || !/^[A-Za-z0-9_-]{1,64}$/.test(data.targetId || '') ||
+              !/^[A-Za-z0-9_-]{1,128}$/.test(data.instanceId || '') || typeof data.requestId !== 'string' ||
+              data.requestId.length > 128 || typeof data.ok !== 'boolean' || !Number.isInteger(data.markerCount) || data.markerCount < 0) return;
+          const pending = markdownDraftUpdateRequests.get(data.requestId);
+          if (!pending || pending.targetId !== data.targetId || pending.instanceId !== data.instanceId) return;
+          markdownDraftUpdateRequests.delete(data.requestId);
+          if (data.ok && data.markerCount === 1) pending.resolve();
+          else pending.reject(Object.assign(new Error(data.markerCount > 1
+            ? 'Mehrere gerenderte Elemente beanspruchen dasselbe Markdown-Ziel.'
+            : 'Die gerenderte Markdown-Ausgabe wurde verändert, transformiert oder ist nicht mehr eindeutig.'), { code: 'INVALID_PREVIEW_TARGET' }));
+          return;
+        }
+        if (data.type === 'avcms:draft-selection') {
+          if (Object.keys(data).sort().join(',') !== 'instanceId,markerCount,nonce,renderedText,targetId,type' ||
+              data.nonce !== previewNonce || typeof data.targetId !== 'string' || data.targetId.length > 64 ||
+              typeof data.instanceId !== 'string' || data.instanceId.length > 128 || data.markerCount !== 1 ||
+              typeof data.renderedText !== 'string' || data.renderedText.length > 512) return;
+          handleMarkdownDraftSelection(data);
+          return;
+        }
+        if (data.type === 'avcms:draft-readonly') {
+          if (Object.keys(data).sort().join(',') !== 'instanceId,markerCount,nonce,targetId,type' ||
+              data.nonce !== previewNonce || typeof data.targetId !== 'string' || data.targetId.length > 64 ||
+              typeof data.instanceId !== 'string' || data.instanceId.length > 128 ||
+              !Number.isInteger(data.markerCount) || data.markerCount < 0) return;
+          markdownDraftFailure = data.markerCount > 1
+            ? 'Mehrere gerenderte Elemente beanspruchen dasselbe Markdown-Ziel. Die Ausgabe bleibt schreibgeschützt.'
+            : 'Die gerenderte Markdown-Ausgabe ist verändert, transformiert oder nicht eindeutig. Sie bleibt schreibgeschützt.';
+          selectedMarkdownDraft = null;
+          renderMarkdownDrafts();
+          return;
+        }
         if (Object.keys(data).sort().join(',') !== 'instanceId,nonce,targetId,type' || data.type !== 'avcms:selection' || data.nonce !== previewNonce || typeof data.targetId !== 'string' || data.targetId.length > 128 || typeof data.instanceId !== 'string' || data.instanceId.length > 128) return;
         const target = mdxState.targets.find((item) => item.id === data.targetId);
         if (!target) return;
@@ -253,7 +330,7 @@
       let mdxPollSequence = 0;
       const mdxDrafts = new Map();
       let mdxSelectionEpoch = 0;
-      const mdxPanel = document.querySelector('#mdx-components-panel');
+       const mdxPanel = document.querySelector('#mdx-components-panel');
       const mdxTarget = document.querySelector('#mdx-target');
       const mdxReason = document.querySelector('#mdx-reason');
       const mdxInstance = document.querySelector('#mdx-instance');
@@ -265,6 +342,13 @@
       const selectedMdxDraftConflict = () => mdxDraftConflicts.get(mdxDraftKey()) || null;
       const formatMdxConflictValue = (value) => value === undefined ? 'Nicht verfügbar' : JSON.stringify(value) ?? String(value);
        const mdxConfirmation = document.querySelector('#mdx-confirmation');
+       const markdownDraftPanel = document.querySelector('#markdown-draft-panel');
+       const markdownDraftStatus = document.querySelector('#markdown-draft-status');
+       const markdownDraftTargets = document.querySelector('#markdown-draft-targets');
+       const markdownDraftValue = document.querySelector('#markdown-draft-value');
+       const markdownDraftApply = document.querySelector('#markdown-draft-apply');
+       const markdownDraftReset = document.querySelector('#markdown-draft-reset');
+       const markdownDraftDiff = document.querySelector('#markdown-draft-diff');
        const sourceProposalPanel = document.querySelector('#source-proposal-panel');
         const sourceProposalDescription = document.querySelector('#source-proposal-description');
         const sourceProposalExportButton = document.querySelector('#source-proposal-export');
@@ -418,7 +502,7 @@
         if (selected && values.includes(selected)) select.value = selected;
         select.setAttribute('aria-label', label);
       }
-      function renderMdx() {
+       function renderMdx() {
         mdxPanel.hidden = !mdxState.configured || !mdxState.targets?.length;
         if (mdxPanel.hidden) return;
         const target = mdxState.targets.find((item) => item.id === mdxTarget.value) || mdxState.targets[0];
@@ -452,7 +536,8 @@
           mdxValue.dataset.mdxProp = mdxProp.value;
           if (descriptor?.type === 'boolean') mdxValue.checked = draft;
           else mdxValue.value = draft;
-        }
+       }
+
         for (const control of [mdxTarget, mdxInstance, mdxProp, mdxValue]) control.disabled = busy() || Boolean(pendingMdxPreview) || !supported.length || !selectedPropEditable || mdxSelectionReadOnly;
         const conflictKey = mdxDraftKey();
         const draftConflict = mdxDraftConflicts.get(conflictKey);
@@ -475,6 +560,187 @@
         }
       }
 
+       function updateMarkdownDraftInPreview(selected, value, expectedText = selected.renderedText) {
+         if (!previewBridgeReady || !preview.contentWindow) return Promise.reject(new Error('Die Vorschau-Brücke ist nicht bereit.'));
+         const requestId = crypto.randomUUID();
+         return new Promise((resolve, reject) => {
+           const timeout = window.setTimeout(() => {
+             markdownDraftUpdateRequests.delete(requestId);
+             reject(new Error('Die Vorschau hat die eindeutige Textaktualisierung nicht bestätigt.'));
+           }, 2000);
+           markdownDraftUpdateRequests.set(requestId, {
+             targetId: selected.targetId,
+             instanceId: selected.instanceId,
+             resolve: () => { window.clearTimeout(timeout); selected.renderedText = value; resolve(); },
+             reject: (error) => { window.clearTimeout(timeout); reject(error); },
+           });
+           preview.contentWindow.postMessage({
+             type: 'avcms:draft-update', nonce: previewNonce, requestId,
+             targetId: selected.targetId, instanceId: selected.instanceId, expectedText, value,
+           }, siteOrigin);
+         });
+       }
+
+       function markdownDraftInstance(targetId, instanceId) {
+         const target = markdownDraftState.targets?.find((item) => item.id === targetId && item.supported);
+         const instance = target?.instances?.find((item) => item.id === instanceId);
+         return target && instance ? { target, instance } : null;
+       }
+
+       function handleMarkdownDraftSelection(data) {
+         const resolved = markdownDraftInstance(data.targetId, data.instanceId);
+         if (!resolved || data.markerCount !== 1) {
+           markdownDraftFailure = !resolved
+             ? 'Dieses Markdown-Ziel ist nicht unterstützt und bleibt schreibgeschützt.'
+             : 'Das Markdown-Ziel ist nicht mehr eindeutig gerendert.';
+           selectedMarkdownDraft = null;
+           renderMarkdownDrafts();
+           return;
+         }
+         const current = selectedMarkdownDraft?.targetId === data.targetId && selectedMarkdownDraft?.instanceId === data.instanceId
+           ? selectedMarkdownDraft
+           : null;
+         const expectedText = current?.value ?? resolved.instance.text;
+         if (data.renderedText !== expectedText || resolved.target.hash !== (current?.hash || resolved.target.hash)) {
+           markdownDraftFailure = 'Die gerenderte Ausgabe wurde verändert oder transformiert und lässt sich nicht eindeutig dem Quelltext zuordnen.';
+           selectedMarkdownDraft = null;
+           renderMarkdownDrafts();
+           return;
+         }
+         selectedMarkdownDraft = current || {
+           targetId: data.targetId,
+           instanceId: data.instanceId,
+           hash: resolved.target.hash,
+           baseText: resolved.instance.text,
+           value: resolved.instance.text,
+           renderedText: resolved.instance.text,
+           diff: null,
+           stale: false,
+         };
+         selectedMarkdownDraft.renderedText = data.renderedText;
+         markdownDraftFailure = '';
+         renderMarkdownDrafts();
+         markdownDraftValue.focus();
+       }
+
+       function renderMarkdownDrafts() {
+         markdownDraftPanel.hidden = !markdownDraftState.configured;
+         if (markdownDraftPanel.hidden) return;
+         markdownDraftTargets.replaceChildren();
+         for (const target of markdownDraftState.targets || []) {
+           const summary = document.createElement('p');
+           summary.className = target.supported ? 'text-sm' : 'basis-full text-xs text-warning';
+            summary.textContent = target.supported
+              ? `${target.id} · unterstützter Absatz: in der Vorschau auswählen`
+              : `${target.id} · schreibgeschützt: ${target.error || 'Ziel nicht unterstützt.'}`;
+            markdownDraftTargets.append(summary);
+          }
+
+         const selected = selectedMarkdownDraft;
+         const selectedTarget = selected && markdownDraftState.targets?.find((target) => target.id === selected.targetId);
+         const stale = !selected || selected.stale || !selectedTarget?.supported || selectedTarget.hash !== selected.hash;
+         const readOnlyReason = selectedTarget && !selectedTarget.supported ? selectedTarget.error : '';
+         markdownDraftStatus.className = `alert alert-${markdownDraftFailure || readOnlyReason || selected?.stale ? 'warning' : selected ? 'success' : 'info'}`;
+         markdownDraftStatus.textContent = markdownDraftFailure || readOnlyReason || (selected?.stale
+           ? 'Die Quellrevision hat sich geändert. Dieser visuelle Entwurf ist gesperrt; verwerfen und neu laden.'
+           : selected?.notice
+             ? selected.notice
+           : selected
+             ? selected.diff
+               ? 'Lokaler visueller Entwurf aktualisiert. Keine Datei wurde geschrieben; Export und Übergabe sind deaktiviert.'
+               : selected.value !== selected.baseText
+                 ? 'Lokaler visueller Entwurf noch nicht diff-bestätigt. Keine Datei wurde geschrieben.'
+                 : 'Absatz ausgewählt. Änderungen bleiben ein lokaler visueller Entwurf.'
+              : 'Wähle den markierten Absatz in der Vorschau per Klick, Tab+Enter oder Tab+Leertaste.');
+         markdownDraftValue.disabled = stale || markdownDraftBusy;
+         markdownDraftValue.value = selected?.value ?? '';
+         markdownDraftApply.disabled = stale || markdownDraftBusy || !selected;
+         markdownDraftReset.disabled = !selected || markdownDraftBusy;
+         markdownDraftDiff.hidden = !selected?.diff;
+         if (selected?.diff) {
+           document.querySelector('#markdown-draft-diff-range').textContent = `Quelloffset ${selected.diff.start}–${selected.diff.end} (JavaScript-Codeeinheiten)`;
+           document.querySelector('#markdown-draft-diff-before').textContent = selected.diff.before;
+           document.querySelector('#markdown-draft-diff-after').textContent = selected.diff.after;
+         }
+       }
+
+       markdownDraftValue.addEventListener('input', () => {
+         const selected = selectedMarkdownDraft;
+         if (!selected || selected.stale || markdownDraftBusy) return;
+         const previousText = selected.renderedText;
+         selected.value = markdownDraftValue.value;
+         selected.renderedText = selected.value;
+         selected.diff = null;
+         selected.notice = '';
+         markdownDraftFailure = '';
+         renderMarkdownDrafts();
+         markdownDraftValue.focus();
+         void updateMarkdownDraftInPreview(selected, selected.value, previousText).catch((error) => {
+           if (selectedMarkdownDraft !== selected) return;
+           selected.stale = true;
+           markdownDraftFailure = `${error.message} Die Ausgabe bleibt schreibgeschützt.`;
+           renderMarkdownDrafts();
+         });
+       });
+
+       markdownDraftApply.addEventListener('click', async () => {
+         const selected = selectedMarkdownDraft;
+         if (!selected || selected.stale || markdownDraftBusy) return;
+         const operation = {
+           targetId: selected.targetId,
+           instanceId: selected.instanceId,
+           value: markdownDraftValue.value,
+           hash: selected.hash,
+         };
+         markdownDraftBusy = true;
+         renderMarkdownDrafts();
+         try {
+           await updateMarkdownDraftInPreview(selected, operation.value, selected.renderedText);
+           if (selectedMarkdownDraft !== selected || selected.stale) throw new Error('Die Auswahl ist nicht mehr aktuell.');
+           const response = await postOperation('/api/markdown-drafts/preview', operation);
+           const result = await response.json();
+           if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
+           if (selectedMarkdownDraft !== selected || result.targetId !== selected.targetId || result.instanceId !== selected.instanceId ||
+               result.hash !== selected.hash || !/^[a-f0-9]{64}$/.test(result.nextHash || '')) throw new Error('Die Markdown-Diff-Antwort konnte nicht eindeutig dem Entwurf zugeordnet werden.');
+           if (result.diff) {
+             if (!Number.isInteger(result.diff.start) || !Number.isInteger(result.diff.end) || result.diff.before !== selected.baseText || result.diff.after !== operation.value) {
+               throw new Error('Der zurückgegebene Quellbereich entspricht nicht dem ausgewählten Absatz.');
+             }
+           } else if (operation.value !== selected.baseText || result.nextHash !== selected.hash) {
+             throw new Error('Die No-op-Antwort ist nicht byte-identisch zur geladenen Revision.');
+           }
+           await updateMarkdownDraftInPreview(selected, operation.value, operation.value);
+           selected.value = operation.value;
+           selected.diff = result.diff;
+           selected.notice = result.diff
+             ? 'Exakter Markdown-Quellbereich geprüft. Nur die Vorschau wurde aktualisiert; die Quelldatei blieb unverändert.'
+             : 'No-op: Quelltext und Vorschau sind byte-identisch; es wurde nichts geändert.';
+           markdownDraftFailure = '';
+          } catch (error) {
+            if (error.code === 'STALE_HASH' || error.status === 409) {
+              selected.stale = true;
+              markdownDraftFailure = 'Die Quellrevision hat sich geändert. Der Entwurf ist gesperrt; es wurde kein Vorschlag erstellt.';
+              void pollMarkdownDrafts();
+            } else if (error.code === 'INVALID_PREVIEW_TARGET') {
+              selected.stale = true;
+              markdownDraftFailure = `${error.message} Die Ausgabe bleibt schreibgeschützt.`;
+            } else {
+              markdownDraftFailure = error.message || 'Markdown-Diff konnte nicht sicher erstellt werden.';
+            }
+          } finally {
+            markdownDraftBusy = false;
+            renderMarkdownDrafts();
+          }
+        });
+
+       markdownDraftReset.addEventListener('click', () => {
+         if (!selectedMarkdownDraft || markdownDraftBusy) return;
+         selectedMarkdownDraft = null;
+         markdownDraftFailure = '';
+         renderMarkdownDrafts();
+         navigatePreview(selectedPreviewRouteId, true);
+         void pollMarkdownDrafts();
+       });
       function galleryById(id) {
         return current.galleries.find((gallery) => gallery.id === id);
       }
@@ -599,7 +865,7 @@
           if (!collection.supported || collection.mode !== 'editable') {
             const reason = document.createElement('p');
             reason.className = 'basis-full text-xs text-warning';
-            reason.textContent = `${collection.name}: ${collection.reason || 'Read-only'}`;
+            reason.textContent = `${collection.name}: Schreibgeschützt · ${collection.reason || 'Loader oder Schema werden nicht unterstützt.'}`;
             collectionPicker.append(reason);
           }
         }
@@ -1049,8 +1315,9 @@
         } finally { saving = false; render(); }
       });
 
-      function render() {
-        renderSourceProposal();
+       function render() {
+         renderSourceProposal();
+         renderMarkdownDrafts();
         renderConfirmation();
         renderGalleryConflict();
         renderGalleryDraftActions();
@@ -1167,14 +1434,24 @@
         }
       }
 
-      function navigatePreview(route) {
-        const selected = previewRoutes.get(route);
-        if (!selected) return;
-        selectedPreviewRouteId = route;
-        preview.src = selected.cacheBustOnRevision && current.hash
-          ? `${selected.url}?revision=${encodeURIComponent(current.hash)}`
-          : selected.url;
-        preview.title = `${selected.label}-Vorschau`;
+       function navigatePreview(route, force = false) {
+         const selected = previewRoutes.get(route);
+         if (!selected) return;
+         const routeChanged = route !== selectedPreviewRouteId;
+         selectedPreviewRouteId = route;
+         const query = selected.cacheBustOnRevision && current.hash ? `?revision=${encodeURIComponent(current.hash)}` : '';
+         const url = `${selected.url}${query}${force ? `${query ? '&' : '?'}draftReset=${Date.now()}` : ''}`;
+         const requestedUrl = new URL(`${selected.url}${query}`, window.location.href);
+         const currentUrl = previewFrameUrl ? new URL(previewFrameUrl) : null;
+         if (currentUrl) currentUrl.searchParams.delete('draftReset');
+         const reload = force || !currentUrl || currentUrl.href !== requestedUrl.href;
+         if (routeChanged || reload) {
+           selectedMarkdownDraft = null;
+           markdownDraftFailure = '';
+           renderMarkdownDrafts();
+         }
+         if (reload) preview.src = url;
+         preview.title = `${selected.label}-Vorschau`;
         for (const button of previewNavigation.querySelectorAll('[data-preview-route]')) {
           button.setAttribute('aria-pressed', String(button.dataset.previewRoute === route));
         }
@@ -1203,7 +1480,35 @@
         editorToken = session.token;
       }
 
-      async function load({ preserveMdxDraft = false } = {}) {
+       function reconcileMarkdownDrafts(next, unavailable = false) {
+         markdownDraftState = next || { configured: false, targets: [] };
+         const selected = selectedMarkdownDraft;
+         if (selected) {
+           const latest = markdownDraftState.targets?.find((item) => item.id === selected.targetId && item.supported);
+           const instance = latest?.instances?.find((item) => item.id === selected.instanceId);
+           if (unavailable || !latest || latest.hash !== selected.hash || instance?.text !== selected.baseText) {
+             selected.stale = true;
+             selected.diff = null;
+             markdownDraftFailure = 'Die Quellrevision hat sich geändert oder ist nicht prüfbar. Der visuelle Entwurf ist gesperrt.';
+           }
+         }
+         renderMarkdownDrafts();
+       }
+
+       async function pollMarkdownDrafts() {
+         try {
+           const response = await fetch('/api/markdown-drafts', { cache: 'no-store' });
+           if (!response.ok) throw new Error(`HTTP ${response.status}`);
+           reconcileMarkdownDrafts(await response.json());
+         } catch {
+           reconcileMarkdownDrafts(markdownDraftState, true);
+         }
+       }
+
+       window.setInterval(() => { if (!document.hidden) pollMarkdownDrafts(); }, 2000);
+       window.addEventListener('focus', pollMarkdownDrafts);
+
+       async function load({ preserveMdxDraft = false } = {}) {
         const previousSelection = preserveMdxDraft ? { targetId: mdxTarget.value, instanceId: mdxInstance.value, prop: mdxProp.value, value: mdxValue ? (mdxValue.type === 'checkbox' ? mdxValue.checked : mdxValue.value) : undefined } : null;
         await refreshSession();
         const unavailable = [];
@@ -1236,9 +1541,11 @@
             invalidateSourceProposal('collection-entry', sourceProposalLookup.id, entry?.hash || '', collectionState.configHash || '');
          }
          reconcileCreateEntryDrafts(collectionState, unavailable.some((item) => item.startsWith('Collections (')));
-         mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
+          mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
          for (const target of mdxState.targets || []) invalidateSourceProposal('mdx-target', target.id, target.supported ? target.hash || '' : '');
-        for (const target of mdxState.targets || []) if (target.hash) mdxLastHashes.set(target.id, target.hash);
+         for (const target of mdxState.targets || []) if (target.hash) mdxLastHashes.set(target.id, target.hash);
+         const nextMarkdownDraftState = await loadPanelState('/api/markdown-drafts', 'Markdown-Entwürfe', { configured: false, targets: [] });
+         reconcileMarkdownDrafts(nextMarkdownDraftState, unavailable.some((item) => item.startsWith('Markdown-Entwürfe (')));
         if (previousSelection) {
           if (mdxState.targets.some((item) => item.id === previousSelection.targetId)) mdxTarget.value = previousSelection.targetId;
           renderMdx();
@@ -1259,8 +1566,9 @@
           selectedEntryId = selectedCollection()?.entries?.[0]?.id || '';
         }
         if (!galleryById(selectedGalleryId) && !galleryConflicts.has(selectedGalleryId)) selectedGalleryId = current.galleries[0]?.id || '';
-        render();
-        renderMdx();
+         render();
+         renderMdx();
+         renderMarkdownDrafts();
         navigatePreview(selectedPreviewRouteId);
         status(unavailable.length
           ? `Teilweise geladen: ${unavailable.join(', ')}. Andere konfigurierte Bereiche bleiben verfügbar.`

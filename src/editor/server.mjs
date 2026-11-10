@@ -10,7 +10,7 @@ import { patchFrontmatterField } from './collection-discovery.mjs'
 import { createCollectionRuntime, publicCollectionState } from './collection-runtime.mjs'
 import { createSourceExclusively, writeSourceAtomically } from './source-write.mjs'
 import { createMdxPropsAdapter } from '../lib/mdx-props-patch.mjs'
-import { createMarkdownParagraphAdapter } from '../lib/markdown-paragraph-map.mjs'
+import { createMarkdownParagraphAdapter, mapConfiguredMarkdownDraft, patchConfiguredMarkdownDraft } from '../lib/markdown-paragraph-map.mjs'
 import { lstatSync, realpathSync } from 'node:fs'
 import { createAstroGalleryAdapter } from '../lib/astro-gallery-patch.mjs'
 
@@ -25,6 +25,7 @@ const PREVIEW_TTL_MS = 5 * 60_000
 const EDITOR_SESSION_TTL_MS = 8 * 60 * 60_000
 const MAX_PENDING_PREVIEWS = 32
 const MAX_MDX_COMPONENT_TARGETS = 16
+const MAX_MARKDOWN_DRAFT_TARGETS = 8
 const MAX_MDX_SOURCE_BYTES = 1024 * 1024
 const MAX_MDX_COMPONENT_INSTANCES = 500
 const DEFAULT_PREVIEW_ROUTES = [
@@ -242,6 +243,7 @@ export function createEditorServer({
   contentConfigPath,
   mdxComponentTargets,
   mdxParagraphTargets,
+  markdownDraftTargets = [],
   astroGalleryTargets = [],
   previewRoutes = DEFAULT_PREVIEW_ROUTES,
   safeSourceReplacementMode,
@@ -314,6 +316,31 @@ export function createEditorServer({
       return { id: target.id, root, file, adapter, kind: 'markdown-paragraph' }
     })
   })()
+  if (!Array.isArray(markdownDraftTargets) || markdownDraftTargets.length > MAX_MARKDOWN_DRAFT_TARGETS) {
+    throw new TypeError(`markdownDraftTargets must contain at most ${MAX_MARKDOWN_DRAFT_TARGETS} trusted targets.`)
+  }
+  const draftTargets = markdownDraftTargets.map((target, index) => {
+    const keys = ['id', 'projectRoot', 'filePath', 'instanceId', 'text']
+    if (!target || typeof target !== 'object' || Array.isArray(target) || Object.keys(target).some((key) => !keys.includes(key)) ||
+        keys.some((key) => !Object.hasOwn(target, key)) ||
+        typeof target.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(target.id) ||
+        typeof target.projectRoot !== 'string' || !path.isAbsolute(target.projectRoot) ||
+        typeof target.filePath !== 'string' || !path.isAbsolute(target.filePath) ||
+        typeof target.instanceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(target.instanceId) ||
+        typeof target.text !== 'string' || !target.text || target.text.length > 512 || /[\r\n]/.test(target.text)) {
+      throw new TypeError(`Invalid trusted Markdown draft target at index ${index}.`)
+    }
+    const root = path.resolve(target.projectRoot), file = path.resolve(target.filePath)
+    if (realpathSync(root) !== root || !lstatSync(root).isDirectory() || !file.startsWith(`${root}${path.sep}`)) {
+      throw new TypeError('Markdown draft target must be inside a canonical project root.')
+    }
+    assertMarkdownDraftTargetSafe(root, file)
+    return { id: target.id, root, file, instanceId: target.instanceId, text: target.text }
+  })
+  if (new Set(draftTargets.map((target) => target.id)).size !== draftTargets.length ||
+      new Set(draftTargets.map((target) => target.instanceId)).size !== draftTargets.length) {
+    throw new TypeError('Markdown draft target and instance ids must be unique.')
+  }
   const mdxTargets = [...componentTargets, ...paragraphTargets]
   if (new Set(mdxTargets.map((target) => target.id)).size !== mdxTargets.length) throw new TypeError('MDX target ids must be unique.')
   const pendingMdxPreviews = new Map()
@@ -391,6 +418,57 @@ export function createEditorServer({
     const stat = lstatSync(file)
     if (!stat.isFile() || realpathSync(file) !== file) { const error = new Error('Configured MDX target is not a regular in-root file.'); error.code = 'UNSAFE_MDX_PATH'; throw error }
     if (stat.size > MAX_MDX_SOURCE_BYTES) { const error = new Error('Configured MDX target exceeds the safe source size limit.'); error.code = 'MDX_SOURCE_LIMIT'; throw error }
+  }
+
+  function assertMarkdownDraftTargetSafe(root, file) {
+    const relative = path.relative(root, file)
+    let current = root
+    for (const segment of relative.split(path.sep)) {
+      current = path.join(current, segment)
+      const stat = lstatSync(current)
+      if (stat.isSymbolicLink()) {
+        const error = new Error('Symbolic links in configured Markdown draft paths are not available.')
+        error.code = 'UNSAFE_MARKDOWN_DRAFT_PATH'
+        throw error
+      }
+    }
+    const stat = lstatSync(file)
+    if (!stat.isFile() || realpathSync(file) !== file) {
+      const error = new Error('Configured Markdown draft target is not a regular in-root file.')
+      error.code = 'UNSAFE_MARKDOWN_DRAFT_PATH'
+      throw error
+    }
+    if (stat.size > MAX_MDX_SOURCE_BYTES) {
+      const error = new Error('Configured Markdown draft target exceeds the safe source-size limit.')
+      error.code = 'MARKDOWN_DRAFT_SOURCE_LIMIT'
+      throw error
+    }
+  }
+
+  function readMarkdownDraftSource(target) {
+    assertMarkdownDraftTargetSafe(target.root, target.file)
+    const bytes = readFileSync(target.file)
+    if (bytes.length > MAX_MDX_SOURCE_BYTES) {
+      const error = new Error('Configured Markdown draft target exceeds the safe source-size limit.')
+      error.code = 'MARKDOWN_DRAFT_SOURCE_LIMIT'
+      throw error
+    }
+    const source = bytes.toString('utf8')
+    if (!Buffer.from(source, 'utf8').equals(bytes)) {
+      const error = new Error('Configured Markdown draft target is not valid UTF-8 source.')
+      error.code = 'UNSUPPORTED_ENCODING'
+      throw error
+    }
+    return source
+  }
+
+  function safeMarkdownDraftFailure(error) {
+    const codes = new Set(['STALE_HASH', 'UNSUPPORTED_MARKDOWN_MAPPING', 'UNSAFE_MARKDOWN_DRAFT_PATH', 'MARKDOWN_DRAFT_SOURCE_LIMIT', 'UNSUPPORTED_ENCODING'])
+    const code = codes.has(error?.code) ? error.code : 'MARKDOWN_DRAFT_FAILED'
+    const message = code === 'MARKDOWN_DRAFT_FAILED'
+      ? 'Markdown visual draft could not be prepared safely.'
+      : error.message
+    return { code, error: message }
   }
 
   function readMdxTargetSource(target) {
@@ -701,6 +779,67 @@ export function createEditorServer({
         return json(response, ['STALE_HASH', 'SOURCE_REPLACEMENT_DISABLED'].includes(failure.code) ? 409 : 422, failure)
       }
     }
+    if (request.method === 'GET' && request.url === '/api/markdown-drafts') {
+      if (request.headers.origin && request.headers.origin !== editorOrigin()) return json(response, 403, { error: 'Only the editor origin is allowed.' })
+      const targets = draftTargets.map((target) => {
+        let hash
+        try {
+          const source = readMarkdownDraftSource(target)
+          hash = hashSource(source)
+          const mapping = mapConfiguredMarkdownDraft(source, target.text)
+          return {
+            id: target.id,
+            kind: 'markdown-text-range',
+            supported: true,
+            hash: mapping.hash,
+            instances: [{ id: target.instanceId, text: mapping.text }],
+          }
+        } catch (error) {
+          const failure = safeMarkdownDraftFailure(error)
+          return {
+            id: target.id,
+            kind: 'markdown-text-range',
+            supported: false,
+            ...(hash ? { hash } : {}),
+            error: failure.error,
+            code: failure.code,
+          }
+        }
+      })
+      return json(response, 200, { configured: draftTargets.length > 0, targets })
+    }
+
+    if (request.method === 'POST' && request.url === '/api/markdown-drafts/preview') {
+      if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      try {
+        const payload = await readJson(request)
+        const keys = ['targetId', 'instanceId', 'value', 'hash']
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== keys.length ||
+            Object.keys(payload).some((key) => !keys.includes(key)) ||
+            typeof payload.targetId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(payload.targetId) ||
+            typeof payload.instanceId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(payload.instanceId) ||
+            typeof payload.value !== 'string' || payload.value.length > 512 ||
+            typeof payload.hash !== 'string' || !/^[a-f0-9]{64}$/.test(payload.hash)) {
+          return json(response, 422, { code: 'INVALID_REQUEST', error: 'Only a configured target, instance, one-line text value, and expected revision are accepted.' })
+        }
+        const target = draftTargets.find((item) => item.id === payload.targetId && item.instanceId === payload.instanceId)
+        if (!target) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Unknown configured Markdown draft target.' })
+        const source = readMarkdownDraftSource(target)
+        const result = patchConfiguredMarkdownDraft(source, target.text, payload.value, payload.hash)
+        return json(response, 200, {
+          targetId: target.id,
+          instanceId: target.instanceId,
+          hash: result.hash,
+          nextHash: result.nextHash || result.hash,
+          diff: result.diff,
+        })
+      } catch (error) {
+        const failure = safeMarkdownDraftFailure(error)
+        const statusCode = failure.code === 'STALE_HASH' ? 409 : failure.code === 'MARKDOWN_DRAFT_FAILED' ? 500 : 422
+        return json(response, statusCode, failure)
+      }
+    }
+
     if (request.method === 'GET' && request.url === '/api/mdx-components') {
       if (request.headers.origin && request.headers.origin !== editorOrigin()) return json(response, 403, { error: 'Only the editor origin is allowed.' })
       const targets = []

@@ -54,6 +54,7 @@ test('loopback integration only changes Astro dev configuration, never build or 
   assert.equal(injected[0][0], 'page')
   assert.match(injected[0][1], /127\.0\.0\.1:4322/)
   assert.match(injected[0][1], /avcms:ready/)
+  assert.match(injected[0][1], /avcms:ready',nonce,href:location\.href/)
 
   const customPort = []
   createLoopbackDevIntegration({ editorPort: '15432' }).hooks['astro:config:setup']({
@@ -86,6 +87,37 @@ test('loopback integration only changes Astro dev configuration, never build or 
   assert.throws(() => markdownIntegration.hooks['astro:config:setup']({
     command: 'dev', config: { markdown: { processor: { name: 'other', options: {} } } }, updateConfig() {}, injectScript() {},
   }), /cannot be mapped by the active Astro processor/)
+
+  const draftIntegration = createLoopbackDevIntegration({ markdownDraftTargets: [{
+    id: 'draft-target', instanceId: 'draft-one', filePath: path.join(ROOT, 'src/pages/fixture.mdx'), text: 'One configured sentence.',
+  }] })
+  const draftPlugins = []
+  const draftScripts = []
+  draftIntegration.hooks['astro:config:setup']({
+    command: 'dev', config: { markdown: { processor: { name: 'satteri', options: { mdastPlugins: draftPlugins } } } },
+    updateConfig() {}, injectScript: (...values) => draftScripts.push(values),
+  })
+  assert.equal(draftPlugins.length, 1)
+  const draftPlugin = draftPlugins[0]({
+    sourceFormat: 'mdx', fileURL: pathToFileURL(path.join(ROOT, 'src/pages/fixture.mdx')),
+    source: 'One configured sentence.\n',
+  })
+  assert.equal(draftPlugin.name, 'astro-visual-cms-markdown-draft-draft-target')
+  assert.match(draftScripts[0][1], /data-astro-visual-cms-draft-target/)
+  assert.match(draftScripts[0][1], /childNodes\.length===1&&el\.firstChild\.nodeType===Node\.TEXT_NODE/)
+  assert.match(draftScripts[0][1], /target\.firstChild\.nodeValue=d\.value/)
+  assert.match(draftScripts[0][1], /avcms:draft-selection/)
+  assert.match(draftScripts[0][1], /avcms:draft-readonly/)
+  assert.match(draftScripts[0][1], /addEventListener\('keydown'/)
+  const noProductionDraftPlugins = []
+  draftIntegration.hooks['astro:config:setup']({
+    command: 'build', config: { markdown: { processor: { name: 'satteri', options: { mdastPlugins: noProductionDraftPlugins } } } },
+    updateConfig() {}, injectScript() {},
+  })
+  assert.deepEqual(noProductionDraftPlugins, [])
+  assert.throws(() => createLoopbackDevIntegration({ markdownDraftTargets: [{
+    id: 'draft', instanceId: 'instance', filePath: 'relative.mdx', text: 'Target.',
+  }] }), /Invalid trusted Markdown draft target/)
 })
 
 function availablePort() {

@@ -70,3 +70,6 @@ jobs:
 
       - name: Run isolated-copy Markdown selection browser test
         run: pnpm run browser-tests:markdown-copy
+
+      - name: Run isolated-copy Content Layer visual Markdown draft test
+        run: pnpm run browser-tests:markdown-draft-copy

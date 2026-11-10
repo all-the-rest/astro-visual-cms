@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createEditorServer } from '../src/editor/server.mjs'
+import { createSampleDevelopmentConfig } from '../src/editor/sample-dev-config.mjs'
 
 const repo = fileURLToPath(new URL('../', import.meta.url))
 const run = (cmd, args, opts = {}) => new Promise((resolve, reject) => {
@@ -17,11 +18,13 @@ const files = new Set((await new Promise((resolve, reject) => {
 })).split('\0').filter(Boolean))
 // This harness must also copy a newly added dev-only bridge dependency before its first commit.
 files.add('src/lib/markdown-paragraph-map.mjs')
+files.add('src/editor/sample-dev-config.mjs')
 const root = await mkdtemp(path.join(tmpdir(), 'avcms-readonly-'))
 const receipt = path.join(repo, 'test-results', 'readonly-copy-path')
 const collectionReceipt = path.join(repo, 'test-results', 'readonly-collection-copy-path')
 const markdownReceipt = path.join(repo, 'test-results', 'readonly-markdown-copy-path')
 const mdxConflictReceipt = path.join(repo, 'test-results', 'readonly-mdx-conflict-copy-path')
+const sampleDraftReceipt = path.join(repo, 'test-results', 'readonly-sample-draft-copy-path')
 const children = []
 let editor
 let astroStarted = false
@@ -53,6 +56,7 @@ function cleanup() {
       await rm(collectionReceipt, { force: true })
       await rm(markdownReceipt, { force: true })
       await rm(mdxConflictReceipt, { force: true })
+      await rm(sampleDraftReceipt, { force: true })
     })()
   }
   return cleanupPromise
@@ -68,7 +72,7 @@ try {
   await run(process.execPath, [path.join(root, 'scripts/generate-noise.mjs')], { cwd: root })
   const fixture = path.join(root, 'src/pages/fixture.mdx')
   const mode = process.env.AVCMS_READONLY_MODE || 'duplicate'
-  if (!['duplicate', 'unmapped', 'gallery', 'collection', 'markdown', 'mdx-conflict'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate, unmapped, gallery, collection, markdown, or mdx-conflict.')
+  if (!['duplicate', 'unmapped', 'gallery', 'collection', 'markdown', 'mdx-conflict', 'sample-draft'].includes(mode)) throw new Error('AVCMS_READONLY_MODE must be duplicate, unmapped, gallery, collection, markdown, mdx-conflict, or sample-draft.')
   if (mode === 'duplicate') {
     const original = await readFile(fixture, 'utf8')
     if (!original.includes('id="marker-two"')) throw new Error('Synthetic duplicate-ID fixture anchor was not found.')
@@ -101,13 +105,17 @@ try {
     for (const [index, file] of files.entries()) await writeFile(file, `import EditorUnknownChip from '../components/EditorUnknownChip.astro'\n\n<EditorUnknownChip id="conflict-${index + 1}" label="Initial ${index + 1}" title="Title ${index + 1}" />\n`)
     await mkdir(path.dirname(mdxConflictReceipt), { recursive: true })
     await writeFile(mdxConflictReceipt, JSON.stringify(files))
+  } else if (mode === 'sample-draft') {
+    const contentFile = path.join(root, 'src/content/reisinger-like/editorial/showcase/index.mdx')
+    await mkdir(path.dirname(sampleDraftReceipt), { recursive: true })
+    await writeFile(sampleDraftReceipt, contentFile)
   } else {
     const markdownFile = path.join(root, 'src/pages/markdown-proof.mdx')
     await writeFile(markdownFile, 'Synthetic mapped Markdown paragraph.\n')
     const astroConfig = path.join(root, 'astro.config.mjs')
     const configSource = await readFile(astroConfig, 'utf8')
-    const integrationCall = 'createLoopbackDevIntegration()'
-    const configuredIntegration = `createLoopbackDevIntegration({ markdownParagraphTargets: [{ id: 'markdown-note', instanceId: 'paragraph-one', filePath: path.join(PROJECT_ROOT, 'src/pages/markdown-proof.mdx') }] })`
+    const integrationCall = 'createLoopbackDevIntegration({'
+    const configuredIntegration = `createLoopbackDevIntegration({ markdownParagraphTargets: [{ id: 'markdown-note', instanceId: 'paragraph-one', filePath: path.join(PROJECT_ROOT, 'src/pages/markdown-proof.mdx') }],`
     if (!configSource.includes(integrationCall)) throw new Error('Synthetic Astro integration anchor was not found for the Markdown copy gate.')
     await writeFile(astroConfig, configSource.replace(integrationCall, configuredIntegration))
     await mkdir(path.dirname(markdownReceipt), { recursive: true })
@@ -121,6 +129,7 @@ try {
     env: { ...process.env, ASTRO_BASE_PATH: '/browser-synthetic/', EDITOR_PORT: String(editorPort) },
   })
   astroStarted = true
+  const sampleOptions = mode === 'sample-draft' ? createSampleDevelopmentConfig(root) : null
   // Every mode runs with existing-source replacement fail-closed; edit confirmations export proposals only.
   editor = createEditorServer({
     port: editorPort, sitePort, fixturePath: fixture, basePath: '/browser-synthetic/',
@@ -131,13 +140,21 @@ try {
     ] } : {}),
     ...(mode === 'collection' ? { projectRoot: root, contentConfigPath: 'src/content.config.ts' } : {}),
     ...(mode === 'markdown' ? { mdxParagraphTargets: [{ id: 'markdown-note', instanceId: 'paragraph-one', projectRoot: root, filePath: path.join(root, 'src/pages/markdown-proof.mdx') }] } : {}),
+    ...(sampleOptions ? {
+      fixturePath: sampleOptions.fixturePath,
+      projectRoot: sampleOptions.projectRoot,
+      contentConfigPath: sampleOptions.contentConfigPath,
+      markdownDraftTargets: sampleOptions.markdownDraftTargets,
+      previewRoutes: sampleOptions.previewRoutes,
+    } : {}),
     ...(mode === 'mdx-conflict' ? { mdxComponentTargets: ['one', 'two'].map((id) => ({ id, projectRoot: root, filePath: path.join(root, `src/pages/mdx-conflict-${id}.mdx`), importSource: '../components/EditorUnknownChip.astro', idProp: 'id', fields: [{ name: 'label', type: 'string' }, { name: 'title', type: 'string' }] })) } : {}),
     ...(['collection', 'markdown', 'mdx-conflict'].includes(mode) ? {} : { mdxComponentTargets: [{ id: 'fixture', projectRoot: root, filePath: fixture, importSource: '../components/EditorUnknownChip.astro', idProp: 'id', editableProps: ['label'] }] }),
   })
   const deadline = Date.now() + 110_000
   while (Date.now() < deadline) {
     try {
-      if ((await fetch(`http://127.0.0.1:${sitePort}/browser-synthetic/fixture/`)).ok) break
+      const route = mode === 'sample-draft' ? 'reisinger-sample/editorial/showcase/' : 'fixture/'
+      if ((await fetch(`http://127.0.0.1:${sitePort}/browser-synthetic/${route}`)).ok) break
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
