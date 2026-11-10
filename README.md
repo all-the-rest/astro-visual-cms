@@ -6,7 +6,7 @@ Für Paketinstallation, Astro-Konfiguration, vertrauenswürdige Serveroptionen, 
 
 ## Repository-Fixture starten
 
-Die lokale Demo rendert eine Astro-MDX-Seite und ändert über die separate Editor-UI die Bildreihenfolge ausschließlich in der synthetischen Datei `src/pages/fixture.mdx`.
+Die lokale Demo rendert eine Astro-MDX-Seite und ändert über die separate Editor-UI die Bildreihenfolge ausschließlich in der synthetischen Datei `src/pages/fixture.mdx`. Die komplexere Route `/reisinger-sample/editorial/showcase/` bildet zusätzlich typische Content-Layer-, MDX-Import-, Komponenten- und Slot-Strukturen aus einem realen Astro-Projekt nach. Sie enthält ausschließlich synthetische Texte und generierte Noise-Testbilder; sie erweitert nicht den allgemeinen Editor-Vertrag.
 
 ## Start
 

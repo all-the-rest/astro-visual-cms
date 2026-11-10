@@ -1,0 +1,13 @@
+---
+const { title } = Astro.props
+---
+
+<article class="card card-border bg-base-100">
+  <div class="card-body">
+    <h2 class="card-title">{title}</h2>
+    <slot />
+    <aside class="mt-4 border-t border-base-300 pt-4">
+      <slot name="note" />
+    </aside>
+  </div>
+</article>
