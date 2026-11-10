@@ -57,7 +57,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   const titleInput = () => page.locator('#collection-fields label').filter({ hasText: 'title (string)' }).locator('input')
   const baseline = catalog.collections[0].entries[0].hash as string
   await writeFile(receipt.contentFile, original.replace('rank: 7', 'rank: 8'))
-  const cleanRefresh = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+  const cleanRefresh = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET', { timeout: 15_000 })
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await cleanRefresh
   const cleanRevision = (await (await request.get('/api/collections')).json()).collections[0].entries[0].hash as string
@@ -92,7 +92,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   let afterFirst = await readFile(receipt.contentFile, 'utf8')
   expect(afterFirst).toBe(beforeExternalPreview.replace('rank: 8', 'rank: 9'))
   const [fieldDownload] = await Promise.all([
-    page.waitForEvent('download'), page.locator('#source-proposal-export').click(),
+    page.waitForEvent('download', { timeout: 15_000 }), page.locator('#source-proposal-export').click(),
   ])
   const fieldProposal = JSON.parse(await readFile(await fieldDownload.path(), 'utf8'))
   expect(fieldProposal).toMatchObject({
@@ -196,7 +196,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   await createTitle.focus()
   await createTitle.evaluate((input: HTMLInputElement) => input.setSelectionRange(7, 7))
   await createTitle.evaluate((input: HTMLInputElement) => { input.dataset.beforeFocusPoll = 'true' })
-  const focusPoll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+  const focusPoll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET', { timeout: 15_000 })
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await focusPoll
   await expect(createTitle).not.toHaveAttribute('data-before-focus-poll', 'true')
@@ -213,7 +213,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   await expect(createTitle).toHaveValue('Created after config conflict')
   await expect(page.locator('#create-entry-conflicts').getByRole('button', { name: 'Entwurf erneut anwenden und Vorschau erstellen' })).toBeDisabled()
   await page.unroute('**/api/collections')
-  const reconnectPoll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+  const reconnectPoll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET', { timeout: 15_000 })
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await reconnectPoll
   const configHashAfterReconnect = (await (await request.get('/api/collections')).json()).configHash as string
@@ -223,7 +223,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   const initialConfigHash = catalog.configHash as string
   const configRevisionOne = `${(await readFile(receipt.configFile, 'utf8'))}\n// external config revision before entry preview\n`
   await writeFile(receipt.configFile, configRevisionOne)
-  const configPollOne = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+  const configPollOne = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET', { timeout: 15_000 })
   await page.evaluate(() => window.dispatchEvent(new Event('focus')))
   await configPollOne
   const latestConfigHashOne = (await (await request.get('/api/collections')).json()).configHash as string
@@ -288,7 +288,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
     return `${before}\n${configComment}`
   }
   const pollConfigRevision = async () => {
-    const poll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET')
+    const poll = page.waitForResponse(response => response.url().includes('/api/collections') && response.request().method() === 'GET', { timeout: 15_000 })
     await page.evaluate(() => window.dispatchEvent(new Event('focus')))
     await poll
   }
@@ -338,7 +338,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
     }
     await expect(page.locator('#source-proposal-panel')).toBeVisible()
     const [download] = await Promise.all([
-      page.waitForEvent('download'), page.locator('#source-proposal-export').click(),
+      page.waitForEvent('download', { timeout: 15_000 }), page.locator('#source-proposal-export').click(),
     ])
     const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
     const expectedSource = currentConfig.slice(0, proposal.diff.start) + proposal.diff.after + currentConfig.slice(proposal.diff.end)

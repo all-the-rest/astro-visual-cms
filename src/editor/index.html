@@ -396,7 +396,8 @@
            const link = document.createElement('a');
            link.href = url;
            link.download = 'astro-visual-cms-source-proposal.json';
-           document.body.append(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+            document.body.append(link); link.click(); link.remove();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
            status('Pfadfreier Änderungsvorschlag exportiert. Er muss manuell gegen die angegebene Basisrevision geprüft werden.', 'success');
          } catch (error) {
            if (sourceProposal === proposal) clearSourceProposal();
