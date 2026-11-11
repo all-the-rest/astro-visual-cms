@@ -218,6 +218,14 @@
       const siteBasePath = '__SITE_BASE_PATH__';
       let editorToken = '';
       const STATE_RETRY_DELAY_MS = 2000;
+      // The server keeps an unacknowledged MDX overlay for 30 seconds and an
+      // acknowledged one for 15 minutes. These client waits must stay below the
+      // server render grace, so a slow but valid Astro reload is still acknowledged
+      // instead of being dropped mid-flight.
+      const MDX_BLOCK_PREVIEW_TIMEOUT_MS = 20000;
+      const MDX_BLOCK_RENDER_ACK_TIMEOUT_MS = 5000;
+      const MDX_BLOCK_RENDER_WAIT_MS = 8000;
+      const MDX_BLOCK_BRIDGE_WAIT_MS = 10000;
       const galleryPicker = document.querySelector('#gallery-picker');
       const imageList = document.querySelector('#images');
       const statusBox = document.querySelector('#status');
@@ -276,6 +284,10 @@
        let selectedMdxBlockId = '';
        let mdxBlockFailure = '';
        const mdxBlockPreviewRequests = new Map();
+       // In-flight orphan-overlay reclaim. It owns the preview iframe until the
+       // reload its accepted reset triggers has finished, so no preview may start
+       // while it is pending (see prepareMdxBlockOperations).
+       let mdxBlockReclaim = null;
        let previewLoadEpoch = 0;
        let previewReadyEpoch = 0;
        const mdxBlocksPanel = document.querySelector('#mdx-blocks-panel');
@@ -327,6 +339,7 @@
            previewBridgeReady = true;
            previewReadyEpoch = previewLoadEpoch;
            preview.dataset.bridgeReady = 'true';
+           void reclaimMdxBlockOverlay();
           return;
         }
         if (!previewBridgeReady) return;
@@ -377,9 +390,10 @@
           return;
         }
         if (data.type === 'avcms:mdx-block-reset-result') {
-          if (Object.keys(data).sort().join(',') !== 'error,nonce,ok,requestId,targetId,type' || data.nonce !== previewNonce ||
+          if (Object.keys(data).sort().join(',') !== 'changed,error,nonce,ok,requestId,targetId,type' || data.nonce !== previewNonce ||
               typeof data.requestId !== 'string' || data.requestId.length > 128 || typeof data.targetId !== 'string' ||
-              !/^[A-Za-z0-9_-]{1,64}$/.test(data.targetId) || typeof data.ok !== 'boolean' || typeof data.error !== 'string') return;
+              !/^[A-Za-z0-9_-]{1,64}$/.test(data.targetId) || typeof data.ok !== 'boolean' || typeof data.changed !== 'boolean' ||
+              typeof data.error !== 'string') return;
           const pending = mdxBlockPreviewRequests.get(data.requestId);
           if (!pending || pending.targetId !== data.targetId || pending.kind !== 'reset') return;
           mdxBlockPreviewRequests.delete(data.requestId);
@@ -475,7 +489,7 @@
        function renderSourceProposal() {
          sourceProposalPanel.hidden = sourceProposal === null;
          if (sourceProposal) {
-           sourceProposalDescription.textContent = `Ziel ${sourceProposal.target.id} · Basisrevision ${sourceProposal.baseHash} · vorgeschlagene Revision ${sourceProposal.proposedHash}.`;
+           sourceProposalDescription.textContent = `Ziel ${sourceProposal.target.id} · Basisrevision ${sourceProposal.baseHash} · vorgeschlagene Revision ${sourceProposal.proposedHash}.${sourceProposal.target.sourceFormat ? ` Quelle ${sourceProposal.target.sourceFormat.toUpperCase()}.` : ''}${sourceProposal.application?.mode === 'literal-markdown' ? ' Anwendung bleibt wörtlicher Markdown-/HTML-Text; keine .mdx-Konvertierung.' : ''}`;
          }
          sourceProposalExportButton.disabled = saving || sourceProposal === null;
        }
@@ -486,7 +500,7 @@
           renderSourceProposal();
         }
 
-       function setSourceProposal({ kind, targetId, baseHash, proposedHash, change, diff, diffs, contextHash }) {
+       function setSourceProposal({ kind, targetId, baseHash, proposedHash, change, diff, diffs, contextHash, sourceFormat }) {
          const exactDiffs = Array.isArray(diffs) ? diffs.map((entry) => entry?.diff ? ({
            operation: entry.operation,
            hash: entry.hash,
@@ -496,6 +510,7 @@
          const fallbackDiff = diff || exactDiffs?.at(-1)?.diff;
          if (!kind || typeof targetId !== 'string' || !/^[a-f0-9]{64}$/.test(baseHash || '') ||
              !/^[a-f0-9]{64}$/.test(proposedHash || '') || !fallbackDiff ||
+             kind === 'mdx-blocks' && !['md', 'mdx'].includes(sourceFormat) ||
              !Number.isInteger(fallbackDiff.start) || !Number.isInteger(fallbackDiff.end) ||
              typeof fallbackDiff.before !== 'string' || typeof fallbackDiff.after !== 'string' ||
              exactDiffs?.some((entry) => !entry || !/^[a-f0-9]{64}$/.test(entry.hash || '') || !/^[a-f0-9]{64}$/.test(entry.nextHash || '') ||
@@ -508,13 +523,18 @@
           sourceProposal = {
             schemaVersion: 1,
             type: 'astro-visual-cms-source-proposal',
-            target: { kind, id: kind === 'collection-entry' ? `entry-${crypto.randomUUID()}` : targetId },
+            target: { kind, id: kind === 'collection-entry' ? `entry-${crypto.randomUUID()}` : targetId, ...(sourceFormat ? { sourceFormat } : {}) },
             baseHash,
            proposedHash,
            ...(contextHash ? { contextHash } : {}),
            change,
             diff: { start: fallbackDiff.start, end: fallbackDiff.end, before: fallbackDiff.before, after: fallbackDiff.after },
             ...(exactDiffs ? { diffs: exactDiffs } : {}),
+            ...(kind === 'mdx-blocks' ? {
+              application: sourceFormat === 'md'
+                ? { mode: 'literal-markdown', rendersAsComponents: false, conversion: 'none', note: 'Applying this diff to a .md file leaves the generated calls as literal Markdown/HTML text; Astro does not execute them as components and no .md-to-.mdx conversion is performed.' }
+                : { mode: 'mdx', rendersAsComponents: true, conversion: 'none' },
+            } : {}),
          };
          renderSourceProposal();
        }
@@ -734,6 +754,10 @@
          return values;
        }
 
+       // Controls that can start a preview stay disabled while an orphan-overlay
+       // reclaim is pending, because its reload would reject the new preview.
+       function mdxBlocksBusy() { return saving || Boolean(mdxBlockReclaim); }
+
        function renderMdxBlocks() {
          mdxBlocksPanel.hidden = !mdxBlockState.configured || !mdxBlockState.targets?.length;
          if (mdxBlocksPanel.hidden) return;
@@ -759,12 +783,10 @@
          const unavailable = !target?.supported || !target.hash;
          const stale = Boolean(draft?.stale);
          const reason = target?.error || (stale
-           ? 'Die MDX-Quelle hat sich seit Beginn dieses Entwurfs geändert. Entwurf verwerfen und neu laden, bevor du weiterarbeitest.'
-           : draft?.convertedToMdx
-             ? 'Die Markdown-Datei wurde im Hintergrund nach .mdx umbenannt; der Inhalt blieb byte-identisch.'
-             : target?.sourceFormat === 'md'
-               ? 'Beim ersten Einfügen wird diese .md-Datei automatisch im Hintergrund nach .mdx umbenannt.'
-               : 'Nur konfigurierte, statische Top-Level-Komponentenaufrufe sind bearbeitbar.');
+            ? 'Die MDX-Quelle hat sich seit Beginn dieses Entwurfs geändert. Entwurf verwerfen und neu laden, bevor du weiterarbeitest.'
+            : target?.sourceFormat === 'md'
+              ? 'Diese .md-Datei bleibt Markdown: Der Textkörper wird mit der Markdown-Pipeline gerendert, nur die generierten Blockaufrufe erscheinen als Komponenten in der Vorschau. Ein angewendeter Vorschlag bleibt in einer .md-Datei wörtlicher Markdown-Text; Pfad und Quelle werden nie automatisch geändert.'
+              : 'Nur konfigurierte, statische Top-Level-Komponentenaufrufe sind bearbeitbar.');
          mdxBlockReason.hidden = !reason || unavailable && !target?.error;
          mdxBlockReason.textContent = reason || '';
          mdxBlockReason.className = unavailable || stale ? 'alert alert-warning' : 'alert alert-info';
@@ -792,10 +814,10 @@
            const actions = document.createElement('div');
            actions.className = 'flex flex-wrap gap-1';
            for (const [action, label, disabled] of [
-             ['edit', 'Bearbeiten', unavailable || stale || saving],
-             ['up', 'Nach oben', unavailable || stale || saving || index === 0],
-             ['down', 'Nach unten', unavailable || stale || saving || index === blocks.length - 1],
-             ['remove', 'Entfernen', unavailable || stale || saving],
+             ['edit', 'Bearbeiten', unavailable || stale || mdxBlocksBusy()],
+             ['up', 'Nach oben', unavailable || stale || mdxBlocksBusy() || index === 0],
+             ['down', 'Nach unten', unavailable || stale || mdxBlocksBusy() || index === blocks.length - 1],
+             ['remove', 'Entfernen', unavailable || stale || mdxBlocksBusy()],
            ]) {
              const button = document.createElement('button');
              button.type = 'button';
@@ -811,19 +833,20 @@
            mdxBlockList.append(row);
          });
 
-         mdxBlockType.replaceChildren();
+          const selectedBlockType = mdxBlockType.value;
+          mdxBlockType.replaceChildren();
          for (const type of types) {
            const option = document.createElement('option');
            option.value = type.type;
            option.textContent = type.label;
            mdxBlockType.append(option);
          }
-         if (!types.some((type) => type.type === mdxBlockType.value)) mdxBlockType.value = types[0]?.type || '';
+          mdxBlockType.value = types.some((type) => type.type === selectedBlockType) ? selectedBlockType : types[0]?.type || '';
          const selectedType = types.find((type) => type.type === mdxBlockType.value);
          createMdxBlockFieldControls(mdxBlockAddFields, selectedType,
            previousAddType?.type === selectedType?.type ? previousAddValues : {}, 'mdx-block-add-field');
-         mdxBlockType.disabled = unavailable || stale || saving || types.length === 0;
-         document.querySelector('#mdx-block-add').disabled = unavailable || stale || saving || types.length === 0;
+         mdxBlockType.disabled = unavailable || stale || mdxBlocksBusy() || types.length === 0;
+         document.querySelector('#mdx-block-add').disabled = unavailable || stale || mdxBlocksBusy() || types.length === 0;
 
          const editing = blocks.find((block) => block.id === selectedMdxBlockId) || null;
          const editType = types.find((type) => type.type === editing?.type);
@@ -836,16 +859,16 @@
            mdxBlockEditFields.replaceChildren();
            selectedMdxBlockId = '';
          }
-         document.querySelector('#mdx-block-save-edit').disabled = unavailable || stale || saving || !editing;
-         document.querySelector('#mdx-block-cancel-edit').disabled = saving;
+         document.querySelector('#mdx-block-save-edit').disabled = unavailable || stale || mdxBlocksBusy() || !editing;
+         document.querySelector('#mdx-block-cancel-edit').disabled = mdxBlocksBusy();
 
          const pending = pendingMdxBlockPreview?.targetId === target?.id ? pendingMdxBlockPreview : null;
          mdxBlockConfirmation.hidden = !pending;
          if (pending) {
-           document.querySelector('#mdx-block-diff-summary').textContent = `${pending.diffs.length} präzise MDX-Quelloperation(en) · Basisrevision ${pending.hash} · Astro-Vorschau aktualisiert.`;
+           document.querySelector('#mdx-block-diff-summary').textContent = `${pending.diffs.length} präzise MDX-Quelloperation(en) · Basisrevision ${pending.hash} · Astro-Vorschau aktualisiert.${(pending.sourceFormat || target?.sourceFormat) === 'md' ? ' Anwenden auf die .md-Datei bleibt wörtlicher Markdown-/HTML-Text; es findet keine .mdx-Konvertierung statt.' : ''}`;
          }
-         document.querySelector('#mdx-block-confirm').disabled = saving || !pending;
-         document.querySelector('#mdx-block-reset').disabled = saving || !draft;
+         document.querySelector('#mdx-block-confirm').disabled = mdxBlocksBusy() || !pending;
+         document.querySelector('#mdx-block-reset').disabled = mdxBlocksBusy() || !draft;
          mdxBlocksStatus.textContent = unavailable
            ? target?.error || 'Dieses Ziel ist nicht sicher als Blockliste lesbar.'
            : stale
@@ -873,7 +896,7 @@
          navigatePreview(routeId);
          const expectedPath = new URL(route.url).pathname;
          const started = Date.now();
-         while (Date.now() - started < 10_000) {
+         while (Date.now() - started < MDX_BLOCK_BRIDGE_WAIT_MS) {
            let currentPath = '';
            try { currentPath = previewFrameUrl ? new URL(previewFrameUrl).pathname : ''; } catch {}
            if (previewBridgeReady && currentPath === expectedPath) return;
@@ -887,7 +910,7 @@
          if (!route) throw new Error('Für dieses Blockziel ist keine vertrauenswürdige Vorschau-Route konfiguriert.');
          const expectedPath = new URL(route.url).pathname;
          const started = Date.now();
-         while (Date.now() - started < 8_000) {
+         while (Date.now() - started < MDX_BLOCK_RENDER_WAIT_MS) {
            let currentPath = '';
            try { currentPath = previewFrameUrl ? new URL(previewFrameUrl).pathname : ''; } catch {}
            if (previewBridgeReady && previewReadyEpoch > previousReadyEpoch && currentPath === expectedPath) return;
@@ -896,19 +919,68 @@
          throw Object.assign(new Error('Astro hat das neu geladene MDX-Ziel nicht als erfolgreiche Vorschau bestätigt; möglicherweise ist ein Compilefehler aufgetreten.'), { code: 'ASTRO_PREVIEW_UNCONFIRMED' });
        }
 
-       async function cancelMdxBlockPreview(targetId, previewId, hash, rollbackConversion) {
+       async function cancelMdxBlockPreview(targetId, previewId, hash) {
          if (!targetId || !previewId || !hash) return null;
-         const response = await postOperation('/api/mdx-blocks/cancel', { targetId, previewId, hash, rollbackConversion });
+         // No rollback flag: a virtual .md preview never renames or writes source.
+         const response = await postOperation('/api/mdx-blocks/cancel', { targetId, previewId, hash });
          const result = await response.json();
          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { code: result.code, status: response.status });
          return result;
        }
 
-       async function resetFailedMdxBlockOverlay(target) {
+       async function resetMdxBlockOverlay(target) {
          await waitForMdxBlockBridge(target.previewRouteId);
          const previousReadyEpoch = previewReadyEpoch;
-         await postMdxBlockPreview(target.id, '', [], true);
-         await waitForMdxBlockRender(target.previewRouteId, previousReadyEpoch);
+         const reset = await postMdxBlockPreview(target.id, '', [], true);
+         // The bridge reloads only when an overlay existed; do not wait for a
+         // reload that never happens when the overlay had already expired.
+         if (reset?.changed) await waitForMdxBlockRender(target.previewRouteId, previousReadyEpoch);
+         return reset;
+       }
+
+       function currentMdxBlockRouteTarget() {
+         if (!previewReadyEpoch || !previewFrameUrl) return null;
+         let currentPath = '';
+         try { currentPath = new URL(previewFrameUrl).pathname; } catch { return null; }
+         return (mdxBlockState.targets || []).find((item) => {
+           if (!item.supported || !item.previewRouteId) return false;
+           const route = previewRoutes.get(item.previewRouteId);
+           if (!route) return false;
+           try { return new URL(route.url).pathname === currentPath; } catch { return false; }
+         }) || null;
+       }
+
+       // After an editor reload the client draft state is gone but the Astro dev
+       // overlay may still serve the previous draft. Reclaim it only when this
+       // editor holds no draft or pending confirmation, because the accepted
+       // reset makes the overlay reload its own iframe a moment later. That
+       // reload would reject anything still in flight, so the reclaim is kept as
+       // a single serialized promise: prepareMdxBlockOperations awaits it and the
+       // controls stay disabled until it settles. The bounded server-side overlay
+       // lifetime remains the fallback for targets that are not shown.
+       function reclaimMdxBlockOverlay() {
+         if (mdxBlockReclaim) return mdxBlockReclaim;
+         if (saving || pendingMdxPreview || pendingMdxBlockPreview || !previewBridgeReady) return null;
+         // A Markdown visual draft only lives in the current iframe DOM; never
+         // reload it away from an unsaved edit.
+         if (selectedMarkdownDraft || markdownDraftUpdateRequests.size) return null;
+         const target = currentMdxBlockRouteTarget();
+         if (!target || mdxBlockDraft(target.id)) return null;
+         mdxBlockReclaim = (async () => {
+           try {
+             // Waits for the reload the accepted reset causes; without that wait
+             // a preview started right afterwards would be rejected by it.
+             const reset = await resetMdxBlockOverlay(target);
+             if (reset?.changed) status('Verwaiste Astro-Blockvorschau wurde verworfen; die gespeicherte Quelle wird angezeigt.', 'info');
+           } catch {
+             // Best-effort: the bounded overlay lifetime clears it without the editor.
+           } finally {
+             mdxBlockReclaim = null;
+             renderMdxBlocks();
+           }
+         })();
+         renderMdxBlocks();
+         return mdxBlockReclaim;
        }
 
        function postMdxBlockPreview(targetId, hash, operations, reset = false) {
@@ -918,7 +990,7 @@
            const timeout = window.setTimeout(() => {
              mdxBlockPreviewRequests.delete(requestId);
              reject(new Error('Die Astro-Vorschau hat die Blockoperation nicht bestätigt.'));
-           }, 20_000);
+           }, MDX_BLOCK_PREVIEW_TIMEOUT_MS);
            mdxBlockPreviewRequests.set(requestId, {
              kind: reset ? 'reset' : 'preview', targetId,
              resolve: (value) => { window.clearTimeout(timeout); resolve(value); },
@@ -936,7 +1008,7 @@
            const timeout = window.setTimeout(() => {
              mdxBlockPreviewRequests.delete(requestId);
              reject(new Error('Die Astro-Vorschau konnte den gerenderten Entwurf nicht bestätigen.'));
-           }, 5000);
+           }, MDX_BLOCK_RENDER_ACK_TIMEOUT_MS);
            mdxBlockPreviewRequests.set(requestId, {
              kind: 'rendered', targetId,
              resolve: (value) => { window.clearTimeout(timeout); resolve(value); },
@@ -948,6 +1020,13 @@
 
        async function prepareMdxBlockOperations(target, newOperations) {
          if (saving || pendingMdxPreview || !target?.supported || !Array.isArray(newOperations) || !newOperations.length) return;
+         // A pending orphan-overlay reclaim will reload the preview iframe and
+         // reject anything in flight. Waiting for it here is what keeps a fresh
+         // draft from being discarded by the reclaim's own reload.
+         if (mdxBlockReclaim) {
+           try { await mdxBlockReclaim; } catch { /* the reclaim is best-effort */ }
+           if (saving) return;
+         }
          const previous = mdxBlockDraft(target.id);
          if (previous?.stale) return;
          const operations = [...(previous?.operations || []), ...newOperations];
@@ -965,10 +1044,16 @@
            const response = await postOperation('/api/mdx-blocks/preview', { targetId: target.id, operations, hash });
            const result = await response.json();
            if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { code: result.code, status: response.status });
-           if (!result.previewId || !Array.isArray(result.diffs) || !result.diffs.length) {
-             mdxBlocksStatus.textContent = 'Die Blockoperation ändert die MDX-Quelle nicht.';
-             mdxBlocksStatus.className = 'alert alert-info';
-             return;
+            if (!result.previewId || !Array.isArray(result.diffs) || !result.diffs.length) {
+              if (previous && result.nextHash === hash) {
+                await resetMdxBlockOverlay(target);
+                if (supersededPreview) await cancelMdxBlockPreview(target.id, supersededPreview.previewId, supersededPreview.hash);
+                mdxBlockDrafts.delete(target.id);
+                if (pendingMdxBlockPreview?.targetId === target.id) pendingMdxBlockPreview = null;
+                selectedMdxBlockId = '';
+              }
+              status('Die Blockoperation ändert die MDX-Quelle nicht.', 'info');
+              return;
            }
            preparedPreview = result;
            await waitForMdxBlockBridge(target.previewRouteId);
@@ -978,7 +1063,7 @@
            await waitForMdxBlockRender(target.previewRouteId, previousReadyEpoch);
            await postMdxBlockRendered(target.id, astroPreview.requestId);
            if (supersededPreview) {
-             await cancelMdxBlockPreview(target.id, supersededPreview.previewId, supersededPreview.hash, false).catch(() => {});
+             await cancelMdxBlockPreview(target.id, supersededPreview.previewId, supersededPreview.hash).catch(() => {});
            }
            const draft = {
              baseHash: hash,
@@ -987,7 +1072,7 @@
              types: result.types,
              diffs: result.diffs,
              nextHash: result.nextHash,
-             convertedToMdx: result.convertedToMdx === true || previous?.convertedToMdx === true,
+             sourceFormat: result.sourceFormat || target.sourceFormat,
              stale: false,
            };
            mdxBlockDrafts.set(target.id, draft);
@@ -995,37 +1080,47 @@
            mdxBlockFailure = '';
            selectedMdxBlockId = '';
            renderMdxBlocks();
-           status('Der native MDX-Entwurf wurde von Astro kompiliert und in der echten Vorschau gerendert. Bestätigen erstellt nur einen manuellen Änderungsvorschlag.', 'success');
+           status((target.sourceFormat === 'md'
+             ? 'Der Markdown-Entwurf wurde mit der Markdown-Pipeline und der echten Astro-Vorschau gerendert. Bestätigen erstellt nur einen manuellen Vorschlag; eine Anwendung auf die .md-Datei bleibt wörtlicher Text.'
+             : 'Der native MDX-Entwurf wurde von Astro kompiliert und in der echten Vorschau gerendert. Bestätigen erstellt nur einen manuellen Änderungsvorschlag.'), 'success');
          } catch (error) {
            let failureMessage = error.message;
            if (preparedPreview?.previewId) {
              try {
-               const cancelled = await cancelMdxBlockPreview(target.id, preparedPreview.previewId, hash, true);
-               if (cancelled.restoredMarkdown) {
-                 failureMessage += ' Die automatische .mdx-Umbenennung wurde byte-identisch zurückgenommen.';
-               }
+               await cancelMdxBlockPreview(target.id, preparedPreview.previewId, hash);
              } catch (cancelError) {
                failureMessage += ` Die Vorschau konnte nicht sicher bereinigt werden: ${cancelError.message}`;
              }
            }
+           if (error.code === 'CONTENT_LAYER_UNSUPPORTED' || error.code === 'PREVIEW_NOT_OVERLAID') {
+             if (previous) previous.stale = true;
+             if (pendingMdxBlockPreview?.targetId === target.id) pendingMdxBlockPreview = null;
+             mdxBlockFailure = error.code === 'CONTENT_LAYER_UNSUPPORTED'
+               ? 'Die Vorschau-Route rendert diesen Astro-Content-Layer-Eintrag aus dem Collection-Datensatz bzw. vorgerechnetem HTML. Der Blockentwurf kann dort nicht zuverlässig angewendet werden; er wurde verworfen und die gespeicherte Quelle bleibt unverändert. Verwende eine direkt importierte Seite oder lasse den Eintrag schreibgeschützt.'
+               : 'Die Vorschau-Route hat diese Quelldatei nach dem Aktivieren des Entwurfs nicht geladen; die Seite zeigt weiterhin die gespeicherte Quelle. Der Entwurf wurde verworfen, es wurde nichts geschrieben. Konfiguriere eine Route, die genau diese Datei importiert.';
+             await pollMdxBlocks();
+             return;
+           }
            if (astroRenderRequested) {
              try {
-               await resetFailedMdxBlockOverlay(target);
-               failureMessage += ' Der vertrauenswürdige Astro-Entwurf wurde zurückgesetzt und die gespeicherte Quelle neu geladen.';
-             } catch (resetError) {
-               failureMessage += ` Der Overlay-Reset konnte nicht bestätigt werden: ${resetError.message}`;
-             }
-             mdxBlockDrafts.delete(target.id);
-             if (pendingMdxBlockPreview?.targetId === target.id) pendingMdxBlockPreview = null;
-             await pollMdxBlocks();
-             if (supersededPreview) {
-               try {
-                 const cancelled = await cancelMdxBlockPreview(target.id, supersededPreview.previewId, supersededPreview.hash, true);
-                 if (cancelled.restoredMarkdown) failureMessage += ' Auch die vorherige Vorschau-Umbenennung wurde zurückgenommen.';
-               } catch (cancelError) {
-                 failureMessage += ` Der vorherige Entwurf blieb bestehen: ${cancelError.message}`;
-               }
-             }
+                await resetMdxBlockOverlay(target);
+                if (previous && supersededPreview) {
+                  const previousReadyEpoch = previewReadyEpoch;
+                  const restored = await postMdxBlockPreview(target.id, previous.baseHash, previous.operations);
+                  await waitForMdxBlockRender(target.previewRouteId, previousReadyEpoch);
+                  await postMdxBlockRendered(target.id, restored.requestId);
+                  failureMessage += ' Der vorherige Entwurf wurde wiederhergestellt.';
+                } else {
+                  failureMessage += ' Der vertrauenswürdige Astro-Entwurf wurde zurückgesetzt und die gespeicherte Quelle neu geladen.';
+                }
+              } catch (resetError) {
+                failureMessage += ` Der Overlay-Reset konnte nicht bestätigt werden: ${resetError.message}`;
+                if (previous) {
+                  previous.stale = true;
+                  if (pendingMdxBlockPreview?.targetId === target.id) pendingMdxBlockPreview = null;
+                }
+              }
+              await pollMdxBlocks();
            }
            mdxBlockFailure = `Blockvorschau fehlgeschlagen: ${failureMessage}`;
            if (error.code === 'STALE_HASH' || error.status === 409) await pollMdxBlocks();
@@ -1033,6 +1128,47 @@
            saving = false;
            renderMdxBlocks();
          }
+       }
+
+       // A pending preview authorizes exactly one commit and is bounded like the
+       // Astro overlay. When that window has elapsed, the retained draft is still
+       // valid visual work: re-run the trusted preview flow instead of leaving a
+       // rendered but unconfirmable draft behind. Renewal never writes source and
+       // never commits; the user has to confirm again explicitly.
+       async function renewExpiredMdxBlockPreview(expired) {
+         const draft = mdxBlockDrafts.get(expired.targetId);
+         const target = mdxBlockState.targets?.find((item) => item.id === expired.targetId && item.supported);
+         if (!draft || !target || draft.stale) throw Object.assign(new Error('Der Entwurf ist nicht mehr erneuerbar.'), { code: 'STALE_HASH' });
+         const response = await postOperation('/api/mdx-blocks/preview', {
+           targetId: expired.targetId,
+           operations: draft.operations,
+           hash: draft.baseHash,
+         });
+         const result = await response.json();
+         if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { code: result.code, status: response.status });
+         if (!result.previewId || !Array.isArray(result.operations) || !Array.isArray(result.diffs) || !result.diffs.length ||
+             result.hash !== draft.baseHash) {
+           throw Object.assign(new Error('Die erneuerte Vorschau ließ sich nicht eindeutig dem Entwurf zuordnen.'), { code: 'PREVIEW_RENEWAL_INVALID', status: 409 });
+         }
+         await waitForMdxBlockBridge(target.previewRouteId);
+         const previousReadyEpoch = previewReadyEpoch;
+         const astroPreview = await postMdxBlockPreview(target.id, draft.baseHash, result.operations);
+         await waitForMdxBlockRender(target.previewRouteId, previousReadyEpoch);
+         await postMdxBlockRendered(target.id, astroPreview.requestId);
+         const renewed = {
+           ...draft,
+           operations: result.operations,
+           blocks: result.blocks,
+           types: result.types,
+           diffs: result.diffs,
+           nextHash: result.nextHash,
+           sourceFormat: result.sourceFormat || draft.sourceFormat || target.sourceFormat,
+           stale: false,
+         };
+         mdxBlockDrafts.set(target.id, renewed);
+         pendingMdxBlockPreview = { ...renewed, targetId: target.id, previewId: result.previewId, hash: draft.baseHash };
+         mdxBlockFailure = '';
+         return renewed;
        }
 
        async function discardMdxBlockDraft(targetId = mdxBlockTarget.value) {
@@ -1044,12 +1180,9 @@
          mdxBlockFailure = '';
          renderMdxBlocks();
          try {
-           await waitForMdxBlockBridge(target.previewRouteId);
-           const previousReadyEpoch = previewReadyEpoch;
-           await postMdxBlockPreview(targetId, '', [], true);
-           await waitForMdxBlockRender(target.previewRouteId, previousReadyEpoch);
+           await resetMdxBlockOverlay(target);
            if (pendingMdxBlockPreview?.targetId === targetId) {
-             await cancelMdxBlockPreview(targetId, pendingMdxBlockPreview.previewId, pendingMdxBlockPreview.hash, false);
+             await cancelMdxBlockPreview(targetId, pendingMdxBlockPreview.previewId, pendingMdxBlockPreview.hash);
            }
            mdxBlockDrafts.delete(targetId);
            mdxBlockFailure = '';
@@ -1093,6 +1226,9 @@
        }
 
        function handleMarkdownDraftSelection(data) {
+         // An orphan-overlay reclaim is about to reload the iframe; a Markdown
+         // draft seeded now would be discarded by that reload.
+         if (mdxBlockReclaim) return;
          const resolved = markdownDraftInstance(data.targetId, data.instanceId);
          if (!resolved || data.markerCount !== 1) {
            markdownDraftFailure = !resolved
@@ -2106,6 +2242,7 @@
           renderMdxBlocks();
           renderMarkdownDrafts();
         navigatePreview(selectedPreviewRouteId);
+        void reclaimMdxBlockOverlay();
         status(unavailable.length
           ? `Teilweise geladen: ${unavailable.join(', ')}. Andere konfigurierte Bereiche bleiben verfügbar.`
           : 'Fixture geladen. Wähle eine Galerie zum Sortieren.', unavailable.length ? 'warning' : 'success');
@@ -2460,10 +2597,46 @@
               proposedHash: confirmed.nextHash,
               change: { operations: confirmed.operations },
               diffs: confirmed.diffs,
+              sourceFormat: confirmed.sourceFormat || mdxBlockState.targets?.find((item) => item.id === confirmed.targetId)?.sourceFormat,
             });
             pendingMdxBlockPreview = null;
             renderMdxBlocks();
-            status('Bestehende Quelldateien bleiben schreibgeschützt. Der basisgebundene MDX-Blockvorschlag kann manuell heruntergeladen werden.', 'warning');
+            status(confirmed.sourceFormat === 'md'
+              ? 'Bestehende Quelldateien bleiben schreibgeschützt. Der basisgebundene Markdown-Blockvorschlag kann manuell heruntergeladen werden; auf eine .md-Datei angewendet bleibt er wörtlicher Markdown-/HTML-Text, und es findet keine .mdx-Konvertierung statt.'
+              : 'Bestehende Quelldateien bleiben schreibgeschützt. Der basisgebundene MDX-Blockvorschlag kann manuell heruntergeladen werden.', 'warning');
+          } else if (error.status === 409 && error.code !== 'SOURCE_REPLACEMENT_DISABLED' && mdxBlockDrafts.has(confirmed.targetId)) {
+            // Expiry, source drift, and a rotated editor session all invalidate
+            // the one-shot confirmation. Re-previewing the retained draft is
+            // safe in every case: it never writes source, and a source mismatch
+            // fails closed below.
+            try {
+              await renewExpiredMdxBlockPreview(confirmed);
+              status(`${error.code === 'PREVIEW_EXPIRED' ? 'Die Bestätigungsfrist ist abgelaufen.' : 'Die Bestätigung ist nicht mehr gültig.'} Die Vorschau wurde ohne Quellschreibzugriff erneuert; bitte bestätige den Entwurf erneut.`, 'warning');
+            } catch (renewError) {
+              const sourceMismatch = renewError.code === 'STALE_HASH' || renewError.code === 'PREVIEW_MISMATCH' ||
+                renewError.code === 'PREVIEW_RENEWAL_INVALID' || renewError.status === 409;
+              if (!sourceMismatch) {
+                // Keep the retained draft and its pending confirmation: clicking
+                // Confirm retries the renewal and never writes source on its own.
+                status(`Die Bestätigungsfrist ist abgelaufen; die Vorschau konnte nicht erneuert werden: ${renewError.message}. Bestätigen versucht es erneut oder verwirf den Entwurf.`, 'warning');
+              } else {
+                // The draft cannot match the current source anymore. Discard it
+                // visibly and restore the saved source instead of leaving a
+                // rendered draft that can never be confirmed.
+                mdxBlockDrafts.delete(confirmed.targetId);
+                pendingMdxBlockPreview = null;
+                const target = mdxBlockState.targets?.find((item) => item.id === confirmed.targetId);
+                let overlayNote = '';
+                try {
+                  if (target) await resetMdxBlockOverlay(target);
+                  overlayNote = ' Die Astro-Vorschau zeigt wieder die gespeicherte Quelle.';
+                } catch {
+                  overlayNote = ' Die gerenderte Vorschau konnte nicht zurückgesetzt werden; lade die Seite neu.';
+                }
+                status(`Die Bestätigungsfrist ist abgelaufen und der Entwurf passt nicht mehr zur Quelle (${renewError.message}). Der Entwurf wurde verworfen.${overlayNote}`, 'warning');
+                await pollMdxBlocks();
+              }
+            }
           } else {
             pendingMdxBlockPreview = null;
             mdxBlocksStatus.textContent = `Bestätigung abgelehnt: ${error.message}`;
@@ -2473,6 +2646,7 @@
         } finally {
           saving = false;
           renderMdxBlocks();
+          void reclaimMdxBlockOverlay();
         }
       });
       const resetMdxSelectionReadOnly = () => { mdxSelectionReadOnly = false; pendingMdxPreview = null; renderMdx(); };

@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promises'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { pathToFileURL, fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('../', import.meta.url))
 const versions = ['7.2.4', '7.2.10', '7.3.8', '7.4.7']
@@ -61,6 +62,17 @@ try {
   await checked('pnpm', ['install', '--no-frozen-lockfile'], app)
   const installedAstro = JSON.parse(await readFile(path.join(app, 'node_modules/astro/package.json'), 'utf8'))
   assert.equal(installedAstro.version, version, `Expected exact Astro ${version}, received ${installedAstro.version}.`)
+  // The layout-less `.md` preview emits the same head as Astro's own Markdown
+  // page and reuses Astro's Markdown image placeholder. Both are runtime
+  // internals this package binds to, so every checkpoint must prove that the
+  // exact subpath and placeholder shape still exist instead of failing later
+  // with an unexplained preview error.
+  const consumerRequire = createRequire(path.join(app, 'package.json'))
+  const serverRuntime = await import(pathToFileURL(consumerRequire.resolve('astro/runtime/server/index.js')).href)
+  assert.equal(typeof serverRuntime.maybeRenderHead, 'function', `Astro ${version} does not export maybeRenderHead from astro/runtime/server/index.js.`)
+  assert.equal(typeof serverRuntime.spreadAttributes, 'function', `Astro ${version} does not export spreadAttributes from astro/runtime/server/index.js.`)
+  const markdownImages = await readFile(path.join(path.dirname(consumerRequire.resolve('astro/package.json')), 'dist/vite-plugin-markdown/images.js'), 'utf8')
+  assert.ok(markdownImages.includes('__ASTRO_IMAGE_="'), `Astro ${version} no longer emits the __ASTRO_IMAGE_="..." Markdown image placeholder.`)
   if (version !== '7.2.4') {
     const installedMdx = JSON.parse(await readFile(path.join(app, 'node_modules/@astrojs/mdx/package.json'), 'utf8'))
     assert.equal(installedMdx.version, '8.1.3', `Expected exact @astrojs/mdx 8.1.3, received ${installedMdx.version}.`)

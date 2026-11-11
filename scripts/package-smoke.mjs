@@ -75,9 +75,9 @@ try {
   await writeFile(path.join(consumer, 'src/components/NestedComponent.astro'), '---\nconst { label = "" } = Astro.props\n---\n<aside data-nested-component>{label}</aside>')
   await writeFile(mdxFile, mdxSource)
   const blockFile = path.join(consumer, 'src/pages/block-proof.md')
-  const blockSource = '# Original Markdown block target\n\nThis prose survives the byte-identical background conversion — 東京.\n'
+  const blockSource = '# Original Markdown block target\n\nThis prose survives the virtual Markdown preview without a source write — 東京.\n'
   const blockFailureFile = path.join(consumer, 'src/pages/block-failure.md')
-  const blockFailureSource = '# Astro compile failure target\n\nThis original Markdown must be restored after a failed render.\n'
+  const blockFailureSource = '# Astro compile failure target\n\nThis original Markdown must stay unchanged after a failed render.\n'
   await writeFile(path.join(consumer, 'src/components/BlockCard.astro'), '---\nconst { id, title = "" } = Astro.props\nif (title === "Fail Astro render") throw new Error("Synthetic Astro block rendering failure")\n---\n<article id={id} data-block-kind="package-smoke"><h2>{title}</h2></article>')
   await writeFile(blockFile, blockSource)
   await writeFile(blockFailureFile, blockFailureSource)
@@ -178,7 +178,7 @@ const entries = await getCollection('smokeNotes')
   assert(mdxBuildHtml.includes('Nested custom component content survives'), 'Astro did not preserve the nested custom component slot')
   assert((await readFile(path.join(consumer, 'dist/internal-gallery/index.html'), 'utf8')).includes('keep-alpha'), 'Astro did not compile the synthetic internal array gallery')
   const blockBuildHtml = await readFile(path.join(consumer, 'dist/block-proof/index.html'), 'utf8')
-  assert(blockBuildHtml.includes('Original Markdown block target') && blockBuildHtml.includes('This prose survives the byte-identical background conversion'), 'Astro did not compile the synthetic Markdown block target')
+  assert(blockBuildHtml.includes('Original Markdown block target') && blockBuildHtml.includes('This prose survives the virtual Markdown preview without a source write'), 'Astro did not compile the synthetic Markdown block target')
   assert((await readFile(path.join(consumer, 'dist/block-failure/index.html'), 'utf8')).includes('Astro compile failure target'), 'Astro did not compile the synthetic failure-recovery target')
   const createdCollectionHtml = await readFile(path.join(consumer, 'dist/created-notes/index.html'), 'utf8')
   assert.match(createdCollectionHtml, /data-entry-id="first-note"/)
@@ -360,8 +360,8 @@ const entries = await getCollection('smokeNotes')
     await blockPage.locator('#mdx-block-add').click()
     await blockFrame.getByRole('heading', { name: 'Installed package block' }).waitFor()
     await blockPage.locator('#mdx-block-confirmation:not([hidden])').waitFor()
-    assert.equal(await readFile(`${blockFile}x`, 'utf8'), blockSource, 'the .md-to-.mdx conversion changed source bytes')
-    await assert.rejects(readFile(blockFile), 'the original .md name must be removed after successful conversion')
+    assert.equal(await readFile(blockFile, 'utf8'), blockSource, 'the virtual .md preview changed source bytes')
+    await assert.rejects(readFile(`${blockFile}x`), { code: 'ENOENT' }, 'the virtual .md preview must not create an .mdx path')
     const blockCommit = blockPage.waitForResponse((response) => response.url().endsWith('/api/mdx-blocks/commit') && response.request().method() === 'POST')
     await blockPage.locator('#mdx-block-confirm').click()
     assert.equal((await blockCommit).status(), 409, 'existing MDX block replacement must fail closed')
@@ -370,17 +370,24 @@ const entries = await getCollection('smokeNotes')
       blockPage.waitForEvent('download'), blockPage.locator('#source-proposal-export').click(),
     ])
     const blockProposal = JSON.parse(await readFile(await blockDownload.path(), 'utf8'))
-    assert.deepEqual(blockProposal.target, { kind: 'mdx-blocks', id: 'block-fixture' })
+    assert.deepEqual(blockProposal.target, { kind: 'mdx-blocks', id: 'block-fixture', sourceFormat: 'md' })
+    assert.deepEqual(blockProposal.application, {
+      mode: 'literal-markdown',
+      rendersAsComponents: false,
+      conversion: 'none',
+      note: 'Applying this diff to a .md file leaves the generated calls as literal Markdown/HTML text; Astro does not execute them as components and no .md-to-.mdx conversion is performed.',
+    })
     assert.equal(blockProposal.baseHash, createHash('sha256').update(blockSource).digest('hex'))
     assert.equal(blockProposal.change.operations.length, 1)
     assert.equal(blockProposal.change.operations[0].values.title, 'Installed package block')
     assert(Array.isArray(blockProposal.diffs) && blockProposal.diffs.length === 1)
     assert(!JSON.stringify(blockProposal).includes(blockFile), 'MDX block proposal disclosed the source path')
     assert(!JSON.stringify(blockProposal).includes(blockSource), 'MDX block proposal embedded the full source')
-    assert.equal(await readFile(`${blockFile}x`, 'utf8'), blockSource, 'blocked MDX block proposal changed source bytes')
+    assert.equal(await readFile(blockFile, 'utf8'), blockSource, 'blocked MDX block proposal changed source bytes')
     await blockPage.locator('#mdx-block-reset').click()
     await blockFrame.getByRole('heading', { name: 'Original Markdown block target' }).waitFor()
-    assert.equal(await readFile(`${blockFile}x`, 'utf8'), blockSource, 'reset after successful .md conversion changed the original bytes')
+    assert.equal(await readFile(blockFile, 'utf8'), blockSource, 'reset after a virtual .md preview changed the original bytes')
+    await assert.rejects(readFile(`${blockFile}x`), { code: 'ENOENT' }, 'reset must not leave an .mdx path')
 
     const failedBlockPage = await uiContext.newPage()
     await failedBlockPage.goto(`http://127.0.0.1:${port}/?route=block-failure`)
@@ -395,8 +402,8 @@ const entries = await getCollection('smokeNotes')
       null,
       { timeout: 25_000 },
     )
-    assert.equal(await readFile(blockFailureFile, 'utf8'), blockFailureSource, 'unconfirmed Astro rendering must restore the original .md path and bytes')
-    await assert.rejects(readFile(`${blockFailureFile}x`), { code: 'ENOENT' })
+    assert.equal(await readFile(blockFailureFile, 'utf8'), blockFailureSource, 'unconfirmed Astro rendering must leave the original .md path and bytes untouched')
+    await assert.rejects(readFile(`${blockFailureFile}x`), { code: 'ENOENT' }, 'a failed virtual preview must not create an .mdx path')
     assert.equal(await failedBlockPage.locator('#mdx-block-confirmation').isHidden(), true, 'an Astro compile failure must not enable proposal confirmation')
     await failedBlockFrame.getByRole('heading', { name: 'Astro compile failure target' }).waitFor()
 
@@ -442,7 +449,7 @@ const entries = await getCollection('smokeNotes')
   }
   const ui = await (await fetch(`http://127.0.0.1:${port}/`)).text()
   assert(ui.includes('/referenzen/'), 'custom preview route not rendered by editor UI')
-  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro production isolation, installed editor API, fail-closed existing-source proposals, exclusive collection entry creation, Dev Toolbar route launch, typed custom-component and nested-slot rendering, real Astro MDX block preview/proposal/reset, byte-identical .md conversion and compile-failure rollback, Astro internal-gallery proposals, exact source-byte preservation, and unchanged Astro rendering`)
+  console.log(`package smoke passed: ${packed.filename}, ${names.length} tarball entries, Astro production isolation, installed editor API, fail-closed existing-source proposals, exclusive collection entry creation, Dev Toolbar route launch, typed custom-component and nested-slot rendering, real Astro MDX block preview/proposal/reset, virtual .md rendering without rename, and compile-failure isolation, Astro internal-gallery proposals, exact source-byte preservation, and unchanged Astro rendering`)
 } finally {
   await stop(child)
   if (astro) {

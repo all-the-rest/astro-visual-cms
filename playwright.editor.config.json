@@ -3,7 +3,8 @@
   "previewRoutes": [
     { "id": "home", "label": "Startseite", "path": "/" },
     { "id": "fixture", "label": "Fixture", "path": "/fixture/" },
-    { "id": "block-fixture", "label": "Komponenten-Block", "path": "/block-editor-fixture/" }
+    { "id": "block-fixture", "label": "Komponenten-Block", "path": "/block-editor-fixture/" },
+    { "id": "markdown-block-fixture", "label": "Markdown-Block", "path": "/block-editor-markdown-fixture/" }
   ],
   "mdxBlockTargets": [
     {
@@ -11,6 +12,34 @@
       "projectRoot": ".",
       "filePath": "src/pages/block-editor-fixture.mdx",
       "previewRouteId": "block-fixture",
+      "blockTypes": [
+        {
+          "type": "sample-card",
+          "label": "Inhaltskarte",
+          "description": "Synthetische Astro-Komponente mit bearbeitbaren Textfeldern.",
+          "importSource": "../components/SampleBlockCard.astro",
+          "componentName": "SampleBlockCard",
+          "idProp": "id",
+          "fields": [
+            { "name": "title", "type": "string", "label": "Titel", "required": true },
+            { "name": "description", "type": "string", "label": "Beschreibung", "required": true }
+          ]
+        },
+        {
+          "type": "sample-callout",
+          "label": "Kontaktbereich",
+          "importSource": "../components/SampleContactCallout.astro",
+          "componentName": "SampleContactCallout",
+          "idProp": "id",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "id": "markdown-block-fixture",
+      "projectRoot": ".",
+      "filePath": "src/pages/block-editor-markdown-fixture.md",
+      "previewRouteId": "markdown-block-fixture",
       "blockTypes": [
         {
           "type": "sample-card",

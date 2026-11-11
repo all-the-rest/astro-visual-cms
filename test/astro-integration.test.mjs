@@ -148,7 +148,13 @@ test('MDX bridge Origin uses Astro CLI actual listener port when --port override
   let middleware
   plugin.configureServer({
     httpServer: { address: () => ({ port: 15433 }) },
-    middlewares: { use(pathname, handler) { assert.equal(pathname, '/__avcms/mdx-block-preview'); middleware = handler } },
+    middlewares: {
+      use(pathname, handler) {
+        if (typeof pathname === 'function') return
+        assert.equal(pathname, '/__avcms/mdx-block-preview')
+        middleware = handler
+      },
+    },
     moduleGraph: { getModulesByFile: () => new Set(), invalidateModule() {} },
   })
   const request = async (port, payload = {
@@ -168,6 +174,9 @@ test('MDX bridge Origin uses Astro CLI actual listener port when --port override
   }
   const override = await request(15433)
   assert.equal(override.status, 200, JSON.stringify(override.body))
+  // Simulate the real dev route evaluating the armed draft module before the
+  // reloaded page acknowledges the render.
+  plugin.transform.handler(source, file)
   const acknowledged = await request(15433, { targetId: 'blocks', requestId: 'port-test-preview', rendered: true })
   assert.equal(acknowledged.status, 200, JSON.stringify(acknowledged.body))
   const staleDefault = await request(4321)

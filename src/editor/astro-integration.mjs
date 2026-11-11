@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { createMarkdownDraftMarkerPlugin, createMarkdownParagraphMarkerPlugin } from '../lib/markdown-paragraph-map.mjs'
 import { createMdxBlockPreviewPlugin } from './mdx-block-preview.mjs'
 
@@ -82,11 +83,26 @@ export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_P
         const blockPreviewToken = blockTargets.length ? randomBytes(32).toString('hex') : ''
         const blockPreviewPlugin = blockTargets.length
           ? createMdxBlockPreviewPlugin({
-            targets: blockTargets.map((target) => ({
-              ...target,
-              previewPath: `${String(config.base || '/').replace(/\/$/, '')}${routes.find((route) => route.id === target.previewRouteId).path}` || '/',
-            })),
+            targets: blockTargets.map((target) => {
+              const route = routes.find((candidate) => candidate.id === target.previewRouteId)
+              return {
+                ...target,
+                previewPath: `${String(config.base || '/').replace(/\/$/, '')}${route.path}` || '/',
+                // Astro dev may mount the base path and expose the stripped path
+                // to Vite middlewares, so track both forms for render failures.
+                requestPath: route.path,
+              }
+            }),
             token: blockPreviewToken,
+            // The dev CSS collector is keyed by the route path relative to the
+            // Astro root, which is not necessarily the editor's projectRoot.
+            astroRoot: config.root ? fileURLToPath(config.root) : undefined,
+            // Plain `.md` drafts are rendered by the project's own Markdown
+            // pipeline, never by MDX. This keeps saved Markdown semantics
+            // (including raw HTML) untouched and makes only the catalog-
+            // generated component calls executable.
+            markdown: config.markdown,
+            image: config.image,
             siteOrigin: (server) => {
               const address = server.httpServer?.address?.()
               const actualPort = address && typeof address === 'object'
@@ -162,9 +178,10 @@ export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_P
             if(blockTargetIds.size&&d.type==='avcms:mdx-block-reset'&&keys==='nonce,requestId,targetId,type'&&d.nonce===nonce&&valid(d.requestId)&&validDraftId(d.targetId,64)&&blockTargetIds.has(d.targetId)){
               fetch('/__avcms/mdx-block-preview',{method:'POST',headers:{'content-type':'application/json','x-avcms-token':blockPreviewToken},
                 body:JSON.stringify({targetId:d.targetId,requestId:d.requestId,reset:true})}).then(async response=>({response,data:await response.json()})).then(({response,data})=>{
-                  parent.postMessage({type:'avcms:mdx-block-reset-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:response.ok,error:data.error||''},editorOrigin);
-                  if(response.ok)blockPreviewReloads.set(d.requestId,window.setTimeout(()=>{blockPreviewReloads.delete(d.requestId);location.reload();},3000));
-                }).catch(()=>parent.postMessage({type:'avcms:mdx-block-reset-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:false,error:'The Astro preview could not reset this draft.'},editorOrigin));
+                  const changed=response.ok&&data.changed===true;
+                  parent.postMessage({type:'avcms:mdx-block-reset-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:response.ok,changed,error:data.error||''},editorOrigin);
+                  if(changed)blockPreviewReloads.set(d.requestId,window.setTimeout(()=>{blockPreviewReloads.delete(d.requestId);location.reload();},3000));
+                }).catch(()=>parent.postMessage({type:'avcms:mdx-block-reset-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:false,changed:false,error:'The Astro preview could not reset this draft.'},editorOrigin));
               return;
             }
             if(keys!=='expectedText,instanceId,nonce,requestId,targetId,type,value'||d.type!=='avcms:draft-update'||d.nonce!==nonce||
