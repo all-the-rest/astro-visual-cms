@@ -31,6 +31,7 @@ export async function startEditorServer({ configPath = process.env.AVCMS_CONFIG 
     ...(contentConfigPath ? { contentConfigPath } : {}),
     fixturePath,
     ...(options.mdxComponentTargets !== undefined ? { mdxComponentTargets: resolveTargets(options.mdxComponentTargets) } : {}),
+    ...(options.mdxBlockTargets !== undefined ? { mdxBlockTargets: resolveTargets(options.mdxBlockTargets) } : {}),
     ...(options.mdxParagraphTargets !== undefined ? { mdxParagraphTargets: resolveTargets(options.mdxParagraphTargets) } : {}),
     ...(astroGalleryTargets !== undefined ? { astroGalleryTargets } : {}),
   })

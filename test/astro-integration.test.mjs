@@ -1,14 +1,16 @@
 import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import test from 'node:test'
 import { astroBaseConfigValue, normalizeAstroBasePath } from '../src/editor/base-path.mjs'
 import { createLoopbackDevIntegration } from '../src/editor/astro-integration.mjs'
+import { hashSource } from '../src/lib/gallery-patch.mjs'
 
 const ROOT = fileURLToPath(new URL('../', import.meta.url))
 const ASTRO_CLI = path.join(ROOT, 'node_modules/astro/bin/astro.mjs')
@@ -118,6 +120,58 @@ test('loopback integration only changes Astro dev configuration, never build or 
   assert.throws(() => createLoopbackDevIntegration({ markdownDraftTargets: [{
     id: 'draft', instanceId: 'instance', filePath: 'relative.mdx', text: 'Target.',
   }] }), /Invalid trusted Markdown draft target/)
+})
+
+test('MDX bridge Origin uses Astro CLI actual listener port when --port overrides config', async () => {
+  const file = path.join(ROOT, 'src/pages/block-editor-fixture.mdx')
+  const source = await readFile(file, 'utf8')
+  let updatedConfig
+  let injectedBridge
+  const integration = createLoopbackDevIntegration({
+    previewRoutes: [{ id: 'blocks', path: '/blocks/' }],
+    mdxBlockTargets: [{
+      id: 'blocks', projectRoot: ROOT, filePath: file, previewRouteId: 'blocks',
+      blockTypes: [{
+        type: 'sample', label: 'Sample', componentName: 'SampleBlockCard',
+        importSource: '../components/SampleBlockCard.astro', idProp: 'id',
+        fields: [{ name: 'title', type: 'string', required: true }],
+      }],
+    }],
+  })
+  integration.hooks['astro:config:setup']({
+    command: 'dev', config: { base: '/', server: { port: 4321 } },
+    updateConfig: (config) => { updatedConfig = config }, injectScript(_where, script) { injectedBridge = script },
+  })
+  const token = injectedBridge.match(/const blockPreviewToken="([a-f0-9]+)"/)?.[1]
+  assert.ok(token)
+  const plugin = updatedConfig.vite.plugins[0]
+  let middleware
+  plugin.configureServer({
+    httpServer: { address: () => ({ port: 15433 }) },
+    middlewares: { use(pathname, handler) { assert.equal(pathname, '/__avcms/mdx-block-preview'); middleware = handler } },
+    moduleGraph: { getModulesByFile: () => new Set(), invalidateModule() {} },
+  })
+  const request = async (port, payload = {
+    targetId: 'blocks', requestId: 'port-test-preview', hash: hashSource(source),
+    operations: [{ action: 'add', blockId: 'block-port-test', blockType: 'sample', values: { title: 'Port test' } }],
+  }) => {
+    const origin = `http://127.0.0.1:${port}`
+    const req = Readable.from([JSON.stringify(payload)])
+    req.method = 'POST'
+    req.headers = {
+      host: new URL(origin).host, origin, referer: `${origin}/blocks/`,
+      'content-type': 'application/json', 'x-avcms-token': token,
+    }
+    let status, body
+    await middleware(req, { writeHead(code) { status = code }, end(value) { body = JSON.parse(value) } }, () => assert.fail('Bridge request unexpectedly delegated.'))
+    return { status, body }
+  }
+  const override = await request(15433)
+  assert.equal(override.status, 200, JSON.stringify(override.body))
+  const acknowledged = await request(15433, { targetId: 'blocks', requestId: 'port-test-preview', rendered: true })
+  assert.equal(acknowledged.status, 200, JSON.stringify(acknowledged.body))
+  const staleDefault = await request(4321)
+  assert.equal(staleDefault.status, 403)
 })
 
 function availablePort() {

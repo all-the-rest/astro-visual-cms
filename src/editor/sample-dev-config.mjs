@@ -12,7 +12,26 @@ export function createSampleDevelopmentConfig(projectRoot) {
       { id: 'home', label: 'Startseite', path: '/' },
       { id: 'fixture', label: 'Fixture', path: '/fixture/', cacheBustOnRevision: true },
       { id: 'showcase', label: 'Synthetischer Showcase', path: '/reisinger-sample/editorial/showcase/', cacheBustOnRevision: true },
+      { id: 'block-fixture', label: 'Komponenten-Block', path: '/block-editor-fixture/', cacheBustOnRevision: true },
     ],
+    mdxBlockTargets: [{
+      id: 'block-fixture',
+      projectRoot: root,
+      filePath: path.join(root, 'src/pages/block-editor-fixture.mdx'),
+      previewRouteId: 'block-fixture',
+      blockTypes: [{
+        type: 'sample-card',
+        label: 'Inhaltskarte',
+        description: 'Synthetische Astro-Komponente mit bearbeitbaren Textfeldern.',
+        importSource: '../components/SampleBlockCard.astro',
+        componentName: 'SampleBlockCard',
+        idProp: 'id',
+        fields: [
+          { name: 'title', type: 'string', label: 'Titel', required: true },
+          { name: 'description', type: 'string', label: 'Beschreibung', required: true },
+        ],
+      }],
+    }],
     markdownDraftTargets: [{
       id: 'showcase-prose',
       instanceId: 'showcase-prose-one',

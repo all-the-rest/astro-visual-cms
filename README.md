@@ -28,6 +28,7 @@ pnpm dev
 pnpm test             # Unit-, Compile-, JPEG- und HTTP-E2E-Tests
 pnpm run test:e2e     # HTTP-E2E-Test allein
 pnpm run browser-tests # echte Chromium-Browsertests für den Galerie-Editor
+pnpm run ui-review:screenshots # getrennte Desktop-/Mobile-Aufnahmen für den visuellen Review
 pnpm run verify       # Tests, Sharp/Astro-Static-Build, Editor-CSS-Aktualität und bestehender Astro-Build
 ```
 

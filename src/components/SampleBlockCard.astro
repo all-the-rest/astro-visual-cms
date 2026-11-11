@@ -1,0 +1,11 @@
+---
+const { id, title, description } = Astro.props
+if (title === 'Fail Astro render') throw new Error('Synthetic MDX block runtime render failure')
+---
+
+<article id={id} class="card card-border bg-base-100" data-block-kind="sample-card">
+  <div class="card-body">
+    <h2 class="card-title">{title}</h2>
+    <p>{description}</p>
+  </div>
+</article>
