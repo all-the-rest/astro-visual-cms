@@ -19,8 +19,10 @@ loader support, or issue #1 acceptance.
   repository because they contain private paths.
 - After all acceptance, build and production-isolation checks, the original
   tree was hashed again and still matched the pre-run digest exactly.
-- The copy received the packed `@astro-visual-cms/editor` 0.1.0 tarball built
-  from this branch. Only the copy's `package.json`, lockfile, `astro.config.mjs`
+- The copy received the packed `@all-the.rest/astro-visual-cms` 0.1.0 tarball
+  built from this branch (at the time of this run the package still used its
+  internal `@astro-visual-cms/editor` name; the bytes and version were the
+  same). Only the copy's `package.json`, lockfile, `astro.config.mjs`
   and a private acceptance config/server shim were changed. No such file is
   committed.
 - Production content text, paths and the target route are intentionally not
@@ -35,7 +37,7 @@ loader support, or issue #1 acceptance.
 | `@astrojs/mdx` | 8.1.0 |
 | `@astrojs/markdown-satteri` | 0.4.4 |
 | `satteri` | 0.10.5 |
-| Editor tarball | `@astro-visual-cms/editor` 0.1.0 from this branch |
+| Editor tarball | `@all-the.rest/astro-visual-cms` 0.1.0 from this branch |
 | Node / pnpm | 26.8.1 / 11.23.0 |
 
 The real project's `portfolio` collection uses the mixed `**/[^_]*.{md,mdx}`

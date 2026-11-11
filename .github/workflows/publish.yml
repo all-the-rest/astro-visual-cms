@@ -1,0 +1,219 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.event.release.tag_name }}
+  RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+  DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
+jobs:
+  # Security boundary: the release tag commit is created by whoever can create
+  # tags or releases and is untrusted until its ancestry is verified. This job
+  # runs git plumbing and shell builtins only. It must never run Node, npm, pnpm,
+  # or a script from the checked-out tree; every later job that executes release
+  # code depends on it.
+  preflight:
+    name: Preflight release ancestry
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact release tag without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Security boundary: this step runs only git plumbing plus shell builtins.
+      # It must stay before setup/install/publish and must never execute code from
+      # the checked-out tree, because the release tag commit can be created by
+      # anyone with tag permissions and is not trusted until this check passes.
+      - name: Verify the release commit is on the protected default branch
+        id: release-gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+
+          : "${RELEASE_TAG:?RELEASE_TAG is required}"
+          : "${DEFAULT_BRANCH:?DEFAULT_BRANCH is required}"
+          : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+          : "${GITHUB_TOKEN:?GITHUB_TOKEN is required for the branch fetch}"
+
+          expected_sha="${GITHUB_SHA:-}"
+          case "$expected_sha" in
+            ''|*[!0-9a-f]*) fail "GITHUB_SHA must be the tagged 40-character commit SHA." ;;
+          esac
+          [ "${#expected_sha}" -eq 40 ] || fail "GITHUB_SHA must be the tagged 40-character commit SHA."
+
+          tag_commit="$(git rev-parse --verify --end-of-options 'HEAD^{commit}')" \
+            || fail "The checked-out release tag does not resolve to a commit."
+          [ "$tag_commit" = "$expected_sha" ] \
+            || fail "The checked-out tag commit $tag_commit does not match release event commit $expected_sha; refusing a moved or mismatched tag."
+
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          target_ref="refs/remotes/release-gate/${DEFAULT_BRANCH}"
+
+          # Fetch the authoritative default branch with complete history. --no-tags
+          # keeps a tag from shadowing the branch ref, and a missing branch, missing
+          # history, or failed fetch aborts the job (set -e, fail closed).
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --force --unshallow "$remote" "+refs/heads/${DEFAULT_BRANCH}:${target_ref}"
+          else
+            git fetch --no-tags --force "$remote" "+refs/heads/${DEFAULT_BRANCH}:${target_ref}"
+          fi
+
+          base_commit="$(git rev-parse --verify --end-of-options "${target_ref}^{commit}")" \
+            || fail "The default branch ${DEFAULT_BRANCH} could not be resolved."
+          git merge-base --is-ancestor "$tag_commit" "$base_commit" \
+            || fail "Release commit $tag_commit is not reachable from the protected default branch ${DEFAULT_BRANCH}."
+
+          echo "Release tag ${RELEASE_TAG} resolves to ${tag_commit}, reachable from ${DEFAULT_BRANCH} (${base_commit})."
+
+  verify:
+    name: Verify release
+    needs: preflight
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact release tag without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The preflight job already proved ancestry for GITHUB_SHA. Re-checking the
+      # checked-out commit here is git plumbing only and closes the window in
+      # which the tag could have moved between the two jobs.
+      - name: Reject a moved or mismatched release tag
+        id: release-checkout-check
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+          expected_sha="${GITHUB_SHA:-}"
+          case "$expected_sha" in
+            ''|*[!0-9a-f]*) fail "GITHUB_SHA must be the tagged 40-character commit SHA." ;;
+          esac
+          [ "${#expected_sha}" -eq 40 ] || fail "GITHUB_SHA must be the tagged 40-character commit SHA."
+          checked_out="$(git rev-parse --verify --end-of-options 'HEAD^{commit}')" \
+            || fail "The checked-out release tag does not resolve to a commit."
+          [ "$checked_out" = "$expected_sha" ] \
+            || fail "The checked-out tag commit $checked_out does not match the preflighted release commit $expected_sha."
+
+      - name: Set up Node.js 24 and pnpm 11.23.0
+        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        with:
+          runtime: node@24
+          version: 11.23.0
+          install: false
+
+      - name: Verify release metadata
+        run: node scripts/verify-release.mjs
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify
+        run: pnpm run verify
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Verify distributable editor tarball
+        run: npm run pack:smoke
+
+  publish:
+    name: Publish to npm (OIDC)
+    needs: [preflight, verify]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out the exact release tag without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: refs/tags/${{ github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Security boundary: this step runs only git plumbing plus shell builtins.
+      # It must stay before setup/install/publish and must never execute code from
+      # the checked-out tree, because the release tag commit can be created by
+      # anyone with tag permissions and is not trusted until this check passes.
+      - name: Verify the release commit is on the protected default branch
+        id: release-gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*" >&2; exit 1; }
+
+          : "${RELEASE_TAG:?RELEASE_TAG is required}"
+          : "${DEFAULT_BRANCH:?DEFAULT_BRANCH is required}"
+          : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+          : "${GITHUB_TOKEN:?GITHUB_TOKEN is required for the branch fetch}"
+
+          expected_sha="${GITHUB_SHA:-}"
+          case "$expected_sha" in
+            ''|*[!0-9a-f]*) fail "GITHUB_SHA must be the tagged 40-character commit SHA." ;;
+          esac
+          [ "${#expected_sha}" -eq 40 ] || fail "GITHUB_SHA must be the tagged 40-character commit SHA."
+
+          tag_commit="$(git rev-parse --verify --end-of-options 'HEAD^{commit}')" \
+            || fail "The checked-out release tag does not resolve to a commit."
+          [ "$tag_commit" = "$expected_sha" ] \
+            || fail "The checked-out tag commit $tag_commit does not match release event commit $expected_sha; refusing a moved or mismatched tag."
+
+          remote="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          target_ref="refs/remotes/release-gate/${DEFAULT_BRANCH}"
+
+          # Fetch the authoritative default branch with complete history. --no-tags
+          # keeps a tag from shadowing the branch ref, and a missing branch, missing
+          # history, or failed fetch aborts the job (set -e, fail closed).
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --force --unshallow "$remote" "+refs/heads/${DEFAULT_BRANCH}:${target_ref}"
+          else
+            git fetch --no-tags --force "$remote" "+refs/heads/${DEFAULT_BRANCH}:${target_ref}"
+          fi
+
+          base_commit="$(git rev-parse --verify --end-of-options "${target_ref}^{commit}")" \
+            || fail "The default branch ${DEFAULT_BRANCH} could not be resolved."
+          git merge-base --is-ancestor "$tag_commit" "$base_commit" \
+            || fail "Release commit $tag_commit is not reachable from the protected default branch ${DEFAULT_BRANCH}."
+
+          echo "Release tag ${RELEASE_TAG} resolves to ${tag_commit}, reachable from ${DEFAULT_BRANCH} (${base_commit})."
+
+      - name: Set up Node.js 24 and pnpm 11.23.0
+        uses: pnpm/setup@fa36a5ef7dcdefc3a7cb25655c122e00cf6e636e # v3.1.2
+        with:
+          runtime: node@24
+          version: 11.23.0
+          install: false
+
+      - name: Ensure trusted-publishing-capable Node.js and npm
+        run: |
+          npm install --global npm@11.19.0
+          node -e "const [major, minor] = process.versions.node.split('.').map(Number); if (major < 22 || (major === 22 && minor < 14)) { console.error('Trusted publishing requires Node.js >= 22.14.0; found ' + process.versions.node); process.exit(1) }"
+          node --version
+          npm --version
+
+      - name: Verify release metadata
+        run: node scripts/verify-release.mjs
+
+      - name: Publish package with provenance
+        run: npm publish --access public

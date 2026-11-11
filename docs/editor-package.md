@@ -1,11 +1,11 @@
 # Editor package (development only)
 
-Install the package in an Astro project with `npm install --save-dev @astro-visual-cms/editor`, or install a local release tarball with `npm install /path/to/astro-visual-cms-editor-0.1.0.tgz`. The integration is deliberately dev-only: it injects the loopback bridge only for `astro dev`, and the editor write server refuses to start under `NODE_ENV=production`.
+Install the package in an Astro project with `npm install --save-dev @all-the.rest/astro-visual-cms`, or install a local release tarball with `npm install /path/to/all-the.rest-astro-visual-cms-0.1.0.tgz`. The integration is deliberately dev-only: it injects the loopback bridge only for `astro dev`, and the editor write server refuses to start under `NODE_ENV=production`.
 
 ```js
 // astro.config.mjs
 import { defineConfig } from 'astro/config'
-import { createLoopbackDevIntegration } from '@astro-visual-cms/editor/integration'
+import { createLoopbackDevIntegration } from '@all-the.rest/astro-visual-cms/integration'
 
 export default defineConfig({ integrations: [createLoopbackDevIntegration({
   editorPort: 4322,
@@ -26,7 +26,7 @@ Start the server with trusted, project-owned JSON configuration (never derive th
 }
 ```
 
-Run `npx astro-visual-cms-editor --config ./avcms-editor.json` (or invoke `node_modules/@astro-visual-cms/editor/src/editor/cli.mjs --config ...`). Paths in the JSON file are resolved relative to that file. `projectRoot` and `contentConfigPath` must be supplied together; route lists are validated as trusted same-origin paths. The toolbar registers `Seite bearbeiten` only during `astro dev`, opens a separate local editor tab, maps only exact trusted preview paths to route IDs, and leaves the preview tab untouched. If Astro's toolbar is disabled or unavailable, start the same CLI and open `http://127.0.0.1:4322/` directly (use the configured editor port if different). A no-token `/api/health` endpoint allows only the configured local preview origin; POST origin, host, content-type, and session-token guards are unchanged. The server module is also available at `@astro-visual-cms/editor/server` for callers that need direct `createEditorServer(options)` control.
+Run `npx astro-visual-cms-editor --config ./avcms-editor.json` (or invoke `node_modules/@all-the.rest/astro-visual-cms/src/editor/cli.mjs --config ...`). Paths in the JSON file are resolved relative to that file. `projectRoot` and `contentConfigPath` must be supplied together; route lists are validated as trusted same-origin paths. The toolbar registers `Seite bearbeiten` only during `astro dev`, opens a separate local editor tab, maps only exact trusted preview paths to route IDs, and leaves the preview tab untouched. If Astro's toolbar is disabled or unavailable, start the same CLI and open `http://127.0.0.1:4322/` directly (use the configured editor port if different). A no-token `/api/health` endpoint allows only the configured local preview origin; POST origin, host, content-type, and session-token guards are unchanged. The server module is also available at `@all-the.rest/astro-visual-cms/server` for callers that need direct `createEditorServer(options)` control.
 
 The editor page loads the target project's stylesheet for its theme and also its own generated `editor.generated.css` from the editor origin, so bounded preview layout, daisyUI component styles and responsive columns do not depend on the consumer's Tailwind content scan. Regenerate the file with `pnpm run build:editor-css`; `pnpm run verify:editor-css` (part of `verify`) fails when the committed stylesheet is stale. The generated file includes daisyUI's default theme and is loaded after the project stylesheet, so the editor chrome uses those defaults rather than the consumer's own daisyUI theme; this affects only the local editor page, not the preview iframe.
 

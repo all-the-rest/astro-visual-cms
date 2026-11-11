@@ -149,14 +149,14 @@ try {
 
   const packOutput = run('npm', ['pack', '--json', '--pack-destination', TEMP_ROOT], REPOSITORY_ROOT)
   const packResult = JSON.parse(packOutput)
-  const packed = Array.isArray(packResult) ? packResult[0] : packResult['@astro-visual-cms/editor']
+  const packed = Array.isArray(packResult) ? packResult[0] : packResult['@all-the.rest/astro-visual-cms']
   assert.ok(packed?.filename, 'npm pack did not return the editor tarball filename.')
   run('pnpm', ['add', '--offline', path.join(TEMP_ROOT, packed.filename)], APP_ROOT, { env: installEnv })
 
   const configPath = path.join(APP_ROOT, 'astro.config.mjs')
   const originalConfig = await readFile(configPath, 'utf8')
   const configWithIntegration = originalConfig
-    .replace('import sitemap from "@astrojs/sitemap";', 'import sitemap from "@astrojs/sitemap";\nimport { createLoopbackDevIntegration } from "@astro-visual-cms/editor/integration";')
+    .replace('import sitemap from "@astrojs/sitemap";', 'import sitemap from "@astrojs/sitemap";\nimport { createLoopbackDevIntegration } from "@all-the.rest/astro-visual-cms/integration";')
     .replace('integrations: [sitemap()],', 'integrations: [sitemap(), createLoopbackDevIntegration()],')
   assert.notEqual(configWithIntegration, originalConfig, 'Update the script anchors if the external Astro config changes.')
   await writeFile(configPath, configWithIntegration)

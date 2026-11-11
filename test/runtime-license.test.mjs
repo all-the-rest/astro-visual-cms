@@ -4,7 +4,7 @@ import { runtimeLicenseCommand, summarizeRuntimeLicenses } from '../scripts/veri
 
 test('license report is scoped to the editor package and its production dependencies', () => {
   assert.deepEqual(runtimeLicenseCommand, [
-    '--filter', '@astro-visual-cms/editor', 'licenses', 'list', '--prod', '--json',
+    '--filter', '@all-the.rest/astro-visual-cms', 'licenses', 'list', '--prod', '--json',
   ])
 })
 

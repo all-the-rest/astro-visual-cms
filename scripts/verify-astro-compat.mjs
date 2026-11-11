@@ -50,7 +50,7 @@ try {
   const devDependencies = {
     astro: version,
     sharp: '0.35.5',
-    '@astro-visual-cms/editor': `file:${path.relative(app, tarball).split(path.sep).join('/')}`,
+    '@all-the.rest/astro-visual-cms': `file:${path.relative(app, tarball).split(path.sep).join('/')}`,
   }
   if (version !== '7.2.4') devDependencies['@astrojs/mdx'] = '8.1.3'
   await writeFile(path.join(app, 'package.json'), JSON.stringify({
@@ -82,7 +82,7 @@ try {
   await writeFile(path.join(app, 'src/pages/index.astro'), `---\nimport Probe from '../components/Probe.astro';\n---\n<html><body><Probe /></body></html>`)
   const mdx = version === '7.2.4' ? '' : "import mdx from '@astrojs/mdx';\n"
   const mdxIntegration = version === '7.2.4' ? '' : 'mdx(), '
-  await writeFile(path.join(app, 'astro.config.mjs'), `import { defineConfig } from 'astro/config';\n${mdx}import { createLoopbackDevIntegration } from '@astro-visual-cms/editor/integration';\nexport default defineConfig({ base: '/compat/', integrations: [${mdxIntegration}createLoopbackDevIntegration({ previewRoutes: [{ id: 'compat', label: 'Compat', path: '/compat/' }] })] });`)
+  await writeFile(path.join(app, 'astro.config.mjs'), `import { defineConfig } from 'astro/config';\n${mdx}import { createLoopbackDevIntegration } from '@all-the.rest/astro-visual-cms/integration';\nexport default defineConfig({ base: '/compat/', integrations: [${mdxIntegration}createLoopbackDevIntegration({ previewRoutes: [{ id: 'compat', label: 'Compat', path: '/compat/' }] })] });`)
   if (version !== '7.2.4') await writeFile(path.join(app, 'src/pages/mdx.mdx'), `import Probe from '../components/Probe.astro'\n\n<Probe />`)
   const cli = path.join(app, 'node_modules/.bin/astro')
   await checked(cli, ['build'], app)
