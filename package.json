@@ -36,13 +36,15 @@
     "browser-tests:markdown-draft-copy": "playwright test --config=playwright.markdown-draft-copy.config.ts",
     "browser-tests:mdx-conflict-copy": "playwright test --config=playwright.mdx-conflict.config.ts",
     "verify:build": "node scripts/verify-build.mjs",
+    "build:editor-css": "tailwindcss -i src/editor/editor.css -o src/editor/editor.generated.css --minify",
+    "verify:editor-css": "node scripts/verify-editor-css.mjs",
     "verify:external-production": "node scripts/verify-external-production.mjs",
     "verify:licenses": "node scripts/verify-runtime-licenses.mjs",
     "verify:sharp-build": "node scripts/verify-sharp-build.mjs",
     "verify:image-variants-astro": "node scripts/verify-image-variants-astro.mjs",
     "verify:collection-astro": "node scripts/verify-collection-astro.mjs",
     "verify:astro-compat": "node scripts/verify-astro-compat.mjs",
-    "verify": "pnpm test && pnpm run verify:licenses && pnpm run verify:sharp-build && pnpm run verify:image-variants-astro && pnpm run verify:collection-astro && pnpm run verify:build"
+    "verify": "pnpm test && pnpm run verify:licenses && pnpm run verify:sharp-build && pnpm run verify:image-variants-astro && pnpm run verify:collection-astro && pnpm run verify:editor-css && pnpm run verify:build"
   },
   "dependencies": {
     "@babel/parser": "7.29.13",
@@ -53,6 +55,7 @@
   "peerDependenciesMeta": { "astro": { "optional": true } },
   "devDependencies": {
     "@playwright/test": "1.65.0",
+    "@tailwindcss/cli": "4.3.5",
     "@tailwindcss/vite": "4.3.5",
     "daisyui": "5.7.50",
     "tailwindcss": "4.3.5",

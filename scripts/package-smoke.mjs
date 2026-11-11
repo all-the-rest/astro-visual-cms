@@ -49,7 +49,7 @@ try {
   const packResult = JSON.parse(pack.stdout)
   const packed = Array.isArray(packResult) ? packResult[0] : packResult['@astro-visual-cms/editor']
   const names = packed.files.map((file) => file.path)
-  for (const required of ['LICENSE', 'src/editor/astro-integration.mjs', 'src/editor/toolbar-app.mjs', 'src/editor/server.mjs', 'src/editor/cli.mjs', 'src/lib/astro-gallery-patch.mjs', 'docs/editor-package.md']) assert(names.includes(required), `tarball missing ${required}`)
+  for (const required of ['LICENSE', 'src/editor/astro-integration.mjs', 'src/editor/toolbar-app.mjs', 'src/editor/server.mjs', 'src/editor/cli.mjs', 'src/editor/editor.css', 'src/editor/editor.generated.css', 'src/lib/astro-gallery-patch.mjs', 'docs/editor-package.md']) assert(names.includes(required), `tarball missing ${required}`)
   assert(!names.some((name) => name.startsWith('test/') || name.startsWith('src/pages/')), 'demo app/test files leaked into tarball')
   const consumer = path.join(temp, 'consumer')
   await mkdir(path.join(consumer, 'src/pages'), { recursive: true })
@@ -93,6 +93,11 @@ const notes = (await getCollection('notes')).sort((a, b) => a.data.order - b.dat
     try { response = await fetch(`http://127.0.0.1:${port}/api/collections`); if (response.ok) break } catch { await new Promise((resolve) => setTimeout(resolve, 100)) }
   }
   assert(response?.ok, 'installed editor server did not start')
+  const editorHtml = await (await fetch(`http://127.0.0.1:${port}/`)).text()
+  assert.match(editorHtml, /<link rel="stylesheet" href="\/editor\.css"/, 'installed editor must load its own stylesheet')
+  const editorCssResponse = await fetch(`http://127.0.0.1:${port}/editor.css`)
+  assert.equal(editorCssResponse.status, 200, 'installed editor stylesheet is not served')
+  assert.match(await editorCssResponse.text(), /\.overflow-auto/, 'installed editor stylesheet lacks bounded preview layout rules')
   const health = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: { origin: `http://127.0.0.1:${sitePort}` } })
   assert.equal(health.status, 204, 'local preview origin could not probe editor availability')
   const wrongOriginHealth = await fetch(`http://127.0.0.1:${port}/api/health`, { headers: { origin: 'http://127.0.0.1:1' } })

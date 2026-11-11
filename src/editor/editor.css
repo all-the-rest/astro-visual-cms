@@ -1,0 +1,5 @@
+@import "tailwindcss" source(none);
+@source "./index.html";
+@source "./*.mjs";
+@source inline("alert-success alert-error");
+@plugin "daisyui";
