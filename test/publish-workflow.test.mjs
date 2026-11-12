@@ -121,14 +121,19 @@ test('publish workflow gates the OIDC job before any checked-out code or npm ins
   const gateIndex = indexOf((step) => step.id === 'release-gate', 'release gate')
   const setupIndex = indexOf((step) => /^Set up Node/.test(step.name || ''), 'node setup')
   const metadataIndex = indexOf((step) => step.name === 'Verify release metadata', 'metadata check')
-  const installIndex = indexOf((step) => /npm install --global/.test(step.run || ''), 'npm install')
-  const publishIndex = indexOf((step) => /npm publish/.test(step.run || ''), 'npm publish')
+  const installIndex = indexOf((step) => /npm install --prefix/.test(step.run || ''), 'npm install')
+  const publishIndex = indexOf((step) => step.name === 'Publish package with provenance', 'npm publish')
 
   assert.equal(gateIndex, checkoutIndex + 1, 'the branch gate must run immediately after checkout')
   assert.ok(gateIndex < setupIndex, 'the branch gate must run before tool setup')
   assert.ok(gateIndex < metadataIndex, 'the branch gate must run before the checked-out metadata script')
   assert.ok(gateIndex < installIndex, 'the branch gate must run before npm install')
   assert.ok(gateIndex < publishIndex, 'the branch gate must run before npm publish')
+  assert.ok(installIndex < publishIndex, 'npm must be installed and checked before publishing')
+  const cli = '$RUNNER_TEMP/trusted-npm/node_modules/npm/bin/npm-cli.js'
+  assert.ok(steps[installIndex].run.includes(`node "${cli}" --version`))
+  assert.match(steps[installIndex].run, /\[ "\$npm_version" = "11\.19\.0" \]/)
+  assert.equal(steps[publishIndex].run, `node "${cli}" publish --access public`)
 
   const checkout = steps[checkoutIndex]
   assert.equal(checkout.with['fetch-depth'], 0, 'the tag checkout needs complete history')

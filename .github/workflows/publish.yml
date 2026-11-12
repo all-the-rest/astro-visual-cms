@@ -207,13 +207,15 @@ jobs:
 
       - name: Ensure trusted-publishing-capable Node.js and npm
         run: |
-          npm install --global npm@11.19.0
+          npm install --prefix "$RUNNER_TEMP/trusted-npm" --ignore-scripts --no-save --no-package-lock npm@11.19.0
           node -e "const [major, minor] = process.versions.node.split('.').map(Number); if (major < 22 || (major === 22 && minor < 14)) { console.error('Trusted publishing requires Node.js >= 22.14.0; found ' + process.versions.node); process.exit(1) }"
           node --version
-          npm --version
+          npm_version="$(node "$RUNNER_TEMP/trusted-npm/node_modules/npm/bin/npm-cli.js" --version)"
+          [ "$npm_version" = "11.19.0" ] || { echo "Expected npm 11.19.0; found $npm_version" >&2; exit 1; }
+          echo "Trusted publishing npm: $npm_version"
 
       - name: Verify release metadata
         run: node scripts/verify-release.mjs
 
       - name: Publish package with provenance
-        run: npm publish --access public
+        run: node "$RUNNER_TEMP/trusted-npm/node_modules/npm/bin/npm-cli.js" publish --access public
