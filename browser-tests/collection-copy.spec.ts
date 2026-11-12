@@ -1,7 +1,61 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Download } from '@playwright/test'
 import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+
+// Download.path() and Download.failure() have no Playwright timeout of their own:
+// when a download never finishes they consume the whole test budget and the
+// resulting failure names only the test. Bounding them keeps the failure
+// attributable to one step and leaves room to report the browser-side reason.
+const DOWNLOAD_DEADLINE_MS = 15_000
+const DOWNLOAD_FAILURE_DEADLINE_MS = 5_000
+
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
+
+/**
+ * Bounds one step that Playwright does not time out itself. The timer is always
+ * cleared, and both the operation and the deadline have rejection handlers from
+ * Promise.race, so a late settlement cannot surface as an unhandled rejection.
+ */
+async function withDeadline<T>(label: string, timeoutMs: number, operation: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms while resolving ${label}`)), timeoutMs)
+  })
+  try {
+    return await Promise.race([operation(), deadline])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Reads the browser-side download error for the failure message, bounded as well. */
+async function boundedDownloadFailure(download: Download, operation: string): Promise<string> {
+  try {
+    return (await withDeadline(`${operation} (download failure)`, DOWNLOAD_FAILURE_DEADLINE_MS, () => download.failure())) ?? ''
+  } catch (error) {
+    return `unavailable: ${errorMessage(error)}`
+  }
+}
+
+/** Resolves the local file of a download under a deadline and a labelled error. */
+async function boundedDownloadPath(download: Download, label: string): Promise<string> {
+  const operation = `${label} (download "${download.suggestedFilename()}")`
+  try {
+    const path = await withDeadline(`${operation} local file`, DOWNLOAD_DEADLINE_MS, () => download.path())
+    if (!path) throw new Error('the browser reported no local file path for the download')
+    return path
+  } catch (error) {
+    const failure = await boundedDownloadFailure(download, operation)
+    const suffix = failure ? `; browser download failure: ${failure}` : ''
+    throw new Error(`${label}: could not resolve the downloaded file: ${errorMessage(error)}${suffix}`, { cause: error })
+  }
+}
+
+/** Reads a downloaded text file with the path bounded; reading itself is local I/O. */
+async function readDownloadedText(download: Download, label: string): Promise<string> {
+  return readFile(await boundedDownloadPath(download, label), 'utf8')
+}
 
 test('collection field edits produce revision-bound manual proposals in an isolated project copy', async ({ page, request }) => {
   const rootFixture = resolve('src/pages/fixture.mdx')
@@ -98,7 +152,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   const [fieldDownload] = await Promise.all([
     page.waitForEvent('download', { timeout: 15_000 }), page.locator('#source-proposal-export').click(),
   ])
-  const fieldProposal = JSON.parse(await readFile(await fieldDownload.path(), 'utf8'))
+  const fieldProposal = JSON.parse(await readDownloadedText(fieldDownload, 'collection field proposal export'))
   expect(fieldProposal).toMatchObject({
     type: 'astro-visual-cms-source-proposal',
     target: { kind: 'collection-entry' },
@@ -351,7 +405,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 15_000 }), page.locator('#source-proposal-export').click(),
     ])
-    const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+    const proposal = JSON.parse(await readDownloadedText(download, `collection config proposal export (${action})`))
     const expectedSource = currentConfig.slice(0, proposal.diff.start) + proposal.diff.after + currentConfig.slice(proposal.diff.end)
     expect(proposal).toMatchObject({
       type: 'astro-visual-cms-source-proposal',
