@@ -1,6 +1,6 @@
 {
   "name": "@all-the.rest/astro-visual-cms",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Local, source-preserving visual editor for Astro content, collections, galleries, and MDX components.",
   "type": "module",
   "packageManager": "pnpm@11.23.0",

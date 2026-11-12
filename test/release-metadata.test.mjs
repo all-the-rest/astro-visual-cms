@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -92,15 +93,16 @@ test('release metadata rejects GitHub releases marked as prereleases', () => {
 })
 
 test('the release script enforces the stable-only channel for environment inputs', () => {
-  const stable = runScript({ RELEASE_TAG: 'v0.1.0', RELEASE_PRERELEASE: 'false' })
+  const { version } = JSON.parse(readFileSync(path.join(ROOT, 'package.json'), 'utf8'))
+  const stable = runScript({ RELEASE_TAG: `v${version}`, RELEASE_PRERELEASE: 'false' })
   assert.equal(stable.status, 0, stable.stderr)
-  assert.match(stable.stdout, /Verified release metadata: @all-the\.rest\/astro-visual-cms@0\.1\.0/)
+  assert.ok(stable.stdout.includes(`Verified release metadata: @all-the.rest/astro-visual-cms@${version}`))
 
-  const prerelease = runScript({ RELEASE_TAG: 'v0.1.0', RELEASE_PRERELEASE: 'true' })
+  const prerelease = runScript({ RELEASE_TAG: `v${version}`, RELEASE_PRERELEASE: 'true' })
   assert.notEqual(prerelease.status, 0)
   assert.match(prerelease.stderr, /must not be marked as a prerelease/)
 
-  const invalid = runScript({ RELEASE_TAG: 'v0.1.0', RELEASE_PRERELEASE: 'yes' })
+  const invalid = runScript({ RELEASE_TAG: `v${version}`, RELEASE_PRERELEASE: 'yes' })
   assert.notEqual(invalid.status, 0)
   assert.match(invalid.stderr, /RELEASE_PRERELEASE must be "true" or "false"/)
 })
