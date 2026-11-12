@@ -666,6 +666,31 @@
       let draggedSlug = null;
       let focusImageSlugAfterRender = '';
 
+      // Every editor request is bounded. An API call that never answers used to leave
+      // `saving` and the pending previews set, so all controls stayed disabled and the
+      // editor only recovered when the whole test budget ran out (issue #25). The abort
+      // becomes an ordinary error that the handlers report and clear in their `finally`.
+      // The deadline sits well above the only bounded server-side wait behind these
+      // requests (a four-second preview sync), and the error names the unanswered
+      // request and carries a timeout marker so callers can tell a stall apart from a
+      // real source or network failure.
+      // This helper owns cancellation; callers must not pass their own `signal`.
+      const API_REQUEST_TIMEOUT_MS = 10000;
+      async function apiFetch(url, options = {}) {
+        const method = options.method || 'GET';
+        const seconds = API_REQUEST_TIMEOUT_MS / 1000;
+        const controller = new AbortController();
+        const timer = window.setTimeout(() => controller.abort(), API_REQUEST_TIMEOUT_MS);
+        try {
+          return await fetch(url, { ...options, signal: controller.signal });
+        } catch (error) {
+          if (!controller.signal.aborted) throw error;
+          throw Object.assign(new Error(`Zeitüberschreitung: ${method} ${url} hat nach ${seconds} Sekunden nicht geantwortet.`, { cause: error }), { timeout: true });
+        } finally {
+          window.clearTimeout(timer);
+        }
+      }
+
        function status(message, type = 'info') {
          statusBox.className = `alert alert-${type}`;
          statusBox.textContent = message;
@@ -734,7 +759,7 @@
 
         async function sourceProposalRevision(proposal, lookup) {
          const read = async (endpoint) => {
-           const response = await fetch(endpoint, { cache: 'no-store' });
+           const response = await apiFetch(endpoint, { cache: 'no-store' });
            if (!response.ok) throw new Error(`HTTP ${response.status}`);
            return response.json();
          };
@@ -2324,7 +2349,7 @@
       });
 
       async function refreshSession() {
-        const response = await fetch('/api/session', { cache: 'no-store' });
+        const response = await apiFetch('/api/session', { cache: 'no-store' });
         if (!response.ok) throw new Error(`Sitzung ${response.status}`);
         const session = await response.json();
         if (typeof session.token !== 'string' || !session.token) throw new Error('Sitzung ohne Token');
@@ -2363,7 +2388,7 @@
 
        async function pollMdxBlocks() {
          try {
-           const response = await fetch('/api/mdx-blocks', { cache: 'no-store' });
+           const response = await apiFetch('/api/mdx-blocks', { cache: 'no-store' });
            if (!response.ok) throw new Error(`HTTP ${response.status}`);
            reconcileMdxBlocks(await response.json());
          } catch {
@@ -2376,7 +2401,7 @@
 
        async function pollMarkdownDrafts() {
          try {
-           const response = await fetch('/api/markdown-drafts', { cache: 'no-store' });
+           const response = await apiFetch('/api/markdown-drafts', { cache: 'no-store' });
            if (!response.ok) throw new Error(`HTTP ${response.status}`);
            reconcileMarkdownDrafts(await response.json());
          } catch {
@@ -2394,7 +2419,7 @@
         const unavailablePanels = new Set();
         const loadPanelState = async (endpoint, label, fallback) => {
           try {
-            const response = await fetch(endpoint, { cache: 'no-store' });
+            const response = await apiFetch(endpoint, { cache: 'no-store' });
             if (!response.ok) throw new Error(String(response.status));
             return await response.json();
           } catch (error) {
@@ -2479,7 +2504,7 @@
         if (collectionPollInFlight) return;
         collectionPollInFlight = true;
         try {
-          const response = await fetch('/api/collections', { cache: 'no-store' });
+          const response = await apiFetch('/api/collections', { cache: 'no-store' });
           if (!response.ok) throw new Error(String(response.status));
            const next = await response.json(); collectionState = next;
            if (sourceProposal?.target.kind === 'collection-config') invalidateSourceProposal('collection-config', sourceProposal.target.id, next.configHash || '');
@@ -2512,7 +2537,10 @@
             else if (!valid) markCollectionConflict(key, draft);
             else if (collectionConflicts.has(key) || entry.hash !== draft.hash) markCollectionConflict(key, draft, entry.hash, collectionConflicts.get(key)?.blockedHash || '');
           }
-        } catch {
+        } catch (error) {
+          // A poll that timed out says nothing about the source: keep the drafts and
+          // retry on the next tick instead of turning them into apparent conflicts.
+          if (error?.timeout === true) return;
           if (configDraft) { configConflict = { base: configConflict?.base || configDraft.base, latest: '' }; pendingConfigPreview = null; }
           reconcileCreateEntryDrafts(collectionState, true);
           for (const [key, draft] of collectionDrafts) if (draft.dirty) {
@@ -2531,7 +2559,7 @@
       window.addEventListener('focus', pollCollections);
       async function pollGalleries() {
         try {
-          const [fixtureResponse, astroResponse] = await Promise.all([fetch('/api/state', { cache: 'no-store' }), fetch('/api/astro-galleries', { cache: 'no-store' })]);
+          const [fixtureResponse, astroResponse] = await Promise.all([apiFetch('/api/state', { cache: 'no-store' }), apiFetch('/api/astro-galleries', { cache: 'no-store' })]);
           if (!fixtureResponse.ok || !astroResponse.ok) throw new Error('Galerie nicht verfügbar');
            const fixture = await fixtureResponse.json(); const astro = await astroResponse.json();
            if (sourceProposal?.target.kind === 'gallery-fixture') invalidateSourceProposal('gallery-fixture', sourceProposal.target.id, fixture.hash || '');
@@ -2547,7 +2575,8 @@
             } else latest.order = [...draft.order];
           }
           render();
-        } catch {
+        } catch (error) {
+          if (error?.timeout === true) return;
           for (const [id, draft] of galleryDrafts) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: '' }); }
           render();
         }
@@ -2564,7 +2593,7 @@
       }
 
       async function postOperation(endpoint, operation) {
-        return fetch(endpoint, {
+        return apiFetch(endpoint, {
           method: 'POST',
           headers: { 'content-type': 'application/json', 'x-editor-token': editorToken },
           body: JSON.stringify(operation),
@@ -2635,7 +2664,7 @@
       async function pollMdxRevision() {
         const sequence = ++mdxPollSequence;
         try {
-          const response = await fetch('/api/mdx-components', { cache: 'no-store' });
+          const response = await apiFetch('/api/mdx-components', { cache: 'no-store' });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
            const latest = await response.json();
            if (sequence !== mdxPollSequence) return;
@@ -3142,6 +3171,7 @@
             : `Gespeichert. Bei späteren Schemaänderungen Astro Content Sync bzw. Dev-Server-Neustart prüfen. (${result.collectionId}/${result.entryId})`, 'success');
          } catch (error) {
            pendingCollectionPreview = null;
+           const timedOut = error?.timeout === true;
            if (!creating && error.code === 'SOURCE_REPLACEMENT_DISABLED') {
              setSourceProposal({
                kind: 'collection-entry', targetId: collectionProposalTargetId(operation.collectionId, operation.entryId),
@@ -3167,9 +3197,23 @@
               markCollectionConflict(key, draft, blockedHash, blockedHash);
             }
           }
-          status(`Nicht gespeichert: ${withoutTerminalPunctuation(error.message)}. Lade den aktuellen Stand …`, 'warning');
-          if (creating || (!creating && (error.code === 'SOURCE_REPLACEMENT_DISABLED' || collectionSourceConflictCodes.has(error.code)))) await pollCollections();
-          else try { await load(); } catch (loadError) { status(`Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
+          const prefix = timedOut ? 'Nicht bestätigt' : 'Nicht gespeichert';
+          const detail = withoutTerminalPunctuation(error.message);
+          const pendingMessage = `${prefix}: ${detail}. Lade den aktuellen Stand …`;
+          if (creating || (!creating && (error.code === 'SOURCE_REPLACEMENT_DISABLED' || collectionSourceConflictCodes.has(error.code)))) {
+            status(pendingMessage, 'warning');
+            await pollCollections();
+          } else if (timedOut) {
+            try {
+              await load();
+              status(`Nicht bestätigt: ${detail}. Der aktuelle Stand wurde neu geladen.`, 'warning');
+            } catch (loadError) {
+              status(`Nicht bestätigt: ${detail}. Neuladen fehlgeschlagen: ${loadError.message}`, 'error');
+            }
+          } else {
+            status(pendingMessage, 'warning');
+            try { await load(); } catch (loadError) { status(`Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
+          }
         } finally {
           saving = false;
           render();
@@ -3208,7 +3252,7 @@
             return;
           }
           status('Gespeichert. Prüfe, ob Astro alle Galerien neu gerendert hat …');
-          const readyResponse = await fetch(`/api/preview-ready?hash=${encodeURIComponent(current.hash)}`, { cache: 'no-store' });
+          const readyResponse = await apiFetch(`/api/preview-ready?hash=${encodeURIComponent(current.hash)}`, { cache: 'no-store' });
           const ready = await readyResponse.json();
           if (!readyResponse.ok) throw new Error(germanReason(ready.error) || `Status ${readyResponse.status}`);
           navigatePreview(previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id);
@@ -3216,6 +3260,7 @@
           status('Gespeichert; Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert.', 'success');
          } catch (error) {
            pendingPreview = null;
+           const timedOut = error?.timeout === true;
            if (error.code === 'SOURCE_REPLACEMENT_DISABLED') {
              const internal = operation.kind === 'astro-internal-gallery';
              setSourceProposal({
@@ -3237,11 +3282,17 @@
               const draft = galleryDrafts.get(id);
               if (draft) galleryConflicts.set(id, { ...draft, latest: '' });
             }
+            const prefix = timedOut ? 'Nicht bestätigt' : 'Nicht gespeichert';
             const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : withoutTerminalPunctuation(error.message);
-            try { await load(); } catch (loadError) { status(`Nicht gespeichert: ${reason}. Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
-            if (stale) status(`Nicht gespeichert: Die Quellrevision hat sich geändert; der Galerieentwurf bleibt im Konflikt erhalten.`, 'warning');
-            if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${withoutTerminalPunctuation(error.message)}; der Galerieentwurf bleibt erhalten.`, 'warning');
-            else if (!stale) status(`Nicht gespeichert: ${reason}.`, 'warning');
+            let reloaded = false;
+            try { await load(); reloaded = true; } catch (loadError) { status(`${prefix}: ${reason}. Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
+            if (timedOut) {
+              if (reloaded) status(`Nicht bestätigt: ${reason}. Der aktuelle Stand wurde neu geladen.`, 'warning');
+            } else {
+              if (stale) status(`Nicht gespeichert: Die Quellrevision hat sich geändert; der Galerieentwurf bleibt im Konflikt erhalten.`, 'warning');
+              if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${withoutTerminalPunctuation(error.message)}; der Galerieentwurf bleibt erhalten.`, 'warning');
+              else if (!stale) status(`Nicht gespeichert: ${reason}.`, 'warning');
+            }
           }
         } finally {
           saving = false;

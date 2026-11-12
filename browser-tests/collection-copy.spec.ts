@@ -490,3 +490,41 @@ test('collection-entry proposals are not exported after their config revision ch
     await writeFile(receipt.configFile, originalConfig)
   }
 })
+
+test('a stalled collections request releases the editor instead of freezing it', async ({ page }) => {
+  // A local API request that never answers must not keep the busy state set: every
+  // control would stay disabled and the editor would only recover when the whole test
+  // budget ends (issue #25). The request deadline aborts the call, reports it in German
+  // and re-enables the draft instead of leaving a silently frozen panel.
+  await page.goto('/')
+  const collectionRoute = page.getByRole('navigation', { name: 'Vorschau-Route' }).getByRole('button', { name: 'Collection proof' })
+  await collectionRoute.click()
+  await expect(page.locator('#collections-panel')).toBeVisible()
+  const titleField = page.locator('#collection-fields label').filter({ hasText: 'title (string)' })
+  const titleInput = titleField.locator('input')
+  await titleInput.fill('Stalled request draft')
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  await page.route('**/api/collections/preview', async route => {
+    // Hold the request open until the test settles it, so the browser has to cancel it.
+    await gate
+    await route.abort().catch(() => {})
+  })
+  try {
+    const started = Date.now()
+    await titleField.getByRole('button', { name: 'Vorschau' }).click()
+    await expect(titleInput).toBeDisabled()
+    // The fixed client releases the draft at its ten-second deadline; the unfixed client
+    // never does, so this fails at 13s instead of hiding inside the 120s test budget.
+    await expect(titleInput).toBeEnabled({ timeout: 13_000 })
+    expect(Date.now() - started).toBeGreaterThan(9_000)
+    expect(Date.now() - started).toBeLessThan(13_000)
+    await expect(page.locator('#status')).toContainText('Zeitüberschreitung')
+    await expect(page.locator('#status')).toContainText('POST /api/collections/preview')
+    await expect(titleField.getByRole('button', { name: 'Vorschau' })).toBeEnabled()
+    await expect(titleInput).toHaveValue('Stalled request draft')
+  } finally {
+    release()
+    await page.unrouteAll({ behavior: 'ignoreErrors' })
+  }
+})
