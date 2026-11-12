@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import test from 'node:test'
 import { hashSource, inspectFixture } from '../src/lib/gallery-patch.mjs'
 import { createEditorServer, isLoopbackAddress, validateDemoImageSlugs } from '../src/editor/server.mjs'
+import { startEditorServer } from '../src/editor/cli.mjs'
 
 function listen(server) {
   return new Promise((resolve, reject) => {
@@ -41,6 +42,69 @@ function getWithHost(port, host) {
     request.end()
   })
 }
+
+test('an explicitly disabled demo gallery is distinct from a broken fixture', async (t) => {
+  const disabled = createEditorServer({ port: 0, fixturePath: null })
+  const disabledPort = await listen(disabled)
+  t.after(() => close(disabled))
+  const state = await fetch(`http://127.0.0.1:${disabledPort}/api/state`)
+  assert.equal(state.status, 200)
+  assert.deepEqual(await state.json(), { configured: false, galleries: [], hash: '' })
+
+  const broken = createEditorServer({ port: 0, fixturePath: path.join(tmpdir(), 'missing-avcms-fixture.mdx') })
+  const brokenPort = await listen(broken)
+  t.after(() => close(broken))
+  const failure = await fetch(`http://127.0.0.1:${brokenPort}/api/state`)
+  assert.equal(failure.status, 422)
+  assert.ok((await failure.json()).error)
+})
+
+test('an explicitly disabled demo gallery reports FIXTURE_DISABLED from preview routes', async (t) => {
+  const server = createEditorServer({ port: 0, fixturePath: null })
+  const port = await listen(server)
+  t.after(() => close(server))
+  const origin = `http://127.0.0.1:${port}`
+  const token = (await (await fetch(`${origin}/api/session`)).json()).token
+  const headers = { origin, 'content-type': 'application/json', 'x-editor-token': token }
+  const hash = 'a'.repeat(64)
+  const operation = { galleryId: 'FIRST', order: ['noise-fixture-01'], hash }
+
+  const ready = await fetch(`${origin}/api/preview-ready?hash=${hash}`)
+  assert.equal(ready.status, 422)
+  assert.equal((await ready.json()).code, 'FIXTURE_DISABLED')
+
+  for (const [endpoint, payload] of [
+    ['preview', operation],
+    ['commit', { ...operation, previewId: 'b'.repeat(64) }],
+  ]) {
+    const response = await fetch(`${origin}/api/${endpoint}`, { method: 'POST', headers, body: JSON.stringify(payload) })
+    assert.equal(response.status, 422)
+    assert.deepEqual(await response.json(), {
+      code: 'FIXTURE_DISABLED',
+      error: 'The demo gallery fixture is explicitly disabled by configuration.',
+    })
+  }
+
+  const unauthenticated = await fetch(`${origin}/api/preview`, {
+    method: 'POST',
+    headers: { origin, 'content-type': 'application/json' },
+    body: JSON.stringify(operation),
+  })
+  assert.equal(unauthenticated.status, 403)
+})
+
+test('the trusted CLI accepts only an explicit null opt-out for the demo fixture', async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), 'avcms-no-fixture-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const configPath = path.join(directory, 'config.json')
+  await writeFile(configPath, JSON.stringify({ port: 0, fixturePath: null }))
+  const server = await startEditorServer({ configPath })
+  t.after(() => close(server))
+  const response = await fetch(`http://127.0.0.1:${server.address().port}/api/state`)
+  assert.deepEqual(await response.json(), { configured: false, galleries: [], hash: '' })
+  await writeFile(configPath, JSON.stringify({ port: 0 }))
+  await assert.rejects(startEditorServer({ configPath }), /fixturePath/)
+})
 
 test('the fixture write server refuses production mode', () => {
   const priorNodeEnv = process.env.NODE_ENV

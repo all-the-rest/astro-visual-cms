@@ -9,16 +9,23 @@
   </head>
   <body class="min-h-screen bg-base-200 text-base-content">
     <main class="avcms-editor-ui mx-auto grid min-w-0 grid-cols-1 max-w-7xl gap-6 p-5 lg:grid-cols-[22rem_minmax(0,1fr)]">
-      <section class="card min-w-0 bg-base-100 shadow-sm">
+      <nav class="flex flex-wrap gap-2 lg:col-span-2" aria-label="Bearbeitungsbereiche">
+        <a class="btn btn-sm" href="#gallery-panel">Galerien</a>
+        <a class="btn btn-sm" href="#collections-panel" hidden>Inhaltssammlungen</a>
+        <a class="btn btn-sm" href="#mdx-components-panel" hidden>Komponenten</a>
+        <a class="btn btn-sm" href="#mdx-blocks-panel" hidden>Blockeditor</a>
+        <a class="btn btn-sm" href="#markdown-draft-panel" hidden>Markdown-Entwürfe</a>
+      </nav>
+      <section id="gallery-panel" tabindex="-1" class="card min-w-0 self-start bg-base-100 shadow-sm">
         <div class="card-body">
           <h1 class="card-title">MDX-Galerien</h1>
-          <p class="text-sm">Wähle eine Galerie, ziehe Einträge zum Sortieren oder nutze die ↑/↓-Buttons als Tastatur-Alternative. Vor dem Speichern zeigt der Editor exakt den geänderten Arraybereich.</p>
+          <p id="gallery-instructions" class="text-sm">Wähle eine Galerie, ziehe Einträge zum Sortieren oder nutze die ↑/↓-Buttons als Tastatur-Alternative. Vor dem Speichern zeigt der Editor exakt den geänderten Arraybereich.</p>
           <div id="status" class="alert alert-info" role="status">Fixture wird geladen …</div>
           <div id="gallery-conflict" class="grid gap-2" hidden></div>
           <div id="gallery-draft-actions" class="grid gap-2" hidden></div>
           <div id="gallery-picker" class="flex flex-wrap gap-2" role="group" aria-label="Galerie auswählen"></div>
           <ul id="images" class="list" aria-label="Galerie-Reihenfolge"></ul>
-          <p class="text-xs opacity-70">Dev-only · localhost · feste Demo-Fixture · keine Produktions-Schreibschnittstelle</p>
+          <p class="text-xs opacity-70">Nur lokal während der Entwicklung · keine Produktions-Schreibschnittstelle</p>
         </div>
       </section>
       <section class="card min-h-[70vh] min-w-0 bg-base-100 shadow-sm">
@@ -36,17 +43,17 @@
           </div>
         </div>
       </section>
-      <section id="collections-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="collections-panel" tabindex="-1" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
-          <h2 class="card-title">Astro Content Collections</h2>
-          <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Collections und vorhandene skalare Schemafelder sind bearbeitbar. Konfigurationsänderungen benötigen eine explizite Diff-Bestätigung.</p>
+          <h2 class="card-title">Astro-Inhaltssammlungen</h2>
+          <p id="collections-info" class="text-sm">Nur sichere statische Markdown-Sammlungen und vorhandene skalare Schemafelder sind bearbeitbar. Konfigurationsänderungen benötigen eine ausdrückliche Bestätigung des Unterschieds.</p>
           <p id="collections-reason" class="alert alert-info" role="status" hidden></p>
           <div id="collection-conflicts" class="grid gap-2"></div>
           <div id="create-entry-conflicts" class="grid gap-2"></div>
           <div class="grid gap-5 md:grid-cols-3">
             <section>
-              <h3 class="font-semibold">Collections</h3>
-              <div id="collection-picker" class="flex flex-wrap gap-2" role="group" aria-label="Collection auswählen"></div>
+              <h3 class="font-semibold">Inhaltssammlungen</h3>
+              <div id="collection-picker" class="flex flex-wrap gap-2" role="group" aria-label="Sammlung auswählen"></div>
             </section>
             <section>
               <h3 class="font-semibold">Markdown-Einträge</h3>
@@ -66,22 +73,22 @@
           </form>
           <div id="config-editors" class="grid gap-5 md:grid-cols-2" hidden>
             <form id="create-collection-form" class="grid gap-2" autocomplete="off">
-              <h3 class="font-semibold">Statische Collection anlegen</h3>
-              <label>Name<input class="input input-bordered" name="name" required maxlength="64"></label>
-              <label>Relativer Content-Basisordner<input class="input input-bordered" name="base" required placeholder="./src/content/notizen"></label>
-              <label>Statisches Markdown-Muster<select class="select select-bordered" name="pattern"><option value="*.md">*.md</option><option value="**/*.md">**/*.md</option></select></label>
-              <fieldset class="grid gap-2"><legend>Feld (mindestens eins)</legend><label>Name<input class="input input-bordered" name="fieldName" required maxlength="64"></label><label>Typ<select class="select select-bordered" name="fieldType"><option>string</option><option>number</option><option>boolean</option><option>enum</option></select></label><label>Enum-Werte (kommagetrennt)<input class="input input-bordered" name="enumValues"></label><label><input type="checkbox" name="required" checked> Erforderlich</label></fieldset>
+              <h3 class="font-semibold">Statische Sammlung anlegen</h3>
+              <label class="grid gap-1 text-sm">Name<input class="input input-bordered w-full" name="name" required maxlength="64"></label>
+              <label class="grid gap-1 text-sm">Relativer Inhalts-Basisordner<input class="input input-bordered w-full" name="base" required placeholder="./src/content/notizen"></label>
+              <label class="grid gap-1 text-sm">Statisches Markdown-Muster<select class="select select-bordered w-full" name="pattern"><option value="*.md">*.md</option><option value="**/*.md">**/*.md</option></select></label>
+              <fieldset class="grid gap-2"><legend>Feld (mindestens eins)</legend><label class="grid gap-1 text-sm">Name<input class="input input-bordered w-full" name="fieldName" required maxlength="64"></label><label class="grid gap-1 text-sm">Typ<select class="select select-bordered w-full" name="fieldType"><option>string</option><option>number</option><option>boolean</option><option>enum</option></select></label><label class="grid gap-1 text-sm">Enum-Werte (kommagetrennt)<input class="input input-bordered w-full" name="enumValues"></label><label><input type="checkbox" name="required" checked> Erforderlich</label></fieldset>
               <button class="btn" type="submit">Vorschau</button>
             </form>
             <form id="extend-field-form" class="grid gap-2" autocomplete="off">
-              <h3 class="font-semibold">Schemafeld ergänzen</h3><p>Nur für die ausgewählte unterstützte statische Collection.</p>
-              <label>Name<input class="input input-bordered" name="fieldName" required maxlength="64"></label><label>Typ<select class="select select-bordered" name="fieldType"><option>string</option><option>number</option><option>boolean</option><option>enum</option></select></label>
-              <label>Enum-Werte (kommagetrennt)<input class="input input-bordered" name="enumValues"></label><label><input type="checkbox" name="required"> Erforderlich</label>
+              <h3 class="font-semibold">Schemafeld ergänzen</h3><p>Nur für die ausgewählte unterstützte statische Sammlung.</p>
+              <label class="grid gap-1 text-sm">Name<input class="input input-bordered w-full" name="fieldName" required maxlength="64"></label><label class="grid gap-1 text-sm">Typ<select class="select select-bordered w-full" name="fieldType"><option>string</option><option>number</option><option>boolean</option><option>enum</option></select></label>
+              <label class="grid gap-1 text-sm">Enum-Werte (kommagetrennt)<input class="input input-bordered w-full" name="enumValues"></label><label><input type="checkbox" name="required"> Erforderlich</label>
               <button class="btn" type="submit">Vorschau</button>
             </form>
           </div>
           <div id="config-conflict" class="grid gap-2" hidden></div><section id="config-confirmation" class="grid gap-3" hidden><h3 class="font-semibold">Exakte Konfigurationsänderung bestätigen</h3><pre class="overflow-auto rounded-box bg-base-200 p-3"><code id="config-diff"></code></pre><button id="config-commit" class="btn btn-primary" type="button">Bestätigen und Änderungsvorschlag erstellen</button><button id="config-cancel" class="btn" type="button">Abbrechen</button></section>
-          <p class="text-xs opacity-70">Nach einer künftigen bestätigten Schema-/Collection-Konfigurationsänderung Content Sync bzw. einen Astro-Dev-Server-Neustart prüfen.</p>
+          <p class="text-xs opacity-70">Nach einer bestätigten Schema- oder Sammlungskonfigurationsänderung die Inhaltssynchronisierung beziehungsweise einen Neustart des Astro-Entwicklungsservers prüfen.</p>
         </div>
       </section>
       <section id="diff-confirmation" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
@@ -120,14 +127,16 @@
           </div>
         </div>
       </section>
-      <section id="mdx-components-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="mdx-components-panel" tabindex="-1" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body"><h2 id="mdx-panel-title" class="card-title">MDX-Bearbeitung</h2>
           <p id="mdx-reason" class="alert alert-info" role="status" hidden></p>
-          <label>Ziel<select id="mdx-target" class="select select-bordered"></select></label>
-          <label>Instanz<select id="mdx-instance" class="select select-bordered"></select></label>
-          <label>Eigenschaft<select id="mdx-prop" class="select select-bordered"></select></label>
-          <label id="mdx-value-label">Neuer Wert<div id="mdx-value-control"></div></label>
-          <button id="mdx-preview-button" class="btn" type="button">Vorschau</button>
+          <div class="grid gap-4 md:grid-cols-2">
+            <label class="grid gap-1 text-sm">Ziel<select id="mdx-target" class="select select-bordered w-full"></select></label>
+            <label class="grid gap-1 text-sm">Instanz<select id="mdx-instance" class="select select-bordered w-full"></select></label>
+            <label class="grid gap-1 text-sm">Eigenschaft<select id="mdx-prop" class="select select-bordered w-full"></select></label>
+            <label id="mdx-value-label" class="grid gap-1 text-sm">Neuer Wert<div id="mdx-value-control"></div></label>
+          </div>
+          <button id="mdx-preview-button" class="btn justify-self-start" type="button">Vorschau</button>
           <section id="mdx-conflict" class="alert alert-warning" role="alert" aria-live="assertive" hidden>
             <p id="mdx-conflict-message"></p>
             <p>Die Quelle hat sich geändert. Deine Eingabe bleibt erhalten. Wähle ausdrücklich, wie du fortfahren möchtest.</p>
@@ -146,7 +155,7 @@
           </section>
         </div>
       </section>
-      <section id="mdx-blocks-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="mdx-blocks-panel" tabindex="-1" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Astro-Blockeditor</h2>
           <p class="text-sm">Blöcke werden als native Komponentenaufrufe direkt im MDX bearbeitet. Die Astro-Vorschau rendert den Entwurf; bestehende Quelldateien werden nicht überschrieben.</p>
@@ -181,7 +190,7 @@
           <button id="mdx-block-reset" class="btn justify-self-start" type="button">Entwurf verwerfen und Astro-Vorschau zurücksetzen</button>
         </div>
       </section>
-      <section id="markdown-draft-panel" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
+      <section id="markdown-draft-panel" tabindex="-1" class="card min-w-0 bg-base-100 shadow-sm lg:col-span-2" hidden>
         <div class="card-body">
           <h2 class="card-title">Visueller Markdown-Entwurf</h2>
           <p class="text-sm">Nur der explizit markierte, einzelne Klartext-Absatz ist auswählbar. Der Entwurf ändert ausschließlich die Vorschau: Es gibt hier weder Schreibzugriff noch Änderungsvorschlag oder Export.</p>
@@ -214,6 +223,182 @@
       </section>
     </main>
     <script nonce="__CSP_NONCE__">
+      const panelLinks = [...document.querySelectorAll('nav[aria-label="Bearbeitungsbereiche"] a[href]')];
+      const syncPanelLinks = () => {
+        for (const link of panelLinks) {
+          const panel = document.getElementById(link.getAttribute('href').slice(1));
+          if (panel) link.hidden = panel.hidden;
+        }
+      };
+      const panelObserver = new MutationObserver(syncPanelLinks);
+      for (const link of panelLinks) {
+        const panel = document.getElementById(link.getAttribute('href').slice(1));
+        if (panel) panelObserver.observe(panel, { attributes: true, attributeFilter: ['hidden'] });
+      }
+      syncPanelLinks();
+      const GERMAN_REASON_TRANSLATIONS = {
+        'Content config has invalid or unsupported syntax.': 'Die Inhaltssammlungs-Konfiguration enthält ungültige oder nicht unterstützte Syntax.',
+        'Expected one exported literal collections object; dynamic configuration is read-only.': 'Erwartet wird genau ein exportiertes, literales Sammlungsobjekt; dynamische Konfigurationen sind schreibgeschützt.',
+        'Collection must be a direct defineCollection() call or an immutable, unreferenced const binding to one.': 'Eine Sammlung muss ein direkter defineCollection()-Aufruf oder eine unveränderliche, nicht anderweitig referenzierte const-Bindung daran sein.',
+        'Collection options must be a literal object.': 'Die Sammlungsoptionen müssen ein literales Objekt sein.',
+        'Only loader and schema collection options are supported.': 'Unterstützt werden nur die Sammlungsoptionen loader und schema.',
+        'Only static glob() content collections are supported; legacy and file() loaders are read-only.': 'Unterstützt werden nur statische glob()-Inhaltssammlungen; Legacy- und file()-Loader sind schreibgeschützt.',
+        'Collection has no statically declared schema.': 'Für die Sammlung ist kein statisches Schema deklariert.',
+        'Schema must be a direct z.object({...}); imported/shared schemas are read-only.': 'Das Schema muss direkt als z.object({...}) definiert sein; importierte oder geteilte Schemas sind schreibgeschützt.',
+        'Schema spreads and computed field names are read-only.': 'Schema-Spreads und berechnete Feldnamen sind schreibgeschützt.',
+        'The __proto__ schema key is not supported.': 'Der Schema-Schlüssel __proto__ wird nicht unterstützt.',
+        'Loader is not a statically imported Astro glob() loader.': 'Der Loader ist kein statisch importierter Astro-glob()-Loader.',
+        'glob() options must be a literal object without spreads or computed properties.': 'Die glob()-Optionen müssen ein literales Objekt ohne Spreads oder berechnete Eigenschaften sein.',
+        'Only glob() base and pattern options are supported.': 'Unterstützt werden nur die glob()-Optionen base und pattern.',
+        'glob() requires a literal relative pattern and a literal base directory.': 'glob() erfordert ein literales relatives Muster und ein literales Basisverzeichnis.',
+        'Non-literal Zod default.': 'Der Zod-Standardwert ist kein Literal.',
+        'Schema is not a direct, statically understood Zod expression.': 'Das Schema ist kein direkter, statisch verständlicher Zod-Ausdruck.',
+        'Unsupported array item schema.': 'Das Schema des Array-Elements wird nicht unterstützt.',
+        'Zod default is not a compatible literal for this field type.': 'Der Zod-Standardwert ist kein kompatibles Literal für diesen Feldtyp.',
+        'Frontmatter editing for date fields is not supported.': 'Das Bearbeiten von Frontmatter-Feldern vom Typ date wird nicht unterstützt.',
+        'This field name or type is outside the editable scalar subset.': 'Dieser Feldname oder Feldtyp liegt außerhalb der bearbeitbaren skalaren Teilmenge.',
+        'Collection name is outside the supported static identifier subset.': 'Der Sammlungsname liegt außerhalb der unterstützten statischen Bezeichner-Teilmenge.',
+        'Collection syntax is outside the supported static subset.': 'Die Sammlungssyntax liegt außerhalb der unterstützten statischen Teilmenge.',
+        'Only literal *.md, *.mdx, **/*.md, and **/*.mdx entry patterns are supported.': 'Unterstützt werden nur die festen Dateimuster *.md, *.mdx, **/*.md und **/*.mdx.',
+        'Collection has no editable schema fields.': 'Die Sammlung hat keine bearbeitbaren Schemafelder.',
+        'Collection has no editable scalar schema fields.': 'Die Sammlung hat keine bearbeitbaren skalaren Schemafelder.',
+        'An entry exceeds the safe source-size limit; collection is read-only.': 'Ein Eintrag überschreitet die sichere Quellgrößengrenze; die Sammlung ist schreibgeschützt.',
+        'A collection entry could not be read safely.': 'Ein Sammlungseintrag konnte nicht sicher gelesen werden.',
+        'Entry creation requires every required field to use the supported scalar subset or have a static default.': 'Das Anlegen von Einträgen erfordert, dass jedes Pflichtfeld die unterstützte skalare Teilmenge nutzt oder einen statischen Standardwert hat.',
+        'Entry creation requires a supported .md or .mdx glob and supported required scalar fields.': 'Das Anlegen von Einträgen erfordert ein unterstütztes .md- oder .mdx-Glob und unterstützte skalare Pflichtfelder.',
+        'Aggregate collection discovery limits were reached; this collection is read-only.': 'Die Gesamtgrenzen der Sammlungserkennung wurden erreicht; diese Sammlung ist schreibgeschützt.',
+        'Collection files could not be discovered safely.': 'Die Sammlungsdateien konnten nicht sicher erkannt werden.',
+        'Collection creation and schema extension are not connected to the confirmed-write API.': 'Das Anlegen von Sammlungen und die Schemaerweiterung sind nicht an die bestätigte Schreib-API angebunden.',
+        'API-only static collection creation and explicit schema field extension are available.': 'Statische Sammlungen und Schemafelder können ausschließlich über die API angelegt beziehungsweise ergänzt werden.',
+        'Unsupported or dynamic config syntax remains read-only.': 'Nicht unterstützte oder dynamische Konfigurationen bleiben schreibgeschützt.',
+        'Content config could not be read safely; collection editing is read-only.': 'Die Inhaltssammlungs-Konfiguration konnte nicht sicher gelesen werden; das Bearbeiten von Sammlungen ist schreibgeschützt.',
+        'Content config could not be read safely.': 'Die Inhaltssammlungs-Konfiguration konnte nicht sicher gelesen werden.',
+        'Resolved content path is outside the configured project root.': 'Der aufgelöste Inhaltspfad liegt außerhalb des konfigurierten Projektstammverzeichnisses.',
+        'A configured content path does not exist.': 'Ein konfigurierter Inhaltspfad existiert nicht.',
+        'Symbolic links in configured content paths are read-only.': 'Symbolische Links in konfigurierten Inhaltspfaden sind schreibgeschützt.',
+        'A configured content path ancestor is not a directory.': 'Ein übergeordneter Teil eines konfigurierten Inhaltspfads ist kein Verzeichnis.',
+        'A collection base is not a directory.': 'Ein Sammlungs-Basisordner ist kein Verzeichnis.',
+        'A collection entry is not a regular file.': 'Ein Sammlungseintrag ist keine reguläre Datei.',
+        'A configured content path could not be resolved safely.': 'Ein konfigurierter Inhaltspfad konnte nicht sicher aufgelöst werden.',
+        'A configured content path resolves through a symbolic link.': 'Ein konfigurierter Inhaltspfad wird über einen symbolischen Link aufgelöst.',
+        'Collection base must stay inside the configured project root.': 'Der Sammlungs-Basisordner muss innerhalb des konfigurierten Projektstammverzeichnisses bleiben.',
+        'Collection directory exceeds the safe scan limit.': 'Das Sammlungsverzeichnis überschreitet die sichere Scan-Grenze.',
+        'Symbolic links inside a collection base are read-only.': 'Symbolische Links innerhalb eines Sammlungs-Basisordners sind schreibgeschützt.',
+        'Configured content config path must be a trusted project-relative or in-root path.': 'Der konfigurierte Pfad zur Inhaltssammlungs-Konfiguration muss ein vertrauenswürdiger projektrelativer oder projektinterner Pfad sein.',
+        'Configured content config path must be inside the trusted project root.': 'Der konfigurierte Pfad zur Inhaltssammlungs-Konfiguration muss innerhalb des vertrauenswürdigen Projektstammverzeichnisses liegen.',
+        'Configured content config file is unavailable.': 'Die konfigurierte Inhaltssammlungs-Konfigurationsdatei ist nicht verfügbar.',
+        'Content config exceeds the safe source-size limit.': 'Die Inhaltssammlungs-Konfiguration überschreitet die sichere Quellgrößengrenze.',
+        'Configured content config is not valid UTF-8.': 'Die konfigurierte Inhaltssammlungs-Konfiguration ist kein gültiges UTF-8.',
+        'Collection is not supported for edits.': 'Die Sammlung wird nicht für Bearbeitungen unterstützt.',
+        'Field is not in the supported scalar editing subset.': 'Das Feld gehört nicht zur unterstützten skalaren Bearbeitungs-Teilmenge.',
+        'Entry ID is not part of the current collection glob.': 'Die Eintrags-ID gehört nicht zum aktuellen Sammlungs-Glob.',
+        'Entry ID is not a safe relative collection entry ID.': 'Die Eintrags-ID ist keine sichere relative Sammlungseintrags-ID.',
+        'Entry ID does not match the current collection glob.': 'Die Eintrags-ID entspricht nicht dem aktuellen Sammlungs-Glob.',
+        'Collection entry changed or became unavailable during validation.': 'Der Sammlungseintrag hat sich während der Prüfung geändert oder ist nicht mehr verfügbar.',
+        'Collection entry exceeds the safe source-size limit.': 'Der Sammlungseintrag überschreitet die sichere Quellgrößengrenze.',
+        'Collection entry could not be read safely.': 'Der Sammlungseintrag konnte nicht sicher gelesen werden.',
+        'Content config changed; prepare the entry again.': 'Die Inhaltssammlungs-Konfiguration hat sich geändert; bereite den Eintrag erneut vor.',
+        'Collection is not supported for entry creation.': 'Die Sammlung wird nicht für das Anlegen von Einträgen unterstützt.',
+        'Entry filename must be a simple lowercase slug ending in .md or .mdx.': 'Der Dateiname des Eintrags muss ein einfacher kleingeschriebener Slug mit der Endung .md oder .mdx sein.',
+        'Filename does not match the configured collection glob.': 'Der Dateiname entspricht nicht dem konfigurierten Sammlungs-Glob.',
+        'Entry values must be a bounded object of supported schema fields.': 'Die Eintragswerte müssen ein begrenztes Objekt aus unterstützten Schemafeldern sein.',
+        'Entry values contain a field outside the current collection schema.': 'Die Eintragswerte enthalten ein Feld außerhalb des aktuellen Sammlungsschemas.',
+        'Generated entry exceeds the safe source-size limit.': 'Der erzeugte Eintrag überschreitet die sichere Quellgrößengrenze.',
+        'New entry must be directly inside the trusted collection base.': 'Ein neuer Eintrag muss direkt im vertrauenswürdigen Sammlungs-Basisordner liegen.',
+        'An entry already exists at this filename.': 'Unter diesem Dateinamen existiert bereits ein Eintrag.',
+        'Collection configuration changed; prepare the entry again.': 'Die Sammlungskonfiguration hat sich geändert; bereite den Eintrag erneut vor.',
+        'Content config changed; prepare the edit again.': 'Die Inhaltssammlungs-Konfiguration hat sich geändert; bereite die Bearbeitung erneut vor.',
+        'Content config is outside the supported static subset.': 'Die Inhaltssammlungs-Konfiguration liegt außerhalb der unterstützten statischen Teilmenge.',
+        'Field name must be a simple static identifier.': 'Der Feldname muss ein einfacher statischer Bezeichner sein.',
+        'Only the documented primitive, enum, and primitive-array fields can be planned.': 'Geplant werden können nur die dokumentierten primitiven, Enum- und primitiven Array-Felder.',
+        'Default must be a compatible JSON scalar literal.': 'Der Standardwert muss ein kompatibles JSON-Skalar-Literal sein.',
+        'Source hash is invalid or stale.': 'Der Quell-Hash ist ungültig oder veraltet.',
+        'Content config is not a supported static collections object.': 'Die Inhaltssammlungs-Konfiguration ist kein unterstütztes statisches Sammlungsobjekt.',
+        'Target collection must be supported and the field must not already exist.': 'Die Zielsammlung muss unterstützt werden und das Feld darf noch nicht existieren.',
+        'Required Astro and Zod imports must be explicit imports.': 'Die erforderlichen Astro- und Zod-Importe müssen explizite Importe sein.',
+        'Target schema is not a supported literal object.': 'Das Zielschema ist kein unterstütztes literales Objekt.',
+        'Generated schema did not validate.': 'Das erzeugte Schema konnte nicht validiert werden.',
+        'Collection name must be unique and static.': 'Der Sammlungsname muss eindeutig und statisch sein.',
+        'Collection base and glob pattern must be safe relative paths.': 'Sammlungs-Basisordner und Glob-Muster müssen sichere relative Pfade sein.',
+        'A new collection requires unique static fields.': 'Eine neue Sammlung erfordert eindeutige statische Felder.',
+        'Required defineCollection, glob, and z imports must already exist.': 'Die erforderlichen Importe für defineCollection, glob und z müssen bereits vorhanden sein.',
+        'Generated collection did not validate as a supported static collection.': 'Die erzeugte Sammlung konnte nicht als unterstützte statische Sammlung validiert werden.',
+        'The entry source or expected hash is invalid or stale.': 'Die Eintragsquelle oder der erwartete Hash ist ungültig oder veraltet.',
+        'Expected a leading YAML frontmatter block.': 'Ein führender YAML-Frontmatter-Block wird erwartet.',
+        'Could not find the closing frontmatter delimiter.': 'Das schließende Frontmatter-Trennzeichen wurde nicht gefunden.',
+        'Frontmatter must be a valid top-level YAML mapping without duplicate keys.': 'Der Frontmatter muss eine gültige YAML-Zuordnung auf oberster Ebene ohne doppelte Schlüssel sein.',
+        'Updated frontmatter did not validate as YAML.': 'Der aktualisierte Frontmatter konnte nicht als YAML validiert werden.',
+        'Updated field did not round-trip through the YAML parser.': 'Das aktualisierte Feld hat den YAML-Parser nicht unverändert durchlaufen.',
+        'YAML anchors, aliases, and tags are unsupported.': 'YAML-Anker, Aliasse und Tags werden nicht unterstützt.',
+        'The content schema changed or is no longer supported; reload before editing.': 'Das Inhaltsschema hat sich geändert oder wird nicht mehr unterstützt; lade neu, bevor du bearbeitest.',
+        'The content schema changed during preview preparation.': 'Das Inhaltsschema hat sich während der Vorschauvorbereitung geändert.',
+        'The entry changed since it was loaded; reload before preparing a preview.': 'Der Eintrag hat sich seit dem Laden geändert; lade neu, bevor du eine Vorschau vorbereitest.',
+        'Content config changed during the write; reload and prepare the edit again.': 'Die Inhaltssammlungs-Konfiguration hat sich während des Schreibens geändert; lade neu und bereite die Bearbeitung erneut vor.',
+        'Content config or entry membership changed immediately before write; prepare the edit again.': 'Die Inhaltssammlungs-Konfiguration oder die Eintragszugehörigkeit hat sich unmittelbar vor dem Schreiben geändert; bereite die Bearbeitung erneut vor.',
+        'Content schema changed after preview; prepare the edit again.': 'Das Inhaltsschema hat sich nach der Vorschau geändert; bereite die Bearbeitung erneut vor.',
+        'Collection entry could not be created safely.': 'Der Sammlungseintrag konnte nicht sicher angelegt werden.',
+        'Collection edit could not be completed safely.': 'Die Sammlungsbearbeitung konnte nicht sicher abgeschlossen werden.',
+        'Schema config edit could not be completed safely.': 'Die Schema-Konfigurationsbearbeitung konnte nicht sicher abgeschlossen werden.',
+        'Collection editing is not configured.': 'Die Sammlungsbearbeitung ist nicht konfiguriert.',
+        'A previewId is required.': 'Eine Vorschau-ID ist erforderlich.',
+        'Preview belongs to a different editor session.': 'Die Vorschau gehört zu einer anderen Editor-Sitzung.',
+        'Invalid static collection creation operation.': 'Ungültige Operation zum Anlegen einer statischen Sammlung.',
+        'Invalid schema field extension operation.': 'Ungültige Operation zum Ergänzen eines Schemafelds.',
+        'Preview expired.': 'Die Vorschau ist abgelaufen.',
+        'Commit differs from preview.': 'Die Bestätigung weicht von der Vorschau ab.',
+        'Config no longer matches preview.': 'Die Konfiguration entspricht nicht mehr der Vorschau.',
+        'Config changed immediately before write.': 'Die Konfiguration hat sich unmittelbar vor dem Schreiben geändert.',
+        'Only a supported collection ID, new relative Markdown filename, scalar schema values, and config hash are accepted.': 'Akzeptiert werden nur eine unterstützte Sammlungs-ID, ein neuer relativer Markdown-Dateiname, skalare Schemawerte und ein Konfigurations-Hash.',
+        'Entry preview expired; prepare it again.': 'Die Eintragsvorschau ist abgelaufen; bereite sie erneut vor.',
+        'Entry commit differs from preview.': 'Die Eintragsbestätigung weicht von der Vorschau ab.',
+        'Entry no longer matches the confirmed preview.': 'Der Eintrag entspricht nicht mehr der bestätigten Vorschau.',
+        'Collection changed immediately before entry creation.': 'Die Sammlung hat sich unmittelbar vor dem Anlegen des Eintrags geändert.',
+        'Only a collectionId, relative entryId, field, JSON scalar value, and content hash are accepted.': 'Akzeptiert werden nur eine Sammlungs-ID, eine relative Eintrags-ID, ein Feld, ein JSON-Skalarwert und ein Inhalts-Hash.',
+        'A previewId and the unchanged collection edit operation are required.': 'Eine Vorschau-ID und die unveränderte Sammlungsbearbeitung sind erforderlich.',
+        'Preview expired; prepare the change again.': 'Die Vorschau ist abgelaufen; bereite die Änderung erneut vor.',
+        'Commit does not match the confirmed preview.': 'Die Bestätigung entspricht nicht der bestätigten Vorschau.',
+        'The entry edit no longer matches the confirmed preview.': 'Die Eintragsbearbeitung entspricht nicht mehr der bestätigten Vorschau.',
+        'Request origin or content type is not allowed.': 'Anfrage-Ursprung oder Inhaltstyp ist nicht zulässig.',
+        'Only the editor origin is allowed.': 'Nur der Ursprung des Editors ist zulässig.',
+        'Request body too large.': 'Der Anfrageinhalt ist zu groß.',
+        'Expected a JSON request body.': 'Ein JSON-Anfrageinhalt wird erwartet.',
+        'Existing-source replacement is blocked by policy; no changes were written. Export the proposal for manual application.': 'Das Ersetzen bestehender Quellen ist durch die Richtlinie gesperrt; es wurden keine Änderungen geschrieben. Exportiere den Änderungsvorschlag zur manuellen Anwendung.',
+      };
+      function germanReason(reason) {
+        if (typeof reason !== 'string' || !reason) return '';
+        if (Object.hasOwn(GERMAN_REASON_TRANSLATIONS, reason)) return GERMAN_REASON_TRANSLATIONS[reason];
+        const field = reason.match(/^Field ([^:]+): (.*)$/);
+        if (field) return `Feld ${field[1]}: ${germanReason(field[2])}`;
+        const zodMethod = reason.match(/^Unsupported Zod method \.([A-Za-z0-9_$]+)\(\)\.$/);
+        if (zodMethod) return `Nicht unterstützte Zod-Methode .${zodMethod[1]}().`;
+        const zodConstructor = reason.match(/^Unsupported Zod constructor z\.([A-Za-z0-9_$]+)\(\)\.$/);
+        if (zodConstructor) return `Nicht unterstützter Zod-Konstruktor z.${zodConstructor[1]}().`;
+        const frontmatterType = reason.match(/^Frontmatter editing for (.+) fields is (?:not supported|unsupported)\.$/);
+        if (frontmatterType) return `Das Bearbeiten von Frontmatter-Feldern vom Typ ${frontmatterType[1]} wird nicht unterstützt.`;
+        const unsupportedField = reason.match(/^Entry creation cannot set unsupported field (.+)\.$/);
+        if (unsupportedField) return `Das Anlegen des Eintrags kann das nicht unterstützte Feld ${unsupportedField[1]} nicht setzen.`;
+        const requiredOutside = reason.match(/^Required field (.+) is outside the supported scalar subset\.$/);
+        if (requiredOutside) return `Das Pflichtfeld ${requiredOutside[1]} liegt außerhalb der unterstützten skalaren Teilmenge.`;
+        const mismatchSchema = reason.match(/^Value does not match supported schema field (.+)\.$/);
+        if (mismatchSchema) return `Der Wert entspricht nicht dem unterstützten Schemafeld ${mismatchSchema[1]}.`;
+        const mismatchField = reason.match(/^Value does not match supported field (.+)\.$/);
+        if (mismatchField) return `Der Wert entspricht nicht dem unterstützten Feld ${mismatchField[1]}.`;
+        const missingField = reason.match(/^Required field (.+) is missing\.$/);
+        if (missingField) return `Das Pflichtfeld ${missingField[1]} fehlt.`;
+        const duplicateField = reason.match(/^Field (.+) must already exist exactly once\.$/);
+        if (duplicateField) return `Das Feld ${duplicateField[1]} muss bereits genau einmal existieren.`;
+        const scalarField = reason.match(/^Field (.+) is not a supported scalar value\.$/);
+        if (scalarField) return `Das Feld ${scalarField[1]} ist kein unterstützter skalarer Wert.`;
+        const configLimit = reason.match(/^Content config exceeds the (\d+)-collection discovery limit\.$/);
+        if (configLimit) return `Die Inhaltssammlungs-Konfiguration überschreitet das Erkennungslimit von ${configLimit[1]} Sammlungen.`;
+        const entryLimit = reason.match(/^Collection exceeds the (\d+)-entry discovery limit\.$/);
+        if (entryLimit) return `Die Sammlung überschreitet das Erkennungslimit von ${entryLimit[1]} Einträgen.`;
+        // Preserve an untranslated detail instead of replacing a specific failure with generic copy.
+        return `Nicht übersetzte Ursache: ${reason}`;
+      }
+      function withoutTerminalPunctuation(text) {
+        return typeof text === 'string' ? text.replace(/[.!?]+$/, '') : text;
+      }
       const siteOrigin = '__SITE_ORIGIN__';
       const siteBasePath = '__SITE_BASE_PATH__';
       let editorToken = '';
@@ -647,7 +832,7 @@
         const selectedPropEditable = Boolean(instance && Object.hasOwn(instance.props, mdxProp.value));
         const controlHost = document.querySelector('#mdx-value-control');
         const control = document.createElement(descriptor?.type === 'enum' ? 'select' : descriptor?.type === 'boolean' ? 'input' : 'input');
-        control.id = 'mdx-value'; control.className = descriptor?.type === 'enum' ? 'select select-bordered' : 'input input-bordered';
+        control.id = 'mdx-value'; control.className = descriptor?.type === 'enum' ? 'select select-bordered w-full' : 'input input-bordered w-full';
         if (descriptor?.type === 'enum') for (const item of descriptor.values || []) { const option = document.createElement('option'); option.value = item; option.textContent = item; control.append(option); }
         else if (descriptor?.type === 'boolean') control.type = 'checkbox';
         else if (descriptor?.type === 'number') { control.type = 'number'; if (descriptor.min !== undefined) control.min = descriptor.min; if (descriptor.max !== undefined) control.max = descriptor.max; if (descriptor.step !== undefined) control.step = descriptor.step; }
@@ -924,7 +1109,7 @@
          // No rollback flag: a virtual .md preview never renames or writes source.
          const response = await postOperation('/api/mdx-blocks/cancel', { targetId, previewId, hash });
          const result = await response.json();
-         if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { code: result.code, status: response.status });
+         if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { code: result.code, status: response.status });
          return result;
        }
 
@@ -1043,7 +1228,7 @@
          try {
            const response = await postOperation('/api/mdx-blocks/preview', { targetId: target.id, operations, hash });
            const result = await response.json();
-           if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { code: result.code, status: response.status });
+           if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { code: result.code, status: response.status });
             if (!result.previewId || !Array.isArray(result.diffs) || !result.diffs.length) {
               if (previous && result.nextHash === hash) {
                 await resetMdxBlockOverlay(target);
@@ -1145,7 +1330,7 @@
            hash: draft.baseHash,
          });
          const result = await response.json();
-         if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { code: result.code, status: response.status });
+         if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { code: result.code, status: response.status });
          if (!result.previewId || !Array.isArray(result.operations) || !Array.isArray(result.diffs) || !result.diffs.length ||
              result.hash !== draft.baseHash) {
            throw Object.assign(new Error('Die erneuerte Vorschau ließ sich nicht eindeutig dem Entwurf zuordnen.'), { code: 'PREVIEW_RENEWAL_INVALID', status: 409 });
@@ -1340,7 +1525,7 @@
            if (selectedMarkdownDraft !== selected || selected.stale) throw new Error('Die Auswahl ist nicht mehr aktuell.');
            const response = await postOperation('/api/markdown-drafts/preview', operation);
            const result = await response.json();
-           if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
+           if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { status: response.status, code: result.code });
            if (selectedMarkdownDraft !== selected || result.targetId !== selected.targetId || result.instanceId !== selected.instanceId ||
                result.hash !== selected.hash || !/^[a-f0-9]{64}$/.test(result.nextHash || '')) throw new Error('Die Markdown-Diff-Antwort konnte nicht eindeutig dem Entwurf zugeordnet werden.');
            if (result.diff) {
@@ -1386,6 +1571,31 @@
         return current.galleries.find((gallery) => gallery.id === id);
       }
       function galleryRevision(gallery) { return gallery?.kind === 'astro-internal-gallery' ? gallery.hash : current.hash; }
+
+      let galleryAvailabilityState = null;
+
+      function syncGalleryAvailability(announce = false) {
+        const available = current.galleries || [];
+        const nextState = available.length ? 'available' : current.configured !== false || astroGalleryState.configured ? 'unsupported' : 'empty';
+        document.querySelector('#gallery-instructions').hidden = available.length === 0;
+        if (announce && galleryAvailabilityState !== null && galleryAvailabilityState !== nextState) {
+          status(galleryLoadMessage(), available.length && current.configured !== false ? 'success' : 'info');
+        }
+        galleryAvailabilityState = nextState;
+        return available;
+      }
+
+      function galleryLoadMessage() {
+        if ((current.galleries || []).length) {
+          return current.configured === false
+            ? 'Galerie geladen. Wähle eine Galerie zum Sortieren.'
+            : 'Fixture geladen. Wähle eine Galerie zum Sortieren.';
+        }
+        const anyConfigured = current.configured !== false || Boolean(astroGalleryState.configured);
+        return anyConfigured
+          ? 'Keine unterstützte Galerie zur Bearbeitung konfiguriert.'
+          : 'Keine Galerie zur Bearbeitung konfiguriert.';
+      }
 
       function renderConfirmation() {
         confirmation.hidden = pendingPreview === null;
@@ -1463,7 +1673,7 @@
           for (const button of document.querySelectorAll('#config-editors button')) button.disabled = true;
           if (collectionConflicts.size || createEntryConflicts.size) {
             collectionsReason.hidden = false;
-            collectionsReason.textContent = 'Collections derzeit nicht verfügbar. Konflikte und lokale Entwürfe bleiben erhalten; Vorschau und Übernahme sind gesperrt.';
+            collectionsReason.textContent = 'Sammlungen derzeit nicht verfügbar. Konflikte und lokale Entwürfe bleiben erhalten; Vorschau und Übernahme sind gesperrt.';
           }
           collectionPicker.replaceChildren(); collectionEntryPicker.replaceChildren(); collectionFields.replaceChildren();
           document.querySelector('#create-entry-form').hidden = true;
@@ -1472,7 +1682,7 @@
         }
         const configReason = collectionState.reason || collectionState.configEditing?.reason || '';
         collectionsReason.hidden = !configReason;
-        collectionsReason.textContent = configReason;
+        collectionsReason.textContent = germanReason(configReason);
         const capabilities = collectionState.configEditing || {};
         const editors = document.querySelector('#config-editors');
         editors.hidden = !(capabilities.supported && (capabilities.creationSupported || capabilities.fieldExtensionSupported));
@@ -1505,8 +1715,8 @@
           chooseCollection(collection);
           if (!collection.supported || collection.mode !== 'editable') {
             const reason = document.createElement('p');
-            reason.className = 'basis-full text-xs text-warning';
-            reason.textContent = `${collection.name}: Schreibgeschützt · ${collection.reason || 'Loader oder Schema werden nicht unterstützt.'}`;
+            reason.className = 'basis-full text-xs text-base-content';
+            reason.textContent = `${collection.name}: Schreibgeschützt · ${germanReason(collection.reason) || 'Loader oder Schema werden nicht unterstützt.'}`;
             collectionPicker.append(reason);
           }
         }
@@ -1529,7 +1739,7 @@
         if (!collection.entries?.length) {
           const empty = document.createElement('p');
           empty.className = 'text-sm';
-          empty.textContent = collection.reason || 'Keine unterstützten Einträge gefunden.';
+          empty.textContent = germanReason(collection.reason) || 'Keine unterstützten Einträge gefunden.';
           collectionEntryPicker.append(empty);
           return;
         }
@@ -1544,7 +1754,7 @@
           if (!field.editable || !entry.editable) {
             const reason = document.createElement('span');
             reason.className = 'text-xs opacity-70';
-            reason.textContent = field.reason || entry.reason || collection.reason || 'Read-only';
+            reason.textContent = germanReason(field.reason || entry.reason || collection.reason) || 'Schreibgeschützt';
             wrapper.append(reason);
             collectionFields.append(wrapper);
             continue;
@@ -1552,7 +1762,7 @@
           let input;
           if (field.type === 'enum' || field.type === 'boolean') {
             input = document.createElement('select');
-            input.className = 'select select-bordered select-sm';
+            input.className = 'select select-bordered select-sm w-full';
             const placeholder = document.createElement('option');
             placeholder.value = '';
             placeholder.textContent = 'Neuen Wert auswählen';
@@ -1566,7 +1776,7 @@
             }
           } else {
             input = document.createElement('input');
-            input.className = 'input input-bordered input-sm';
+            input.className = 'input input-bordered input-sm w-full';
             input.type = field.type === 'number' ? 'number' : 'text';
             if (field.type === 'number') input.step = 'any';
             input.maxLength = 512;
@@ -1655,7 +1865,7 @@
         createEntryReason.hidden = createEntryUnavailable || !collection.creationSupported ? false : !collection.creationReason;
         createEntryReason.textContent = createEntryUnavailable
           ? 'Collection-Konfiguration derzeit nicht verfügbar. Entwürfe bleiben erhalten; Vorschau und Übernahme sind gesperrt.'
-          : collection.creationReason || '';
+          : germanReason(collection.creationReason) || '';
         document.querySelector('#create-entry-slug-label').firstChild.textContent = `Dateiname (Slug${collection.creationExtension || '.md'})`;
         createEntryFields.replaceChildren();
         const slugInput = createEntryForm.elements.slug;
@@ -1890,13 +2100,13 @@
         saving = true; render();
         try {
           const response = await postOperation(endpoint, operation); const result = await response.json();
-          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
+          if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { status: response.status, code: result.code });
           if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau erhalten.');
            configOperation = operation; pendingConfigPreview = { previewId: result.previewId, diff: result.diff, hash: result.hash, nextHash: result.nextHash }; render(); status('Quell-Diff prüfen; die Bestätigung erstellt einen revisionsgebundenen manuellen Vorschlag.', 'warning');
         } catch (error) {
           const stale = error.code !== 'SOURCE_REPLACEMENT_DISABLED' && (error.status === 409 || ['STALE_HASH', 'STALE_CONFIG'].includes(error.code));
           if (stale) { configConflict = { base: configDraft.base, latest: '' }; pendingConfigPreview = null; await pollCollections(); }
-          status(error.code === 'SOURCE_REPLACEMENT_DISABLED' ? `Schreibstatus blockiert: ${error.message}; der Entwurf bleibt erhalten.` : `Konfigurationsvorschau fehlgeschlagen: ${error.message}`, 'error');
+          status(error.code === 'SOURCE_REPLACEMENT_DISABLED' ? `Schreibstatus blockiert: ${withoutTerminalPunctuation(error.message)}; der Entwurf bleibt erhalten.` : `Konfigurationsvorschau fehlgeschlagen: ${error.message}`, 'error');
           if (error.status === 403) await load();
         }
         finally { saving = false; render(); }
@@ -1917,7 +2127,7 @@
         saving = true; render();
         try {
           const response = await postOperation(endpoint, { ...configOperation, previewId: pendingConfigPreview.previewId }); const result = await response.json();
-          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
+          if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { status: response.status, code: result.code });
           pendingConfigPreview = null; configOperation = null; configDraft = null; configConflict = null; await load(); status('Konfiguration gespeichert. Content Sync bzw. Astro-Neustart prüfen.', 'success');
         } catch (error) {
            const blockedCreateHasPath = error.code === 'SOURCE_REPLACEMENT_DISABLED' && pendingConfigPreview && configOperation?.name;
@@ -1934,7 +2144,7 @@
            if (stale) configConflict = { base: configDraft?.base || configBaseHash, latest: '' };
            if (blockedCreateHasPath) clearSourceProposal();
            status(error.code === 'SOURCE_REPLACEMENT_DISABLED'
-             ? `Schreibstatus blockiert: ${error.message}; ${blockedCreateHasPath ? 'der exakte Diff enthält einen relativen Loader-Basispfad, deshalb wird kein Änderungsvorschlag exportiert.' : 'der Entwurf bleibt erhalten.'}`
+             ? `Schreibstatus blockiert: ${withoutTerminalPunctuation(error.message)}; ${blockedCreateHasPath ? 'der exakte Diff enthält einen relativen Loader-Basispfad, deshalb wird kein Änderungsvorschlag exportiert.' : 'der Entwurf bleibt erhalten.'}`
              : `Konfiguration nicht gespeichert: ${error.message}`, error.code === 'SOURCE_REPLACEMENT_DISABLED' ? 'warning' : 'error');
            if (blockedProposal) setSourceProposal(blockedProposal);
            await pollCollections();
@@ -1948,11 +2158,11 @@
           const endpoint = configOperation?.name ? '/api/collections/config/create/cancel' : '/api/collections/config/cancel';
           const response = await postOperation(endpoint, { previewId: pendingConfigPreview.previewId });
           const result = await response.json();
-          if (!response.ok) throw new Error(result.error || `Status ${response.status}`);
+          if (!response.ok) throw new Error(germanReason(result.error) || `Status ${response.status}`);
           pendingConfigPreview = null; configOperation = null;
           status('Konfigurationsänderung abgebrochen; nichts geschrieben.');
         } catch (error) {
-          status(`Abbruch nicht bestätigt: ${error.message}. Die Vorschau bleibt offen; es wurde nichts geschrieben.`, 'warning');
+          status(`Abbruch nicht bestätigt: ${withoutTerminalPunctuation(error.message)}. Die Vorschau bleibt offen; es wurde nichts geschrieben.`, 'warning');
         } finally { saving = false; render(); }
       });
 
@@ -2181,6 +2391,7 @@
         const previousSelection = preserveMdxDraft ? { targetId: mdxTarget.value, instanceId: mdxInstance.value, prop: mdxProp.value, value: mdxValue ? (mdxValue.type === 'checkbox' ? mdxValue.checked : mdxValue.value) : undefined } : null;
         await refreshSession();
         const unavailable = [];
+        const unavailablePanels = new Set();
         const loadPanelState = async (endpoint, label, fallback) => {
           try {
             const response = await fetch(endpoint, { cache: 'no-store' });
@@ -2188,35 +2399,37 @@
             return await response.json();
           } catch (error) {
             unavailable.push(`${label} (${error.message})`);
+            unavailablePanels.add(label);
             return fallback;
           }
         };
-         current = await loadPanelState('/api/state', 'Galerie-Fixture', { galleries: [], hash: '' });
-         astroGalleryState = await loadPanelState('/api/astro-galleries', 'Astro-interne Galerien', { configured: false, targets: [] });
+          current = await loadPanelState('/api/state', 'Galerie-Fixture', { galleries: [], hash: '' });
+          astroGalleryState = await loadPanelState('/api/astro-galleries', 'Astro-interne Galerien', { configured: false, targets: [] });
          if (sourceProposal?.target.kind === 'gallery-fixture') invalidateSourceProposal('gallery-fixture', sourceProposal.target.id, current.hash || '');
          for (const target of astroGalleryState.targets || []) invalidateSourceProposal('astro-gallery', target.id, target.supported ? target.hash : '');
          current.galleries = [...(current.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astroGalleryState.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
+         syncGalleryAvailability();
         for (const [id, draft] of galleryDrafts) {
           const latest = current.galleries.find((gallery) => gallery.id === id);
           if (!latest) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: '' }); }
           else if (galleryConflicts.has(id) || galleryRevision(latest) !== draft.base) { pendingPreview = null; galleryConflicts.set(id, { ...draft, latest: galleryRevision(latest) }); }
           else latest.order = [...draft.order];
         }
-         collectionState = await loadPanelState('/api/collections', 'Collections', { configured: false, collections: [] });
+         collectionState = await loadPanelState('/api/collections', 'Sammlungen', { configured: false, collections: [] });
          if (sourceProposal?.target.kind === 'collection-config') invalidateSourceProposal('collection-config', sourceProposal.target.id, collectionState.configHash || '');
           if (sourceProposal?.target.kind === 'collection-entry') {
             const [collectionId, entryId] = JSON.parse(sourceProposalLookup.id);
             const entry = collectionState.collections?.find((item) => item.id === collectionId)?.entries?.find((item) => item.id === entryId);
             invalidateSourceProposal('collection-entry', sourceProposalLookup.id, entry?.hash || '', collectionState.configHash || '');
          }
-         reconcileCreateEntryDrafts(collectionState, unavailable.some((item) => item.startsWith('Collections (')));
+         reconcileCreateEntryDrafts(collectionState, unavailablePanels.has('Sammlungen'));
            mdxState = await loadPanelState('/api/mdx-components', 'MDX-Komponenten', { configured: false, targets: [] });
           for (const target of mdxState.targets || []) invalidateSourceProposal('mdx-target', target.id, target.supported ? target.hash || '' : '');
           for (const target of mdxState.targets || []) if (target.hash) mdxLastHashes.set(target.id, target.hash);
           const nextMdxBlockState = await loadPanelState('/api/mdx-blocks', 'MDX-Blöcke', { configured: false, targets: [] });
-          reconcileMdxBlocks(nextMdxBlockState, unavailable.some((item) => item.startsWith('MDX-Blöcke (')));
+          reconcileMdxBlocks(nextMdxBlockState, unavailablePanels.has('MDX-Blöcke'));
           const nextMarkdownDraftState = await loadPanelState('/api/markdown-drafts', 'Markdown-Entwürfe', { configured: false, targets: [] });
-         reconcileMarkdownDrafts(nextMarkdownDraftState, unavailable.some((item) => item.startsWith('Markdown-Entwürfe (')));
+         reconcileMarkdownDrafts(nextMarkdownDraftState, unavailablePanels.has('Markdown-Entwürfe'));
         if (previousSelection) {
           if (mdxState.targets.some((item) => item.id === previousSelection.targetId)) mdxTarget.value = previousSelection.targetId;
           renderMdx();
@@ -2245,7 +2458,7 @@
         void reclaimMdxBlockOverlay();
         status(unavailable.length
           ? `Teilweise geladen: ${unavailable.join(', ')}. Andere konfigurierte Bereiche bleiben verfügbar.`
-          : 'Fixture geladen. Wähle eine Galerie zum Sortieren.', unavailable.length ? 'warning' : 'success');
+          : galleryLoadMessage(), unavailable.length ? 'warning' : current.galleries.length && current.configured !== false ? 'success' : 'info');
       }
 
       function markCollectionConflict(key, draft, latest = '', blockedHash = '') {
@@ -2325,6 +2538,7 @@
            for (const target of astro.targets || []) invalidateSourceProposal('astro-gallery', target.id, target.supported ? target.hash : '');
           const next = [...(fixture.galleries || []).map((gallery) => ({ ...gallery, kind: 'fixture' })), ...(astro.targets || []).filter((target) => target.supported).map((target) => ({ id: target.id, order: target.order, hash: target.hash, kind: 'astro-internal-gallery' }))];
           current = { ...current, ...fixture, galleries: next }; astroGalleryState = astro;
+          syncGalleryAvailability(true);
           for (const [id, draft] of galleryDrafts) {
             const latest = next.find((gallery) => gallery.id === id);
             if (!latest || galleryConflicts.has(id) || galleryRevision(latest) !== draft.base) {
@@ -2373,7 +2587,7 @@
         try {
           const response = await postOperation('/api/mdx-components/preview', operation);
           const result = await response.json();
-          if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; throw error; }
+          if (!response.ok) { const error = new Error(germanReason(result.error) || `Status ${response.status}`); error.status = response.status; throw error; }
           if (mdxDraftConflicts.has(selectionKey) || selectionKey !== mdxDraftKey() || mdxState.targets.find((item) => item.id === operation.targetId)?.hash !== operation.hash) return;
           if (!result.diff || !result.previewId) { status('Der MDX-Wert ist unverändert; es wurde nichts geschrieben.'); return; }
           pendingMdxPreview = { ...operation, previewId: result.previewId, diff: result.diff, hash: result.hash, nextHash: result.nextHash };
@@ -2392,7 +2606,7 @@
         try {
           const response = await postOperation('/api/mdx-components/commit', operation);
           const result = await response.json();
-          if (!response.ok) { const error = new Error(result.error || `Status ${response.status}`); error.status = response.status; error.code = result.code; throw error; }
+          if (!response.ok) { const error = new Error(germanReason(result.error) || `Status ${response.status}`); error.status = response.status; error.code = result.code; throw error; }
           pendingMdxPreview = null;
           mdxDrafts.delete(key);
           mdxDraftConflicts.delete(key);
@@ -2412,9 +2626,9 @@
           const baseValue = baseInstance?.props?.[prop];
           mdxDraftConflicts.set(key, { selectionKey: key, baseValue, externalValue: baseValue, draftValue: value, message: replacementDisabled
             ? 'Speichern ist standardmäßig blockiert. Deine Eingabe bleibt erhalten; du kannst den basisgebundenen Vorschlag manuell herunterladen.'
-            : `Commit abgelehnt oder Quelle nicht erreichbar (${error.message}). Deine Eingabe bleibt erhalten; prüfe die Revision und wähle eine Konfliktaktion.`, unavailable: false });
+            : `Commit abgelehnt oder Quelle nicht erreichbar (${withoutTerminalPunctuation(error.message)}). Deine Eingabe bleibt erhalten; prüfe die Revision und wähle eine Konfliktaktion.`, unavailable: false });
           await pollMdxRevision();
-          status(`Nicht gespeichert: ${error.message}. Deine Eingabe bleibt erhalten.`, 'warning');
+          status(`Nicht gespeichert: ${withoutTerminalPunctuation(error.message)}. Deine Eingabe bleibt erhalten.`, 'warning');
         }
         finally { saving = false; renderMdx(); }
       }
@@ -2583,7 +2797,7 @@
             hash: confirmed.hash,
           });
           const result = await response.json();
-          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { code: result.code, status: response.status });
+          if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { code: result.code, status: response.status });
           pendingMdxBlockPreview = null;
           mdxBlockDrafts.delete(confirmed.targetId);
           await load();
@@ -2685,7 +2899,7 @@
         const retained = { targetId: mdxTarget.value, instanceId: mdxInstance.value, prop: mdxProp.value, value: mdxValue.type === 'checkbox' ? mdxValue.checked : mdxValue.value };
         saving = true; renderMdx();
         try { await load({ preserveMdxDraft: true }); }
-        catch (error) { mdxDraftConflicts.set(key, { ...conflict, unavailable: true, message: `Aktueller Quellstand konnte nicht geladen werden: ${error.message}. Eingabe bleibt erhalten.` }); saving = false; renderMdx(); return; }
+        catch (error) { mdxDraftConflicts.set(key, { ...conflict, unavailable: true, message: `Aktueller Quellstand konnte nicht geladen werden: ${withoutTerminalPunctuation(error.message)}. Eingabe bleibt erhalten.` }); saving = false; renderMdx(); return; }
         if (epoch !== mdxSelectionEpoch) { saving = false; renderMdx(); return; }
         const latestTarget = mdxState.targets.find((item) => item.id === retained.targetId);
         const latestInstance = latestTarget?.instances?.find((item) => item.id === retained.instanceId);
@@ -2726,7 +2940,7 @@
             : await postOperation('/api/preview', { hash: operation.hash, galleryId, order });
           const result = await response.json();
           if (!response.ok) {
-            const error = new Error(result.error || `Status ${response.status}`);
+            const error = new Error(germanReason(result.error) || `Status ${response.status}`);
             error.status = response.status;
             error.code = result.code;
             throw error;
@@ -2745,9 +2959,9 @@
             pendingPreview = null; galleryConflicts.set(galleryId, { ...galleryDrafts.get(galleryId), latest: '' });
           }
           if (stale || error.status === 403) try { await load(); } catch (loadError) { status(`Fixture konnte nicht neu geladen werden: ${loadError.message}`, 'error'); }
-          const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : error.message;
+          const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : withoutTerminalPunctuation(error.message);
           status(`Keine Vorschau erstellt: ${reason}.`, 'error');
-          if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${error.message}; der Galerieentwurf bleibt erhalten.`, 'warning');
+          if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${withoutTerminalPunctuation(error.message)}; der Galerieentwurf bleibt erhalten.`, 'warning');
         } finally {
           saving = false;
           render();
@@ -2791,7 +3005,7 @@
           const response = await postOperation('/api/collections/preview', operation);
           const result = await response.json();
           if (!response.ok) {
-            const error = new Error(result.error || `Status ${response.status}`);
+            const error = new Error(germanReason(result.error) || `Status ${response.status}`);
             error.status = response.status;
             error.code = result.code;
             throw error;
@@ -2809,9 +3023,9 @@
             const blockedHash = collectionUnsupportedSourceCodes.has(error.code) ? operation.hash : '';
             markCollectionConflict(draftKey, draft, blockedHash, blockedHash);
           }
-          status(`Keine Collection-Vorschau erstellt: ${error.message}.`, 'error');
+          status(`Keine Collection-Vorschau erstellt: ${withoutTerminalPunctuation(error.message)}.`, 'error');
           if (error.status === 403 || error.status === 409 || collectionSourceConflictCodes.has(error.code)) {
-            try { if (collectionSourceConflictCodes.has(error.code)) await pollCollections(); else await load(); } catch (loadError) { status(`Collections konnten nicht neu geladen werden: ${loadError.message}`, 'error'); }
+            try { if (collectionSourceConflictCodes.has(error.code)) await pollCollections(); else await load(); } catch (loadError) { status(`Sammlungen konnten nicht neu geladen werden: ${loadError.message}`, 'error'); }
           }
         } finally {
           saving = false;
@@ -2870,7 +3084,7 @@
         try {
           const response = await postOperation('/api/collections/create-entry/preview', operation);
           const result = await response.json();
-          if (!response.ok) throw Object.assign(new Error(result.error || `Status ${response.status}`), { status: response.status, code: result.code });
+          if (!response.ok) throw Object.assign(new Error(germanReason(result.error) || `Status ${response.status}`), { status: response.status, code: result.code });
           if (!result.previewId || !result.diff) throw new Error('Keine gültige Vorschau für den neuen Eintrag erhalten.');
            pendingCollectionPreview = { ...operation, kind: 'create-entry', previewId: result.previewId, diff: result.diff, nextHash: result.hash };
           render();
@@ -2909,7 +3123,7 @@
             });
           const result = await response.json();
           if (!response.ok) {
-            const error = new Error(result.error || `Status ${response.status}`);
+            const error = new Error(germanReason(result.error) || `Status ${response.status}`);
             error.status = response.status;
             error.code = result.code;
             throw error;
@@ -2953,7 +3167,7 @@
               markCollectionConflict(key, draft, blockedHash, blockedHash);
             }
           }
-          status(`Nicht gespeichert: ${error.message}. Lade den aktuellen Stand …`, 'warning');
+          status(`Nicht gespeichert: ${withoutTerminalPunctuation(error.message)}. Lade den aktuellen Stand …`, 'warning');
           if (creating || (!creating && (error.code === 'SOURCE_REPLACEMENT_DISABLED' || collectionSourceConflictCodes.has(error.code)))) await pollCollections();
           else try { await load(); } catch (loadError) { status(`Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
         } finally {
@@ -2975,7 +3189,7 @@
             : await postOperation('/api/commit', { previewId: operation.previewId, galleryId: operation.galleryId, order: operation.order, hash: operation.hash });
           const result = await response.json();
           if (!response.ok) {
-            const error = new Error(result.error || `Status ${response.status}`);
+            const error = new Error(germanReason(result.error) || `Status ${response.status}`);
             error.status = response.status;
             error.code = result.code;
             throw error;
@@ -2996,7 +3210,7 @@
           status('Gespeichert. Prüfe, ob Astro alle Galerien neu gerendert hat …');
           const readyResponse = await fetch(`/api/preview-ready?hash=${encodeURIComponent(current.hash)}`, { cache: 'no-store' });
           const ready = await readyResponse.json();
-          if (!readyResponse.ok) throw new Error(ready.error || `Status ${readyResponse.status}`);
+          if (!readyResponse.ok) throw new Error(germanReason(ready.error) || `Status ${readyResponse.status}`);
           navigatePreview(previewRoutes.has('fixture') ? 'fixture' : configuredPreviewRoutes[0].id);
           preview.src = ready.previewUrl;
           status('Gespeichert; Astro hat alle Galerien mit den aktuellen Reihenfolgen gerendert.', 'success');
@@ -3023,10 +3237,10 @@
               const draft = galleryDrafts.get(id);
               if (draft) galleryConflicts.set(id, { ...draft, latest: '' });
             }
-            const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : error.message;
+            const reason = error.status === 403 ? 'Editor-Sitzung abgelaufen' : withoutTerminalPunctuation(error.message);
             try { await load(); } catch (loadError) { status(`Nicht gespeichert: ${reason}. Neuladen fehlgeschlagen: ${loadError.message}`, 'error'); }
             if (stale) status(`Nicht gespeichert: Die Quellrevision hat sich geändert; der Galerieentwurf bleibt im Konflikt erhalten.`, 'warning');
-            if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${error.message}; der Galerieentwurf bleibt erhalten.`, 'warning');
+            if (error.code === 'SOURCE_REPLACEMENT_DISABLED') status(`Schreibstatus blockiert: ${withoutTerminalPunctuation(error.message)}; der Galerieentwurf bleibt erhalten.`, 'warning');
             else if (!stale) status(`Nicht gespeichert: ${reason}.`, 'warning');
           }
         } finally {
@@ -3052,7 +3266,7 @@
           saving = true; render();
           try {
             const response = await postOperation('/api/collections/create-entry/cancel', { previewId: operation.previewId });
-            if (!response.ok) throw new Error((await response.json()).error || `Status ${response.status}`);
+            if (!response.ok) throw new Error(germanReason((await response.json()).error) || `Status ${response.status}`);
           } catch (error) {
             status(`Vorschau-Abbruch konnte nicht bestätigt werden: ${error.message}`, 'warning');
             return;

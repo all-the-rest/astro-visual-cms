@@ -10,11 +10,11 @@ export async function startEditorServer({ configPath = process.env.AVCMS_CONFIG 
   const absoluteConfigPath = path.resolve(configPath)
   const options = JSON.parse(await readFile(absoluteConfigPath, 'utf8'))
   if (!options || typeof options !== 'object' || Array.isArray(options)) throw new TypeError('Editor config must be a JSON object.')
-  if (typeof options.fixturePath !== 'string' || !options.fixturePath) throw new TypeError('The trusted editor config must provide fixturePath.')
+  if (options.fixturePath !== null && (typeof options.fixturePath !== 'string' || !options.fixturePath)) throw new TypeError('The trusted editor config must provide fixturePath or null to disable the demo gallery.')
   const configDirectory = path.dirname(absoluteConfigPath)
   const projectRoot = options.projectRoot && path.resolve(configDirectory, options.projectRoot)
   const contentConfigPath = options.contentConfigPath && path.resolve(configDirectory, options.contentConfigPath)
-  const fixturePath = path.resolve(configDirectory, options.fixturePath)
+  const fixturePath = options.fixturePath === null ? null : path.resolve(configDirectory, options.fixturePath)
   const resolveTargets = (targets) => Array.isArray(targets) ? targets.map((target) => {
     if (!target || typeof target !== 'object' || Array.isArray(target)) return target
     const root = path.resolve(configDirectory, target.projectRoot ?? projectRoot ?? '.')

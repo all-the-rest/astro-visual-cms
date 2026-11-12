@@ -100,6 +100,13 @@ export function isLoopbackAddress(address = '') {
   return Boolean(mappedIpv4 && Number(mappedIpv4[1]) === 127 && mappedIpv4.slice(1).every((octet) => Number(octet) <= 255))
 }
 
+function fixtureDisabled(response) {
+  return json(response, 422, {
+    code: 'FIXTURE_DISABLED',
+    error: 'The demo gallery fixture is explicitly disabled by configuration.',
+  })
+}
+
 function hasEditorToken(candidate, token) {
   const expected = Buffer.from(token, 'utf8')
   const supplied = Buffer.from(typeof candidate === 'string' ? candidate : '', 'utf8')
@@ -687,6 +694,7 @@ export function createEditorServer({
     }
 
     if (request.method === 'GET' && request.url === '/api/state') {
+      if (fixturePath === null) return json(response, 200, { configured: false, galleries: [], hash: '' })
       try {
         const source = readFileSync(fixturePath, 'utf8')
         return json(response, 200, inspectDemoFixture(source))
@@ -1145,6 +1153,7 @@ export function createEditorServer({
             [...url.searchParams.keys()].some((key) => key !== 'hash') || !hash || !/^[a-f0-9]{64}$/.test(hash)) {
           return json(response, 400, { code: 'INVALID_HASH', error: 'Expected a SHA-256 fixture hash.' })
         }
+        if (fixturePath === null) return fixtureDisabled(response)
         const result = await waitForRenderedOrder({ hash, siteOrigin, fixturePath, basePath: safeBasePath })
         return json(response, result.statusCode, result.payload)
       } catch (error) {
@@ -1305,6 +1314,7 @@ export function createEditorServer({
       if (!validEditorPost(request)) {
         return json(response, 403, { error: 'Request origin or content type is not allowed.' })
       }
+      if (fixturePath === null) return fixtureDisabled(response)
 
       try {
         const payload = await readJson(request)

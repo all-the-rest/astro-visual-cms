@@ -52,7 +52,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   await expect(page.locator('#preview')).toHaveAttribute('title', 'Collection proof-Vorschau')
   await expect(page.frameLocator('#preview').locator('[data-entry-title]')).toHaveText('Synthetic collection entry')
   await expect(page.locator('#collections-panel')).toBeVisible()
-  await expect(page.getByRole('group', { name: 'Collection auswählen' }).getByRole('button', { name: 'notes' })).toBeEnabled()
+  await expect(page.getByRole('group', { name: 'Sammlung auswählen' }).getByRole('button', { name: 'notes' })).toBeEnabled()
   await expect(page.getByRole('group', { name: 'Eintrag auswählen' }).getByRole('button', { name: 'nested/entry.mdx' })).toBeEnabled()
   const titleInput = () => page.locator('#collection-fields label').filter({ hasText: 'title (string)' }).locator('input')
   const baseline = catalog.collections[0].entries[0].hash as string
@@ -87,7 +87,11 @@ test('collection field edits produce revision-bound manual proposals in an isola
   await page.keyboard.press('Enter')
   await expect(page.locator('#collection-diff-after')).toContainText('First local title')
   await page.locator('#confirm-collection-change').click()
-  await expect(page.locator('#status')).toContainText('Nicht gespeichert')
+  const blockedFieldStatus = page.locator('#status')
+  await expect(blockedFieldStatus).toHaveText('Nicht gespeichert: Das Ersetzen bestehender Quellen ist durch die Richtlinie gesperrt; es wurden keine Änderungen geschrieben. Exportiere den Änderungsvorschlag zur manuellen Anwendung. Lade den aktuellen Stand …')
+  await expect(blockedFieldStatus).not.toContainText('Existing-source')
+  await expect(blockedFieldStatus).not.toContainText('Nicht übersetzte Ursache')
+  await expect(blockedFieldStatus).not.toContainText('..')
   await expect(page.locator('#source-proposal-panel')).toBeVisible()
   let afterFirst = await readFile(receipt.contentFile, 'utf8')
   expect(afterFirst).toBe(beforeExternalPreview.replace('rank: 8', 'rank: 9'))
@@ -327,7 +331,14 @@ test('collection field edits produce revision-bound manual proposals in an isola
     await expect(page.locator('#config-confirmation')).toBeVisible()
     await expect(page.locator('#config-diff')).toContainText(expectedLocalText)
     await configCommit.click()
-    await expect(page.locator('#status')).toContainText('Schreibstatus blockiert')
+    const blockedConfigStatus = page.locator('#status')
+    const blockedSuffix = action === 'create-collection'
+      ? 'der exakte Diff enthält einen relativen Loader-Basispfad, deshalb wird kein Änderungsvorschlag exportiert.'
+      : 'der Entwurf bleibt erhalten.'
+    await expect(blockedConfigStatus).toHaveText(`Schreibstatus blockiert: Das Ersetzen bestehender Quellen ist durch die Richtlinie gesperrt; es wurden keine Änderungen geschrieben. Exportiere den Änderungsvorschlag zur manuellen Anwendung; ${blockedSuffix}`)
+    await expect(blockedConfigStatus).not.toContainText('Existing-source')
+    await expect(blockedConfigStatus).not.toContainText('Nicht übersetzte Ursache')
+    await expect(blockedConfigStatus).not.toContainText('..')
     await expect(configConflict).toBeHidden()
     const currentConfig = await readFile(receipt.configFile, 'utf8')
     expect(currentConfig).toBe(externalAfterPreview)
