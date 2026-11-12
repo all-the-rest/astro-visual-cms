@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 
 const approvedLicenses = new Set(['MIT', 'ISC', 'BSD-3-Clause'])
 export const runtimeLicenseCommand = Object.freeze([
-  '--filter', '@astro-visual-cms/editor', 'licenses', 'list', '--prod', '--json',
+  '--filter', '@all-the.rest/astro-visual-cms', 'licenses', 'list', '--prod', '--json',
 ])
 
 export function summarizeRuntimeLicenses(report) {

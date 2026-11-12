@@ -1,8 +1,8 @@
 # Astro Visual CMS – lokaler, begrenzt schreibender Astro-Editor
 
-Das Repository enthält das installierbare Paket `@astro-visual-cms/editor` sowie eine synthetische Demo-/Testanwendung. Das Paket startet einen loopback-only Editor und eine Astro-Dev-Integration; Vorschläge bleiben auf explizit konfigurierte, getestete Adapter beschränkt. Bestehende Quelldateien werden nicht automatisch ersetzt: die Bestätigung exportiert einen pfadfreien, revisionsgebundenen manuellen Vorschlag. Nur die exklusive Neuanlage eines Collection-Eintrags schreibt eine neue Datei. Es ist kein allgemeiner visueller MDX-Editor und kein Produktions-CMS.
+Das Repository enthält das installierbare Paket `@all-the.rest/astro-visual-cms` sowie eine synthetische Demo-/Testanwendung. Das Paket startet einen loopback-only Editor und eine Astro-Dev-Integration; Vorschläge bleiben auf explizit konfigurierte, getestete Adapter beschränkt. Bestehende Quelldateien werden nicht automatisch ersetzt: die Bestätigung exportiert einen pfadfreien, revisionsgebundenen manuellen Vorschlag. Nur die exklusive Neuanlage eines Collection-Eintrags schreibt eine neue Datei. Es ist kein allgemeiner visueller MDX-Editor und kein Produktions-CMS.
 
-Für Paketinstallation, Astro-Konfiguration, vertrauenswürdige Serveroptionen, Supportgrenzen und nachgewiesene Projektkopien siehe [Editor-Paket](docs/editor-package.md). Ein reproduzierbarer Tarball-Installationsgate ist `pnpm run pack:smoke`.
+Für Paketinstallation, Astro-Konfiguration, vertrauenswürdige Serveroptionen, Supportgrenzen und nachgewiesene Projektkopien siehe [Editor-Paket](docs/editor-package.md). Der Release- und Trusted-Publishing-Ablauf steht in [Releasing](docs/releasing.md). Ein reproduzierbarer Tarball-Installationsgate ist `pnpm run pack:smoke`.
 
 ## Repository-Fixture starten
 
@@ -28,6 +28,7 @@ pnpm dev
 pnpm test             # Unit-, Compile-, JPEG- und HTTP-E2E-Tests
 pnpm run test:e2e     # HTTP-E2E-Test allein
 pnpm run browser-tests # echte Chromium-Browsertests für den Galerie-Editor
+pnpm run ui-review:screenshots # getrennte Desktop-/Mobile-Aufnahmen für den visuellen Review
 pnpm run verify       # Tests, Sharp/Astro-Static-Build, Editor-CSS-Aktualität und bestehender Astro-Build
 ```
 

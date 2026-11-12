@@ -15,6 +15,11 @@ real `astro dev` request to the prefixed route and optimized image endpoint.
 Development HTML and the generated page-script module must expose the injected
 bridge. Production HTML is checked for the expected rendered markers and optimized
 asset; every file under `dist/` is scanned for bridge or toolbar markers.
+Every checkpoint also resolves the installed Astro's Markdown-page runtime
+surface (`maybeRenderHead` and `spreadAttributes` from
+`astro/runtime/server/index.js`) and the `__ASTRO_IMAGE_="..."` placeholder its
+image pipeline emits, because the layout-less `.md` block preview binds to those
+internals.
 
 Astro 7.2.4 exercises the component from an `.astro` page and deliberately does
 not install MDX. For 7.2.10, 7.3.8, and 7.4.7, the same component is additionally

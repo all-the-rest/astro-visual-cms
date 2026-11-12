@@ -20,6 +20,7 @@ export default defineConfig({
   root: PROJECT_ROOT,
   base: astroBaseConfigValue(BASE_PATH),
   integrations: [mdx(), createLoopbackDevIntegration({
+    mdxBlockTargets: SAMPLE_EDITOR.mdxBlockTargets,
     markdownDraftTargets: SAMPLE_EDITOR.markdownDraftTargets,
     previewRoutes: SAMPLE_EDITOR.previewRoutes.map(({ id, path, label }) => ({ id, path, label })),
   })],

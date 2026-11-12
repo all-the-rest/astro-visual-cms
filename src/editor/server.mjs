@@ -10,9 +10,12 @@ import { patchFrontmatterField } from './collection-discovery.mjs'
 import { createCollectionRuntime, publicCollectionState } from './collection-runtime.mjs'
 import { createSourceExclusively, writeSourceAtomically } from './source-write.mjs'
 import { createMdxPropsAdapter } from '../lib/mdx-props-patch.mjs'
+import { createMdxBlocksAdapter } from '../lib/mdx-blocks.mjs'
 import { createMarkdownParagraphAdapter, mapConfiguredMarkdownDraft, patchConfiguredMarkdownDraft } from '../lib/markdown-paragraph-map.mjs'
 import { lstatSync, realpathSync } from 'node:fs'
 import { createAstroGalleryAdapter } from '../lib/astro-gallery-patch.mjs'
+import { compile } from '@mdx-js/mdx'
+import { assertMarkdownPreviewSource } from './markdown-preview.mjs'
 
 const PROJECT_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 const FIXTURE_PATH = path.join(PROJECT_ROOT, 'src/pages/fixture.mdx')
@@ -22,10 +25,19 @@ const UI_CSS_PATH = fileURLToPath(new URL('./editor.generated.css', import.meta.
 const MAX_BODY_BYTES = 8 * 1024
 const PREVIEW_SYNC_TIMEOUT_MS = 4_000
 const PREVIEW_POLL_INTERVAL_MS = 100
-const PREVIEW_TTL_MS = 5 * 60_000
+// A pending preview permits exactly one commit. It must not expire before the
+// acknowledged Astro overlay it describes: the overlay lives 15 minutes from the
+// acknowledgement (PREVIEW_OVERLAY_LIFETIME_MS in mdx-block-preview.mjs), while
+// this timer starts at preview creation, before the render. The extra minute of
+// slack keeps the confirmable window covering the overlay even for a slow render.
+// The editor also re-previews an expired confirmation instead of leaving an
+// unconfirmable draft behind.
+export const PREVIEW_TTL_MS = 16 * 60_000
 const EDITOR_SESSION_TTL_MS = 8 * 60 * 60_000
 const MAX_PENDING_PREVIEWS = 32
 const MAX_MDX_COMPONENT_TARGETS = 16
+const MAX_MDX_BLOCK_TARGETS = 8
+const MAX_MDX_BLOCK_INSTANCES = 128
 const MAX_MARKDOWN_DRAFT_TARGETS = 8
 const MAX_MDX_SOURCE_BYTES = 1024 * 1024
 const MAX_MDX_COMPONENT_INSTANCES = 500
@@ -243,14 +255,19 @@ export function createEditorServer({
   projectRoot,
   contentConfigPath,
   mdxComponentTargets,
+  mdxBlockTargets,
   mdxParagraphTargets,
   markdownDraftTargets = [],
   astroGalleryTargets = [],
   previewRoutes = DEFAULT_PREVIEW_ROUTES,
   safeSourceReplacementMode,
+  previewTtlMs = PREVIEW_TTL_MS,
 } = {}) {
   if (process.env.NODE_ENV === 'production') {
     throw new Error('The fixture write API is development-only and cannot run with NODE_ENV=production.')
+  }
+  if (!Number.isInteger(previewTtlMs) || previewTtlMs < 1 || previewTtlMs > 24 * 60 * 60_000) {
+    throw new TypeError('previewTtlMs must be a bounded positive integer.')
   }
   const siteOrigin = `http://127.0.0.1:${sitePort}`
   const safeBasePath = normalizeAstroBasePath(basePath)
@@ -293,6 +310,34 @@ export function createEditorServer({
     })
     if (new Set(targets.map((target) => target.id)).size !== targets.length) throw new TypeError('MDX target ids must be unique.')
     return targets
+  })()
+  const blockTargets = mdxBlockTargets === undefined ? [] : (() => {
+    if (!Array.isArray(mdxBlockTargets) || mdxBlockTargets.length > MAX_MDX_BLOCK_TARGETS) {
+      throw new TypeError(`mdxBlockTargets must contain at most ${MAX_MDX_BLOCK_TARGETS} trusted targets.`)
+    }
+    return mdxBlockTargets.map((target, index) => {
+      const keys = ['id', 'projectRoot', 'filePath', 'previewRouteId', 'blockTypes']
+      if (!target || typeof target !== 'object' || Array.isArray(target) || Object.keys(target).some((key) => !keys.includes(key)) ||
+          !keys.every((key) => Object.hasOwn(target, key)) ||
+          typeof target.id !== 'string' || !/^[A-Za-z_$][\w$-]{0,63}$/.test(target.id) ||
+          typeof target.projectRoot !== 'string' || !path.isAbsolute(target.projectRoot) ||
+          typeof target.filePath !== 'string' || !path.isAbsolute(target.filePath) || !['.md', '.mdx'].includes(path.extname(target.filePath)) ||
+          typeof target.previewRouteId !== 'string' || !/^[A-Za-z_$][\w$-]{0,63}$/.test(target.previewRouteId) ||
+          !trustedPreviewRoutes.some((route) => route.id === target.previewRouteId)) {
+        throw new TypeError(`Invalid trusted MDX block target at index ${index}.`)
+      }
+      const root = path.resolve(target.projectRoot)
+      const requestedFile = path.resolve(target.filePath)
+      const relative = path.relative(root, requestedFile)
+      if (realpathSync(root) !== root || !lstatSync(root).isDirectory() || relative.startsWith('..') || path.isAbsolute(relative)) {
+        throw new TypeError('MDX block target must be inside a canonical project root.')
+      }
+      const file = requestedFile
+      assertMdxTargetSafe(root, file)
+      const format = path.extname(file) === '.md' ? 'md' : 'mdx'
+      const adapter = createMdxBlocksAdapter({ blockTypes: target.blockTypes, format })
+      return { id: target.id, root, file, previewRouteId: target.previewRouteId, adapter, format, kind: 'mdx-blocks' }
+    })
   })()
   const paragraphTargets = mdxParagraphTargets === undefined ? [] : (() => {
     if (!Array.isArray(mdxParagraphTargets) || mdxParagraphTargets.length > MAX_MDX_COMPONENT_TARGETS) {
@@ -364,7 +409,7 @@ export function createEditorServer({
     return { id: target.id, root, file, adapter }
   })
   if (new Set(astroTargets.map((t) => t.id)).size !== astroTargets.length ||
-      new Set([...mdxTargets, ...astroTargets].map((t) => t.id)).size !== mdxTargets.length + astroTargets.length) {
+      new Set([...mdxTargets, ...astroTargets, ...blockTargets].map((t) => t.id)).size !== mdxTargets.length + astroTargets.length + blockTargets.length) {
     throw new TypeError('Configured target ids must be unique.')
   }
   function readAstroTarget(target) {
@@ -490,7 +535,7 @@ export function createEditorServer({
   }
 
   function safeMdxFailure(error) {
-    const code = typeof error?.code === 'string' && /^(STALE_HASH|SOURCE_REPLACEMENT_DISABLED|UNSUPPORTED_[A-Z_]+|INVALID_[A-Z_]+|UNSAFE_MDX_PATH|MDX_(SOURCE|INSTANCE)_LIMIT)$/.test(error.code)
+  const code = typeof error?.code === 'string' && /^(STALE_HASH|SOURCE_REPLACEMENT_DISABLED|UNSUPPORTED_[A-Z_]+|INVALID_[A-Z_]+|UNSAFE_MDX_PATH|MDX_(SOURCE|INSTANCE)_LIMIT|PREVIEW_(EXPIRED|MISMATCH|LIMIT))$/.test(error.code)
       ? error.code
       : 'MDX_EDIT_FAILED'
     const message = code === 'UNSAFE_MDX_PATH'
@@ -697,7 +742,7 @@ export function createEditorServer({
           const prepare = () => collectionRuntime.planCreation(operation)
           if (route === 'preview') {
             const result = prepare(); prunePreviews(); const id = previewId()
-            pendingConfigPreviews.set(id, { operation, diff: result.diff, hash: result.hash, sessionToken, expiresAt: Date.now() + PREVIEW_TTL_MS })
+            pendingConfigPreviews.set(id, { operation, diff: result.diff, hash: result.hash, sessionToken, expiresAt: Date.now() + previewTtlMs })
             return json(response, 200, { previewId: id, hash: operation.hash, nextHash: result.hash, diff: result.diff })
           }
           prunePreviews()
@@ -731,7 +776,7 @@ export function createEditorServer({
           const result = prepare()
           prunePreviews()
           const id = previewId()
-          pendingConfigPreviews.set(id, { operation, diff: result.diff, hash: result.hash, sessionToken, expiresAt: Date.now() + PREVIEW_TTL_MS })
+          pendingConfigPreviews.set(id, { operation, diff: result.diff, hash: result.hash, sessionToken, expiresAt: Date.now() + previewTtlMs })
           return json(response, 200, { previewId: id, hash: operation.hash, nextHash: result.hash, diff: result.diff })
         }
         prunePreviews()
@@ -778,7 +823,7 @@ export function createEditorServer({
         if (!target) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Unknown configured target.' })
         const operation = { targetId: target.id, order: payload.order, hash: payload.hash }
         const prepare = () => { const result = target.adapter.patch(readAstroTarget(target), payload.order, payload.hash); return result }
-        if (previewing) { const result = prepare(); if (!result.diff) return json(response, 200, { diff: null, hash: result.hash }); prunePreviews(); const id = previewId(); pendingMdxPreviews.set(id, { kind: 'astro-gallery', operation, diff: result.diff, nextHash: result.hash, sessionToken: request.headers['x-editor-token'], expiresAt: Date.now() + PREVIEW_TTL_MS }); return json(response, 200, { previewId: id, diff: result.diff, hash: payload.hash, nextHash: result.hash }) }
+        if (previewing) { const result = prepare(); if (!result.diff) return json(response, 200, { diff: null, hash: result.hash }); prunePreviews(); const id = previewId(); pendingMdxPreviews.set(id, { kind: 'astro-gallery', operation, diff: result.diff, nextHash: result.hash, sessionToken: request.headers['x-editor-token'], expiresAt: Date.now() + previewTtlMs }); return json(response, 200, { previewId: id, diff: result.diff, hash: payload.hash, nextHash: result.hash }) }
         prunePreviews(); const pending = pendingMdxPreviews.get(payload.previewId)
         if (!pending || pending.kind !== 'astro-gallery' || pending.expiresAt <= Date.now()) return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Preview expired.' })
         if (pending.sessionToken !== request.headers['x-editor-token']) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Preview belongs to another session.' })
@@ -853,6 +898,170 @@ export function createEditorServer({
       }
     }
 
+    if (request.method === 'GET' && request.url === '/api/mdx-blocks') {
+      if (request.headers.origin && request.headers.origin !== editorOrigin()) return json(response, 403, { error: 'Only the editor origin is allowed.' })
+      const targets = []
+      for (const target of blockTargets) {
+        try {
+          const state = target.adapter.inspect(readMdxTargetSource(target))
+          if (state.blocks.length > MAX_MDX_BLOCK_INSTANCES) {
+            const error = new Error('Configured MDX block target exceeds the safe block limit.')
+            error.code = 'MDX_INSTANCE_LIMIT'
+            throw error
+          }
+          targets.push({ id: target.id, kind: 'mdx-blocks', previewRouteId: target.previewRouteId, sourceFormat: path.extname(target.file).slice(1), supported: true, hash: state.hash, types: state.types, blocks: state.blocks })
+        } catch (error) {
+          const failure = safeMdxFailure(error)
+          targets.push({ id: target.id, kind: 'mdx-blocks', previewRouteId: target.previewRouteId, sourceFormat: path.extname(target.file).slice(1), supported: false, error: failure.error, code: failure.code })
+        }
+      }
+      return json(response, 200, { configured: blockTargets.length > 0, targets })
+    }
+
+    if (request.method === 'POST' && request.url === '/api/mdx-blocks/cancel') {
+      if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      try {
+        const payload = await readJson(request)
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) ||
+            !['hash,previewId,targetId', 'hash,previewId,rollbackConversion,targetId'].includes(Object.keys(payload).sort().join(',')) ||
+            typeof payload.targetId !== 'string' || !/^[A-Za-z_$][\w$-]{0,63}$/.test(payload.targetId) ||
+            typeof payload.previewId !== 'string' || !/^[a-f0-9]{64}$/.test(payload.previewId) ||
+            typeof payload.hash !== 'string' || !/^[a-f0-9]{64}$/.test(payload.hash) ||
+            (Object.hasOwn(payload, 'rollbackConversion') && typeof payload.rollbackConversion !== 'boolean')) {
+          return json(response, 422, { code: 'INVALID_REQUEST', error: 'Invalid MDX block preview cancellation.' })
+        }
+        const target = blockTargets.find((item) => item.id === payload.targetId)
+        const pending = pendingMdxPreviews.get(payload.previewId)
+        if (!target || !pending || pending.kind !== 'mdx-blocks' || pending.targetId !== target.id || pending.expiresAt <= Date.now()) {
+          return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Block preview is no longer available to cancel.' })
+        }
+        if (pending.sessionToken !== request.headers['x-editor-token'] || pending.baseHash !== payload.hash) {
+          return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Block preview cancellation does not match its session and base revision.' })
+        }
+        pendingMdxPreviews.delete(payload.previewId)
+        // rollbackConversion is an obsolete pre-virtual-preview field: newer
+        // clients may omit it entirely and older ones still send it. Either way
+        // it is a deliberate no-op, because the .md source path and bytes never
+        // change during preview.
+        return json(response, 200, { targetId: target.id, cancelled: true, restoredMarkdown: false, virtualPreview: true })
+      } catch (error) {
+        const failure = safeMdxFailure(error)
+        return json(response, ['STALE_HASH', 'PREVIEW_EXPIRED', 'PREVIEW_MISMATCH'].includes(failure.code) ? 409 : 422, failure)
+      }
+    }
+
+    if (request.method === 'POST' && (request.url === '/api/mdx-blocks/preview' || request.url === '/api/mdx-blocks/commit')) {
+      if (!validEditorPost(request)) return json(response, 403, { error: 'Request origin or content type is not allowed.' })
+      if (!blockTargets.length) return json(response, 404, { error: 'MDX block editing is not configured.' })
+      try {
+        const payload = await readJson(request)
+        const previewing = request.url.endsWith('/preview')
+        const expected = previewing ? ['targetId', 'operations', 'hash'] : ['previewId', 'targetId', 'operations', 'hash']
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).length !== expected.length ||
+            Object.keys(payload).some((key) => !expected.includes(key)) || typeof payload.targetId !== 'string' || payload.targetId.length > 64 ||
+            !Array.isArray(payload.operations) || payload.operations.length < 1 || payload.operations.length > 32 ||
+            typeof payload.hash !== 'string' || !/^[a-f0-9]{64}$/.test(payload.hash) ||
+            (!previewing && (typeof payload.previewId !== 'string' || !/^[a-f0-9]{64}$/.test(payload.previewId)))) {
+          return json(response, 422, { code: 'INVALID_REQUEST', error: 'Invalid MDX block operation list.' })
+        }
+        const target = blockTargets.find((item) => item.id === payload.targetId)
+        if (!target) return json(response, 422, { code: 'INVALID_REQUEST', error: 'Unknown configured MDX block target.' })
+        const normalizeOperations = (operations, generateIds) => operations.map((operation) => {
+          if (!operation || typeof operation !== 'object' || Array.isArray(operation)) throw Object.assign(new Error('Invalid block operation.'), { code: 'INVALID_OPERATION' })
+          if (operation.action !== 'add') return operation
+          const keys = Object.keys(operation)
+          if (keys.some((key) => !['action', 'blockType', 'values', 'blockId'].includes(key)) ||
+              !['action', 'blockType', 'values'].every((key) => Object.hasOwn(operation, key))) {
+            throw Object.assign(new Error('Invalid block-add operation.'), { code: 'INVALID_OPERATION' })
+          }
+          const blockId = operation.blockId === undefined && generateIds ? `block-${randomBytes(12).toString('hex')}` : operation.blockId
+          if (typeof blockId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(blockId)) throw Object.assign(new Error('Invalid block identity.'), { code: 'INVALID_BLOCK_ID' })
+          return { ...operation, blockId }
+        })
+        const prepare = async (operations, generateIds = false) => {
+          let source = readMdxTargetSource(target)
+          if (hashSource(source) !== payload.hash) throw Object.assign(new Error('The source changed since this block draft was loaded.'), { code: 'STALE_HASH' })
+          let revision = payload.hash
+          const normalizedOperations = normalizeOperations(operations, generateIds)
+          const diffs = []
+          let state = target.adapter.inspect(source)
+          for (const operation of normalizedOperations) {
+            const generatedId = operation.action === 'add' ? operation.blockId : undefined
+            const cleanOperation = operation.action === 'add'
+              ? Object.fromEntries(Object.entries(operation).filter(([key]) => key !== 'blockId'))
+              : operation
+            const result = target.adapter.patch(source, cleanOperation, revision, generatedId)
+            if (Buffer.byteLength(result.source, 'utf8') > MAX_MDX_SOURCE_BYTES) {
+              throw Object.assign(new Error('Proposed MDX source exceeds the safe source-size limit.'), { code: 'MDX_SOURCE_LIMIT' })
+            }
+            if (result.diff) diffs.push({ operation, hash: revision, nextHash: result.nextHash, diff: result.diff })
+            source = result.source
+            revision = result.nextHash
+            state = { blocks: result.blocks, types: result.types }
+            if (state.blocks.length > MAX_MDX_BLOCK_INSTANCES) {
+              throw Object.assign(new Error('Configured MDX block target exceeds the safe block limit.'), { code: 'MDX_INSTANCE_LIMIT' })
+            }
+          }
+          if (target.format === 'md') {
+            // `.md` is ordinary Markdown in Astro. Validate only the trusted
+            // block zone and frontmatter here; the dev overlay renders the body
+            // with the project's Markdown renderer, never as MDX.
+            assertMarkdownPreviewSource(source, { adapter: target.adapter })
+          } else {
+            await compile(source)
+          }
+          return { source, normalizedOperations, diffs, nextHash: revision, state }
+        }
+
+        if (previewing) {
+          const prepared = await prepare(payload.operations, true)
+          if (!prepared.diffs.length || prepared.nextHash === payload.hash) return json(response, 200, { previewId: null, diff: null, diffs: [], hash: payload.hash, nextHash: prepared.nextHash, blocks: prepared.state.blocks, types: prepared.state.types, operations: prepared.normalizedOperations })
+          prunePreviews()
+          const id = previewId()
+          pendingMdxPreviews.set(id, {
+            kind: 'mdx-blocks',
+            targetId: target.id,
+            operations: prepared.normalizedOperations,
+            diffs: prepared.diffs,
+            nextHash: prepared.nextHash,
+            baseHash: payload.hash,
+            sessionToken: request.headers['x-editor-token'],
+            expiresAt: Date.now() + previewTtlMs,
+          })
+          return json(response, 200, {
+            previewId: id,
+            hash: payload.hash,
+            nextHash: prepared.nextHash,
+            diff: prepared.diffs.at(-1)?.diff || null,
+            diffs: prepared.diffs,
+            blocks: prepared.state.blocks,
+            types: prepared.state.types,
+            operations: prepared.normalizedOperations,
+            virtualPreview: path.extname(target.file) === '.md',
+            sourceFormat: target.format,
+            previewRouteId: target.previewRouteId,
+          })
+        }
+
+        prunePreviews()
+        const pending = pendingMdxPreviews.get(payload.previewId)
+        if (!pending || pending.kind !== 'mdx-blocks' || pending.targetId !== target.id || pending.expiresAt <= Date.now()) return json(response, 409, { code: 'PREVIEW_EXPIRED', error: 'Block preview expired.' })
+        if (pending.sessionToken !== request.headers['x-editor-token']) return json(response, 409, { code: 'PREVIEW_SESSION_MISMATCH', error: 'Block preview belongs to another editor session.' })
+        pendingMdxPreviews.delete(payload.previewId)
+        if (JSON.stringify(payload.operations) !== JSON.stringify(pending.operations)) return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Block operations differ from the preview.' })
+        const prepared = await prepare(pending.operations)
+        if (!prepared.diffs.length || prepared.nextHash !== pending.nextHash || JSON.stringify(prepared.diffs) !== JSON.stringify(pending.diffs)) {
+          return json(response, 409, { code: 'PREVIEW_MISMATCH', error: 'Source no longer matches the block preview.' })
+        }
+        assertMdxTargetSafe(target.root, target.file)
+        await commitSource(target.file, payload.hash, prepared.source)
+        return json(response, 200, { targetId: target.id, hash: prepared.nextHash })
+      } catch (error) {
+        const failure = safeMdxFailure(error)
+        return json(response, ['STALE_HASH', 'SOURCE_REPLACEMENT_DISABLED'].includes(failure.code) ? 409 : 422, failure)
+      }
+    }
+
     if (request.method === 'GET' && request.url === '/api/mdx-components') {
       if (request.headers.origin && request.headers.origin !== editorOrigin()) return json(response, 403, { error: 'Only the editor origin is allowed.' })
       const targets = []
@@ -907,7 +1116,7 @@ export function createEditorServer({
           if (!result.diff) return json(response, 200, { previewId: null, diff: null, hash: result.hash })
           prunePreviews(); const id = previewId()
           const operation = { targetId: payload.targetId, instanceId: payload.instanceId, prop: payload.prop, value: payload.value, hash: payload.hash }
-          pendingMdxPreviews.set(id, { operation, diff: result.diff, nextHash: result.hash, sessionToken: request.headers['x-editor-token'], expiresAt: Date.now() + PREVIEW_TTL_MS })
+          pendingMdxPreviews.set(id, { operation, diff: result.diff, nextHash: result.hash, sessionToken: request.headers['x-editor-token'], expiresAt: Date.now() + previewTtlMs })
           return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, diff: result.diff })
         }
         prunePreviews()
@@ -965,7 +1174,7 @@ export function createEditorServer({
           const result = prepare()
           prunePreviews()
           const id = previewId()
-          pendingPreviews.set(id, { kind: 'collection-create-entry', operation, diff: result.diff, hash: result.hash, configHash: result.configHash, sessionToken, expiresAt: Date.now() + PREVIEW_TTL_MS })
+          pendingPreviews.set(id, { kind: 'collection-create-entry', operation, diff: result.diff, hash: result.hash, configHash: result.configHash, sessionToken, expiresAt: Date.now() + previewTtlMs })
           return json(response, 200, { previewId: id, hash: result.hash, diff: result.diff, entryId: result.entryId })
         }
         prunePreviews()
@@ -1036,7 +1245,7 @@ export function createEditorServer({
             nextHash: result.hash,
             configHash: target.configHash,
             sessionToken: request.headers['x-editor-token'],
-            expiresAt: Date.now() + PREVIEW_TTL_MS,
+            expiresAt: Date.now() + previewTtlMs,
           })
           return json(response, 200, { previewId: id, hash: payload.hash, nextHash: result.hash, contextHash: target.configHash, diff: result.diff })
         }
@@ -1132,7 +1341,7 @@ export function createEditorServer({
             diff: result.diff,
             nextHash: result.hash,
             sessionToken: request.headers['x-editor-token'],
-            expiresAt: Date.now() + PREVIEW_TTL_MS,
+            expiresAt: Date.now() + previewTtlMs,
           })
           return json(response, 200, {
             previewId: id,

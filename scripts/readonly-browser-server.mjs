@@ -16,9 +16,12 @@ const files = new Set((await new Promise((resolve, reject) => {
   const child = spawn('git', ['ls-files', '-z'], { cwd: repo }); let out = ''
   child.stdout.on('data', (chunk) => out += chunk); child.once('error', reject); child.once('exit', (code) => code ? reject(new Error('git ls-files failed')) : resolve(out))
 })).split('\0').filter(Boolean))
-// This harness must also copy a newly added dev-only bridge dependency before its first commit.
+// This harness must also copy newly added dev-only bridge dependencies and
+// their synthetic fixture pages before their first commit.
 files.add('src/lib/markdown-paragraph-map.mjs')
 files.add('src/editor/sample-dev-config.mjs')
+files.add('src/editor/markdown-preview.mjs')
+files.add('src/pages/block-editor-markdown-fixture.md')
 const root = await mkdtemp(path.join(tmpdir(), 'avcms-readonly-'))
 const receipt = path.join(repo, 'test-results', 'readonly-copy-path')
 const collectionReceipt = path.join(repo, 'test-results', 'readonly-collection-copy-path')

@@ -35,12 +35,12 @@ function assertProductionEditorIsolation() {
   visit(distRoot)
 
   const routeFiles = files.map((file) => path.relative(distRoot, file).replaceAll(path.sep, '/'))
-    .filter((file) => /(?:^|\/)(?:api\/(?:commit|preview|preview-ready|reorder|session|state|markdown-drafts)|editor)(?:[/.]|$)/.test(file))
+    .filter((file) => /(?:^|\/)(?:api\/(?:commit|preview|preview-ready|reorder|session|state|markdown-drafts|mdx-blocks)|editor)(?:[/.]|$)/.test(file))
   assert.deepEqual(routeFiles, [], 'The production Astro output must not contain editor/API routes.')
 
   for (const file of files.filter((item) => /\.(?:html|js|mjs|css)$/.test(item))) {
     const output = readFileSync(file, 'utf8')
-    assert.doesNotMatch(output, /\/api\/(?:commit|preview|preview-ready|reorder|session|state|markdown-drafts)(?:[/?#"'`]|$)/,
+    assert.doesNotMatch(output, /\/api\/(?:commit|preview|preview-ready|reorder|session|state|markdown-drafts|mdx-blocks)(?:[/?#"'`]|$)/,
       `Production output must not expose an editor endpoint (${path.relative(ROOT, file)}).`)
     assert.doesNotMatch(output, /id="gallery-picker"/,
       `Production output must not include the local editor UI (${path.relative(ROOT, file)}).`)
@@ -48,6 +48,8 @@ function assertProductionEditorIsolation() {
       `Production output must not include editor confirmation or preview controls (${path.relative(ROOT, file)}).`)
     assert.doesNotMatch(output, /id="markdown-draft-panel"|avcms:draft-selection|data-astro-visual-cms-draft-target/,
       `Production output must not include the visual Markdown draft UI or bridge (${path.relative(ROOT, file)}).`)
+    assert.doesNotMatch(output, /id="mdx-blocks-panel"|avcms:mdx-block-preview|__avcms\/mdx-block-preview/,
+      `Production output must not include the MDX block editor or preview bridge (${path.relative(ROOT, file)}).`)
   }
 }
 

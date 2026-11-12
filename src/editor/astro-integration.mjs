@@ -1,10 +1,13 @@
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { createMarkdownDraftMarkerPlugin, createMarkdownParagraphMarkerPlugin } from '../lib/markdown-paragraph-map.mjs'
+import { createMdxBlockPreviewPlugin } from './mdx-block-preview.mjs'
 
 /**
  * Dev-only explicit marker bridge for the local editor preview.
  */
-export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_PORT || '4322', markdownParagraphTargets = [], markdownDraftTargets = [], previewRoutes = [] } = {}) {
+export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_PORT || '4322', markdownParagraphTargets = [], markdownDraftTargets = [], mdxBlockTargets = [], previewRoutes = [] } = {}) {
   const port = Number(editorPort)
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new TypeError('EDITOR_PORT must be a valid TCP port.')
   if (!Array.isArray(markdownParagraphTargets) || markdownParagraphTargets.length > 32) throw new TypeError('markdownParagraphTargets must be a bounded trusted target list.')
@@ -34,6 +37,22 @@ export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_P
       new Set(draftTargets.map(({ instanceId }) => instanceId)).size !== draftTargets.length) {
     throw new TypeError('Markdown draft target and instance ids must be unique.')
   }
+  if (!Array.isArray(mdxBlockTargets) || mdxBlockTargets.length > 8) throw new TypeError('mdxBlockTargets must be a bounded trusted target list.')
+  const blockTargets = mdxBlockTargets.map((target) => {
+    if (!target || typeof target !== 'object' || Object.keys(target).some((key) => !['id', 'projectRoot', 'filePath', 'previewRouteId', 'blockTypes'].includes(key)) ||
+        !['id', 'projectRoot', 'filePath', 'previewRouteId', 'blockTypes'].every((key) => Object.hasOwn(target, key)) ||
+        typeof target.id !== 'string' || !/^[A-Za-z_$][\w$-]{0,63}$/.test(target.id) ||
+        typeof target.projectRoot !== 'string' || !path.isAbsolute(target.projectRoot) ||
+        typeof target.filePath !== 'string' || !path.isAbsolute(target.filePath) || !['.md', '.mdx'].includes(path.extname(target.filePath)) ||
+        !path.resolve(target.filePath).startsWith(`${path.resolve(target.projectRoot)}${path.sep}`) ||
+        typeof target.previewRouteId !== 'string' || !/^[A-Za-z_$][\w$-]{0,63}$/.test(target.previewRouteId) ||
+        !Array.isArray(target.blockTypes)) throw new TypeError('Invalid trusted MDX block target.')
+    return { ...target, projectRoot: path.resolve(target.projectRoot), filePath: path.resolve(target.filePath) }
+  })
+  if (new Set(blockTargets.map(({ id }) => id)).size !== blockTargets.length ||
+      new Set([...paragraphTargets, ...draftTargets, ...blockTargets].map(({ id }) => id)).size !== paragraphTargets.length + draftTargets.length + blockTargets.length) {
+    throw new TypeError('Markdown and MDX target ids must be unique.')
+  }
   if (!Array.isArray(previewRoutes) || previewRoutes.length > 32) throw new TypeError('previewRoutes must be a bounded trusted list.')
   const routes = previewRoutes.map((route) => {
     let segments
@@ -45,6 +64,7 @@ export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_P
     return { id: route.id, path: route.path, label: typeof route.label === 'string' ? route.label.slice(0, 80) : route.id }
   })
   if (new Set(routes.map(({ id }) => id)).size !== routes.length || new Set(routes.map(({ path }) => path)).size !== routes.length) throw new TypeError('Toolbar preview routes must be unique.')
+  for (const target of blockTargets) if (!routes.some((route) => route.id === target.previewRouteId)) throw new TypeError('MDX block targets must use a configured preview route.')
   return {
     name: 'astro-visual-cms-loopback-dev-boundary',
     hooks: {
@@ -60,13 +80,51 @@ export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_P
           for (const target of paragraphTargets) plugins.push(createMarkdownParagraphMarkerPlugin({ ...target, targetId: target.id }))
           for (const target of draftTargets) plugins.push(createMarkdownDraftMarkerPlugin({ ...target, targetId: target.id }))
         }
-        updateConfig({ server: { host: '127.0.0.1' } })
+        const blockPreviewToken = blockTargets.length ? randomBytes(32).toString('hex') : ''
+        const blockPreviewPlugin = blockTargets.length
+          ? createMdxBlockPreviewPlugin({
+            targets: blockTargets.map((target) => {
+              const route = routes.find((candidate) => candidate.id === target.previewRouteId)
+              return {
+                ...target,
+                previewPath: `${String(config.base || '/').replace(/\/$/, '')}${route.path}` || '/',
+                // Astro dev may mount the base path and expose the stripped path
+                // to Vite middlewares, so track both forms for render failures.
+                requestPath: route.path,
+              }
+            }),
+            token: blockPreviewToken,
+            // The dev CSS collector is keyed by the route path relative to the
+            // Astro root, which is not necessarily the editor's projectRoot.
+            astroRoot: config.root ? fileURLToPath(config.root) : undefined,
+            // Plain `.md` drafts are rendered by the project's own Markdown
+            // pipeline, never by MDX. This keeps saved Markdown semantics
+            // (including raw HTML) untouched and makes only the catalog-
+            // generated component calls executable.
+            markdown: config.markdown,
+            image: config.image,
+            siteOrigin: (server) => {
+              const address = server.httpServer?.address?.()
+              const actualPort = address && typeof address === 'object'
+                ? address.port
+                : Number(config.server?.port || process.env.ASTRO_PORT || 4321)
+              return `http://127.0.0.1:${actualPort}`
+            },
+          })
+          : null
+        updateConfig({
+          server: { host: '127.0.0.1' },
+          ...(blockPreviewPlugin ? { vite: { plugins: [blockPreviewPlugin] } } : {}),
+        })
         const toolbarEntrypoint = new URL('./toolbar-app.mjs', import.meta.url)
         toolbarEntrypoint.searchParams.set('port', String(port))
         toolbarEntrypoint.searchParams.set('routes', JSON.stringify(routes))
         addDevToolbarApp?.({ id: 'astro-visual-cms-editor', name: 'Seite bearbeiten', entrypoint: toolbarEntrypoint })
         const bridge = `(()=>{
           const editorOrigin=${JSON.stringify(`http://127.0.0.1:${port}`)};
+          const blockPreviewToken=${JSON.stringify(blockPreviewToken)};
+          const blockTargetIds=new Set(${JSON.stringify(blockTargets.map(({ id }) => id))});
+          const blockPreviewReloads=new Map();
           let nonce='';
           const valid=s=>typeof s==='string'&&s.length>0&&s.length<=128;
           const validDraftId=(s,max)=>typeof s==='string'&&s.length>0&&s.length<=max&&/^[A-Za-z0-9_-]+$/.test(s);
@@ -92,6 +150,38 @@ export function createLoopbackDevIntegration({ editorPort = process.env.EDITOR_P
             if(keys==='nonce,type'&&d.type==='avcms:challenge'&&valid(d.nonce)){
               nonce=d.nonce;
               parent.postMessage({type:'avcms:ready',nonce,href:location.href},editorOrigin);
+              return;
+            }
+            if(blockTargetIds.size&&d.type==='avcms:mdx-block-preview-ack'&&keys==='nonce,requestId,type'&&d.nonce===nonce&&valid(d.requestId)){
+              const timer=blockPreviewReloads.get(d.requestId);
+              if(timer){clearTimeout(timer);blockPreviewReloads.delete(d.requestId);window.setTimeout(()=>location.reload(),80);}
+              return;
+            }
+            if(blockTargetIds.size&&d.type==='avcms:mdx-block-preview'&&keys==='hash,nonce,operations,requestId,targetId,type'&&d.nonce===nonce&&
+                valid(d.requestId)&&validDraftId(d.targetId,64)&&blockTargetIds.has(d.targetId)&&typeof d.hash==='string'&&/^[a-f0-9]{64}$/.test(d.hash)&&
+                Array.isArray(d.operations)&&d.operations.length>0&&d.operations.length<=32&&d.operations.every(operation=>operation&&typeof operation==='object'&&!Array.isArray(operation))){
+              fetch('/__avcms/mdx-block-preview',{method:'POST',headers:{'content-type':'application/json','x-avcms-token':blockPreviewToken},
+                body:JSON.stringify({targetId:d.targetId,requestId:d.requestId,hash:d.hash,operations:d.operations})}).then(async response=>({response,data:await response.json()})).then(({response,data})=>{
+                  parent.postMessage({type:'avcms:mdx-block-preview-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:response.ok,code:data.code||'',error:data.error||'',hash:data.hash||''},editorOrigin);
+                  if(response.ok)blockPreviewReloads.set(d.requestId,window.setTimeout(()=>{blockPreviewReloads.delete(d.requestId);location.reload();},3000));
+                }).catch(()=>parent.postMessage({type:'avcms:mdx-block-preview-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:false,code:'PREVIEW_FAILED',error:'The Astro preview could not render this block draft.',hash:''},editorOrigin));
+              return;
+            }
+            if(blockTargetIds.size&&d.type==='avcms:mdx-block-rendered'&&keys==='nonce,requestId,targetId,type'&&d.nonce===nonce&&
+                valid(d.requestId)&&validDraftId(d.targetId,64)&&blockTargetIds.has(d.targetId)){
+              fetch('/__avcms/mdx-block-preview',{method:'POST',headers:{'content-type':'application/json','x-avcms-token':blockPreviewToken},
+                body:JSON.stringify({targetId:d.targetId,requestId:d.requestId,rendered:true})}).then(async response=>({response,data:await response.json()})).then(({response,data})=>{
+                  parent.postMessage({type:'avcms:mdx-block-rendered-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:response.ok,error:data.error||''},editorOrigin);
+                }).catch(()=>parent.postMessage({type:'avcms:mdx-block-rendered-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:false,error:'The Astro preview render could not be confirmed.'},editorOrigin));
+              return;
+            }
+            if(blockTargetIds.size&&d.type==='avcms:mdx-block-reset'&&keys==='nonce,requestId,targetId,type'&&d.nonce===nonce&&valid(d.requestId)&&validDraftId(d.targetId,64)&&blockTargetIds.has(d.targetId)){
+              fetch('/__avcms/mdx-block-preview',{method:'POST',headers:{'content-type':'application/json','x-avcms-token':blockPreviewToken},
+                body:JSON.stringify({targetId:d.targetId,requestId:d.requestId,reset:true})}).then(async response=>({response,data:await response.json()})).then(({response,data})=>{
+                  const changed=response.ok&&data.changed===true;
+                  parent.postMessage({type:'avcms:mdx-block-reset-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:response.ok,changed,error:data.error||''},editorOrigin);
+                  if(changed)blockPreviewReloads.set(d.requestId,window.setTimeout(()=>{blockPreviewReloads.delete(d.requestId);location.reload();},3000));
+                }).catch(()=>parent.postMessage({type:'avcms:mdx-block-reset-result',nonce,requestId:d.requestId,targetId:d.targetId,ok:false,changed:false,error:'The Astro preview could not reset this draft.'},editorOrigin));
               return;
             }
             if(keys!=='expectedText,instanceId,nonce,requestId,targetId,type,value'||d.type!=='avcms:draft-update'||d.nonce!==nonce||

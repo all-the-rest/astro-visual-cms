@@ -1,13 +1,26 @@
 {
-  "name": "@astro-visual-cms/editor",
+  "name": "@all-the.rest/astro-visual-cms",
   "version": "0.1.0",
+  "description": "Local, source-preserving visual editor for Astro content, collections, galleries, and MDX components.",
   "type": "module",
   "packageManager": "pnpm@11.23.0",
   "engines": {
     "node": ">=22.12.0"
   },
   "license": "MIT",
-  "files": ["src/editor/**", "src/lib/gallery-patch.mjs", "src/lib/astro-gallery-patch.mjs", "src/lib/demo-image-manifest.mjs", "src/lib/mdx-props-patch.mjs", "src/lib/markdown-paragraph-map.mjs", "docs/editor-package.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/all-the-rest/astro-visual-cms"
+  },
+  "homepage": "https://github.com/all-the-rest/astro-visual-cms#readme",
+  "bugs": {
+    "url": "https://github.com/all-the-rest/astro-visual-cms/issues"
+  },
+  "keywords": ["astro", "cms", "editor", "mdx", "content-collections", "dev-toolbar"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["src/editor/**", "src/lib/gallery-patch.mjs", "src/lib/astro-gallery-patch.mjs", "src/lib/demo-image-manifest.mjs", "src/lib/mdx-props-patch.mjs", "src/lib/mdx-blocks.mjs", "src/lib/markdown-paragraph-map.mjs", "docs/editor-package.md", "LICENSE"],
   "exports": {
     "./integration": "./src/editor/astro-integration.mjs",
     "./server": "./src/editor/server.mjs",
@@ -35,6 +48,7 @@
     "browser-tests:markdown-copy": "playwright test --config=playwright.markdown-copy.config.ts",
     "browser-tests:markdown-draft-copy": "playwright test --config=playwright.markdown-draft-copy.config.ts",
     "browser-tests:mdx-conflict-copy": "playwright test --config=playwright.mdx-conflict.config.ts",
+    "ui-review:screenshots": "playwright test --config=playwright.screenshots.config.ts",
     "verify:build": "node scripts/verify-build.mjs",
     "build:editor-css": "tailwindcss -i src/editor/editor.css -o src/editor/editor.generated.css --minify",
     "verify:editor-css": "node scripts/verify-editor-css.mjs",
