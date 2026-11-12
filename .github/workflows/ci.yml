@@ -73,3 +73,23 @@ jobs:
 
       - name: Run isolated-copy Content Layer visual Markdown draft test
         run: pnpm run browser-tests:markdown-draft-copy
+
+      # Diagnostic for issue #25: the collection-copy run stalled for the full 120s
+      # test budget without leaving any evidence. This step uploads Playwright's
+      # output directory only when an earlier step failed, so a failing run keeps its
+      # trace. The upload stays read-only in scope (the job keeps `contents: read`
+      # and the action is pinned to a full commit SHA). Traces include synthetic
+      # data, test sources and ephemeral session headers. The harness writes absolute
+      # temporary-file receipts into test-results/, which are excluded here, the
+      # artifact name is per attempt so a retry cannot overwrite the failed attempt's
+      # trace, and the artifact is retained briefly.
+      - name: Upload Playwright test results on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: playwright-test-results-${{ github.run_attempt }}
+          path: |
+            test-results/
+            !test-results/readonly-*-path
+          if-no-files-found: ignore
+          retention-days: 7

@@ -1,7 +1,61 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Download } from '@playwright/test'
 import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+
+// Download.path() and Download.failure() have no Playwright timeout of their own:
+// when a download never finishes they consume the whole test budget and the
+// resulting failure names only the test. Bounding them keeps the failure
+// attributable to one step and leaves room to report the browser-side reason.
+const DOWNLOAD_DEADLINE_MS = 15_000
+const DOWNLOAD_FAILURE_DEADLINE_MS = 5_000
+
+const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error)
+
+/**
+ * Bounds one step that Playwright does not time out itself. The timer is always
+ * cleared, and both the operation and the deadline have rejection handlers from
+ * Promise.race, so a late settlement cannot surface as an unhandled rejection.
+ */
+async function withDeadline<T>(label: string, timeoutMs: number, operation: () => Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms while resolving ${label}`)), timeoutMs)
+  })
+  try {
+    return await Promise.race([operation(), deadline])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Reads the browser-side download error for the failure message, bounded as well. */
+async function boundedDownloadFailure(download: Download, operation: string): Promise<string> {
+  try {
+    return (await withDeadline(`${operation} (download failure)`, DOWNLOAD_FAILURE_DEADLINE_MS, () => download.failure())) ?? ''
+  } catch (error) {
+    return `unavailable: ${errorMessage(error)}`
+  }
+}
+
+/** Resolves the local file of a download under a deadline and a labelled error. */
+async function boundedDownloadPath(download: Download, label: string): Promise<string> {
+  const operation = `${label} (download "${download.suggestedFilename()}")`
+  try {
+    const path = await withDeadline(`${operation} local file`, DOWNLOAD_DEADLINE_MS, () => download.path())
+    if (!path) throw new Error('the browser reported no local file path for the download')
+    return path
+  } catch (error) {
+    const failure = await boundedDownloadFailure(download, operation)
+    const suffix = failure ? `; browser download failure: ${failure}` : ''
+    throw new Error(`${label}: could not resolve the downloaded file: ${errorMessage(error)}${suffix}`, { cause: error })
+  }
+}
+
+/** Reads a downloaded text file with the path bounded; reading itself is local I/O. */
+async function readDownloadedText(download: Download, label: string): Promise<string> {
+  return readFile(await boundedDownloadPath(download, label), 'utf8')
+}
 
 test('collection field edits produce revision-bound manual proposals in an isolated project copy', async ({ page, request }) => {
   const rootFixture = resolve('src/pages/fixture.mdx')
@@ -52,7 +106,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
   await expect(page.locator('#preview')).toHaveAttribute('title', 'Collection proof-Vorschau')
   await expect(page.frameLocator('#preview').locator('[data-entry-title]')).toHaveText('Synthetic collection entry')
   await expect(page.locator('#collections-panel')).toBeVisible()
-  await expect(page.getByRole('group', { name: 'Collection auswählen' }).getByRole('button', { name: 'notes' })).toBeEnabled()
+  await expect(page.getByRole('group', { name: 'Sammlung auswählen' }).getByRole('button', { name: 'notes' })).toBeEnabled()
   await expect(page.getByRole('group', { name: 'Eintrag auswählen' }).getByRole('button', { name: 'nested/entry.mdx' })).toBeEnabled()
   const titleInput = () => page.locator('#collection-fields label').filter({ hasText: 'title (string)' }).locator('input')
   const baseline = catalog.collections[0].entries[0].hash as string
@@ -87,14 +141,18 @@ test('collection field edits produce revision-bound manual proposals in an isola
   await page.keyboard.press('Enter')
   await expect(page.locator('#collection-diff-after')).toContainText('First local title')
   await page.locator('#confirm-collection-change').click()
-  await expect(page.locator('#status')).toContainText('Nicht gespeichert')
+  const blockedFieldStatus = page.locator('#status')
+  await expect(blockedFieldStatus).toHaveText('Nicht gespeichert: Das Ersetzen bestehender Quellen ist durch die Richtlinie gesperrt; es wurden keine Änderungen geschrieben. Exportiere den Änderungsvorschlag zur manuellen Anwendung. Lade den aktuellen Stand …')
+  await expect(blockedFieldStatus).not.toContainText('Existing-source')
+  await expect(blockedFieldStatus).not.toContainText('Nicht übersetzte Ursache')
+  await expect(blockedFieldStatus).not.toContainText('..')
   await expect(page.locator('#source-proposal-panel')).toBeVisible()
   let afterFirst = await readFile(receipt.contentFile, 'utf8')
   expect(afterFirst).toBe(beforeExternalPreview.replace('rank: 8', 'rank: 9'))
   const [fieldDownload] = await Promise.all([
     page.waitForEvent('download', { timeout: 15_000 }), page.locator('#source-proposal-export').click(),
   ])
-  const fieldProposal = JSON.parse(await readFile(await fieldDownload.path(), 'utf8'))
+  const fieldProposal = JSON.parse(await readDownloadedText(fieldDownload, 'collection field proposal export'))
   expect(fieldProposal).toMatchObject({
     type: 'astro-visual-cms-source-proposal',
     target: { kind: 'collection-entry' },
@@ -327,7 +385,14 @@ test('collection field edits produce revision-bound manual proposals in an isola
     await expect(page.locator('#config-confirmation')).toBeVisible()
     await expect(page.locator('#config-diff')).toContainText(expectedLocalText)
     await configCommit.click()
-    await expect(page.locator('#status')).toContainText('Schreibstatus blockiert')
+    const blockedConfigStatus = page.locator('#status')
+    const blockedSuffix = action === 'create-collection'
+      ? 'der exakte Diff enthält einen relativen Loader-Basispfad, deshalb wird kein Änderungsvorschlag exportiert.'
+      : 'der Entwurf bleibt erhalten.'
+    await expect(blockedConfigStatus).toHaveText(`Schreibstatus blockiert: Das Ersetzen bestehender Quellen ist durch die Richtlinie gesperrt; es wurden keine Änderungen geschrieben. Exportiere den Änderungsvorschlag zur manuellen Anwendung; ${blockedSuffix}`)
+    await expect(blockedConfigStatus).not.toContainText('Existing-source')
+    await expect(blockedConfigStatus).not.toContainText('Nicht übersetzte Ursache')
+    await expect(blockedConfigStatus).not.toContainText('..')
     await expect(configConflict).toBeHidden()
     const currentConfig = await readFile(receipt.configFile, 'utf8')
     expect(currentConfig).toBe(externalAfterPreview)
@@ -340,7 +405,7 @@ test('collection field edits produce revision-bound manual proposals in an isola
     const [download] = await Promise.all([
       page.waitForEvent('download', { timeout: 15_000 }), page.locator('#source-proposal-export').click(),
     ])
-    const proposal = JSON.parse(await readFile(await download.path(), 'utf8'))
+    const proposal = JSON.parse(await readDownloadedText(download, `collection config proposal export (${action})`))
     const expectedSource = currentConfig.slice(0, proposal.diff.start) + proposal.diff.after + currentConfig.slice(proposal.diff.end)
     expect(proposal).toMatchObject({
       type: 'astro-visual-cms-source-proposal',
