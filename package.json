@@ -68,7 +68,7 @@
   "peerDependencies": { "astro": ">=7.2.4 <8" },
   "peerDependenciesMeta": { "astro": { "optional": true } },
   "devDependencies": {
-    "@playwright/test": "1.65.0",
+    "@playwright/test": "1.65.1",
     "@tailwindcss/cli": "4.3.5",
     "@tailwindcss/vite": "4.3.5",
     "daisyui": "5.7.50",
